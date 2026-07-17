@@ -299,11 +299,11 @@
             </select>
           </label>
           <label class="field">Projeto arquitetônico recebido em
-            <span class="sub">Retrabalho de modelagem</span>
+            <span class="sub">DWG/PDF exigem modelagem 3D, cobrada por m²</span>
             <select id="formatoArq">
-              <option value="1" selected>Revit (modelo pronto)</option>
-              <option value="1.1">CAD / DWG (+10%)</option>
-              <option value="1.25">PDF / Imagem (+25%)</option>
+              <option value="revit" selected>Revit (modelo pronto)</option>
+              <option value="dwg">CAD / DWG (modelagem 3D)</option>
+              <option value="pdf">PDF / Imagem (modelagem 3D)</option>
             </select>
           </label>
         </div>
@@ -456,6 +456,8 @@
               <tr><td>Piscina</td><td><input type="number" id="v_piscina" min="0" step="10" value="600"></td></tr>
               <tr><td>Aquecimento solar</td><td><input type="number" id="v_solar" min="0" step="10" value="500"></td></tr>
               <tr><td>Reúso de água / Cisterna</td><td><input type="number" id="v_reuso" min="0" step="10" value="400"></td></tr>
+              <tr><td>Modelagem 3D a partir de DWG (R$/m²)</td><td><input type="number" id="v_modelDwg" min="0" step="0.5" value="4"></td></tr>
+              <tr><td>Modelagem 3D a partir de PDF/imagem (R$/m²)</td><td><input type="number" id="v_modelPdf" min="0" step="0.5" value="6"></td></tr>
             </tbody>
           </table>
           <div class="grid c3" style="margin-top:16px;">
@@ -540,7 +542,7 @@
   var CONFIG_FIELDS = [
     "p_hidro","p_eletrico","p_pluvial","p_gas","p_spda","p_logica","p_incendio","p_compat",
     "v_banheiro","v_lavabo","v_cozinha","v_pia","v_lavanderia","v_gourmet","v_piscina",
-    "v_solar","v_reuso","v_pctAndar","v_minimo"
+    "v_solar","v_reuso","v_modelDwg","v_modelPdf","v_pctAndar","v_minimo"
   ];
 
   var DEFAULTS = {};
@@ -632,6 +634,18 @@
     addItem("Piscina", $("piscina").checked ? 1 : 0, num("v_piscina"));
     addItem("Aquecimento solar", $("aquecSolar").checked ? 1 : 0, num("v_solar"));
     addItem("Reúso / Cisterna", $("reuso").checked ? 1 : 0, num("v_reuso"));
+
+    // modelagem 3D do arquitetônico (quando não vem em Revit)
+    var formato = $("formatoArq").value;
+    if (formato === "dwg" || formato === "pdf") {
+      var precoModel = formato === "dwg" ? num("v_modelDwg") : num("v_modelPdf");
+      var vModel = precoModel * area;
+      if (vModel > 0) {
+        adicionais += vModel;
+        htmlAd += sumLine("Modelagem 3D (" + (formato === "dwg" ? "DWG" : "PDF") + ", " +
+          precoModel.toLocaleString("pt-BR") + " R$/m²)", vModel);
+      }
+    }
     if (!htmlAd) htmlAd = sumLine("Nenhum adicional", 0, { raw: "—" });
 
     // 3) multiplicadores
@@ -642,7 +656,6 @@
     var fTipo = parseFloat($("tipoEdif").value) || 1;
     var fPadrao = parseFloat($("padrao").value) || 1;
     var fUrgencia = parseFloat($("urgencia").value) || 1;
-    var fFormato = parseFloat($("formatoArq").value) || 1;
 
     function multLine(label, f) {
       if (f !== 1) {
@@ -653,10 +666,9 @@
     multLine("Tipo de edificação", fTipo);
     multLine("Padrão de acabamento", fPadrao);
     multLine("Urgência", fUrgencia);
-    multLine("Formato do arquitetônico", fFormato);
     if (!htmlMult) htmlMult = sumLine("Sem acréscimos", 0, { raw: "×1" });
 
-    subtotal = subtotal * fAndar * fTipo * fPadrao * fUrgencia * fFormato;
+    subtotal = subtotal * fAndar * fTipo * fPadrao * fUrgencia;
 
     // 4) desconto e mínimo
     var descontoPct = Math.min(100, Math.max(0, num("v_desconto")));
@@ -708,6 +720,10 @@
     DISCIPLINAS.forEach(function (d) {
       if ($(d.check).checked) linhas.push("  • " + d.nome);
     });
+    var formato = $("formatoArq").value;
+    if (formato === "dwg" || formato === "pdf") {
+      linhas.push("  • Modelagem 3D do arquitetônico (recebido em " + (formato === "dwg" ? "DWG" : "PDF") + ")");
+    }
     linhas.push("");
     if (r.desconto > 0) {
       linhas.push("Subtotal: " + brl(r.subtotal));
