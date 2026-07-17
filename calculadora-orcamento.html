@@ -70,7 +70,7 @@
 
   label.field { display: block; font-size: .85rem; font-weight: 600; }
   label.field span.sub { display: block; font-weight: 400; color: var(--muted); font-size: .78rem; }
-  input[type="number"], select {
+  input[type="number"], input[type="text"], input[type="date"], select {
     width: 100%;
     margin-top: 4px;
     padding: 9px 10px;
@@ -80,7 +80,7 @@
     background: #fff;
     color: var(--ink);
   }
-  input[type="number"]:focus, select:focus {
+  input[type="number"]:focus, input[type="text"]:focus, input[type="date"]:focus, select:focus {
     outline: 2px solid var(--accent);
     outline-offset: 1px;
     border-color: var(--accent);
@@ -232,6 +232,33 @@
   <div class="layout">
     <!-- ============ COLUNA ESQUERDA: FORMULÁRIO ============ -->
     <div>
+
+      <!-- DADOS DA PROPOSTA -->
+      <div class="card">
+        <h2>📄 Dados da proposta</h2>
+        <p class="hint">Identificação do cliente e prazo de validade do orçamento.</p>
+        <div class="grid c2">
+          <label class="field">Nome do cliente
+            <input type="text" id="cliente" placeholder="Ex.: João da Silva" maxlength="80">
+          </label>
+          <label class="field">Obra / Projeto
+            <span class="sub">Opcional — nome ou endereço da obra</span>
+            <input type="text" id="obra" placeholder="Ex.: Residência Bairro Centro" maxlength="100">
+          </label>
+        </div>
+        <div class="grid c3" style="margin-top:12px;">
+          <label class="field">Data da proposta
+            <input type="date" id="dataProposta">
+          </label>
+          <label class="field">Validade (dias)
+            <input type="number" id="validadeDias" min="1" step="1" value="30">
+          </label>
+          <label class="field">Válida até
+            <span class="sub">Calculado automaticamente</span>
+            <input type="text" id="validaAte" readonly style="background:#eef2f7; cursor:default;">
+          </label>
+        </div>
+      </div>
 
       <!-- DADOS GERAIS -->
       <div class="card">
@@ -463,6 +490,9 @@
       </div>
 
       <div class="card" style="margin-bottom:14px;">
+        <div class="sum-section-title">Proposta</div>
+        <div id="outProposta"></div>
+
         <div class="sum-section-title">Disciplinas (base × área)</div>
         <div id="outDisciplinas"></div>
 
@@ -524,6 +554,27 @@
     return v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
   }
 
+  // ---------- datas da proposta ----------
+  function parseDataLocal(iso) {
+    // evita deslocamento de fuso ao interpretar "AAAA-MM-DD"
+    if (!iso) return null;
+    var p = iso.split("-");
+    if (p.length !== 3) return null;
+    return new Date(parseInt(p[0], 10), parseInt(p[1], 10) - 1, parseInt(p[2], 10));
+  }
+  function fmtData(d) {
+    return d ? d.toLocaleDateString("pt-BR") : "—";
+  }
+  function calcularValidade() {
+    var inicio = parseDataLocal($("dataProposta").value);
+    var dias = Math.max(1, Math.round(num("validadeDias")) || 30);
+    if (!inicio) { $("validaAte").value = ""; return { inicio: null, fim: null, dias: dias }; }
+    var fim = new Date(inicio.getTime());
+    fim.setDate(fim.getDate() + dias);
+    $("validaAte").value = fmtData(fim);
+    return { inicio: inicio, fim: fim, dias: dias };
+  }
+
   function sumLine(label, value, opts) {
     opts = opts || {};
     var cls = "sum-line" + (opts.sub ? " sub" : "");
@@ -534,6 +585,17 @@
   function calcular() {
     var area = num("area");
     var pavimentos = Math.max(1, num("pavimentos"));
+
+    // 0) proposta: cliente, data e validade
+    var validade = calcularValidade();
+    var cliente = $("cliente").value.trim();
+    var obra = $("obra").value.trim();
+    var htmlProp = "";
+    htmlProp += sumLine("Cliente", 0, { raw: cliente || "—" });
+    if (obra) htmlProp += sumLine("Obra", 0, { raw: obra });
+    htmlProp += sumLine("Data", 0, { raw: fmtData(validade.inicio) });
+    htmlProp += sumLine("Válida até", 0, { raw: fmtData(validade.fim) + " (" + validade.dias + " dias)" });
+    $("outProposta").innerHTML = htmlProp;
 
     // 1) disciplinas: R$/m² × área
     var baseDisc = 0;
@@ -623,7 +685,13 @@
     var r = calcular();
     var linhas = [];
     linhas.push("ORÇAMENTO — PROJETOS COMPLEMENTARES");
-    linhas.push("Data: " + new Date().toLocaleDateString("pt-BR"));
+    var validade = calcularValidade();
+    var cliente = $("cliente").value.trim();
+    var obra = $("obra").value.trim();
+    if (cliente) linhas.push("Cliente: " + cliente);
+    if (obra) linhas.push("Obra: " + obra);
+    linhas.push("Data: " + fmtData(validade.inicio));
+    linhas.push("Validade: " + validade.dias + " dias (válida até " + fmtData(validade.fim) + ")");
     linhas.push("");
     linhas.push("Área construída: " + num("area").toLocaleString("pt-BR") + " m²");
     linhas.push("Pavimentos: " + num("pavimentos"));
@@ -716,6 +784,12 @@
   });
 
   // init
+  (function () {
+    var hoje = new Date();
+    var mm = String(hoje.getMonth() + 1).padStart(2, "0");
+    var dd = String(hoje.getDate()).padStart(2, "0");
+    $("dataProposta").value = hoje.getFullYear() + "-" + mm + "-" + dd;
+  })();
   CONFIG_FIELDS.forEach(function (id) { DEFAULTS[id] = $(id).value; });
   carregarPadrao();
   calcular();
