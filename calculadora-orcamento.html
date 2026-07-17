@@ -1,0 +1,725 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Calculadora de Orçamento — Projetos Complementares</title>
+<style>
+  :root {
+    --bg: #f4f6f9;
+    --card: #ffffff;
+    --ink: #1e2a38;
+    --muted: #64748b;
+    --line: #e2e8f0;
+    --accent: #0f6bd7;
+    --accent-soft: #e8f1fc;
+    --green: #0f9d58;
+    --amber: #b45309;
+    --radius: 12px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: "Segoe UI", system-ui, -apple-system, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--ink);
+    line-height: 1.5;
+    padding: 24px 16px 80px;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; }
+
+  header { margin-bottom: 24px; }
+  header h1 { font-size: 1.6rem; }
+  header p { color: var(--muted); font-size: .95rem; }
+
+  .layout {
+    display: grid;
+    grid-template-columns: 1fr 380px;
+    gap: 20px;
+    align-items: start;
+  }
+  @media (max-width: 920px) { .layout { grid-template-columns: 1fr; } }
+
+  .card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 20px;
+    margin-bottom: 20px;
+  }
+  .card h2 {
+    font-size: 1.05rem;
+    margin-bottom: 4px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .card h2 .badge {
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-size: .72rem;
+    padding: 2px 8px;
+    border-radius: 99px;
+    font-weight: 600;
+  }
+  .card .hint { color: var(--muted); font-size: .85rem; margin-bottom: 14px; }
+
+  .grid { display: grid; gap: 12px; }
+  .grid.c2 { grid-template-columns: 1fr 1fr; }
+  .grid.c3 { grid-template-columns: 1fr 1fr 1fr; }
+  @media (max-width: 640px) { .grid.c2, .grid.c3 { grid-template-columns: 1fr; } }
+
+  label.field { display: block; font-size: .85rem; font-weight: 600; }
+  label.field span.sub { display: block; font-weight: 400; color: var(--muted); font-size: .78rem; }
+  input[type="number"], select {
+    width: 100%;
+    margin-top: 4px;
+    padding: 9px 10px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    font-size: .95rem;
+    background: #fff;
+    color: var(--ink);
+  }
+  input[type="number"]:focus, select:focus {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+    border-color: var(--accent);
+  }
+
+  /* stepper */
+  .stepper { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+  .stepper button {
+    width: 34px; height: 34px;
+    border: 1px solid var(--line);
+    background: #fff;
+    border-radius: 8px;
+    font-size: 1.1rem;
+    cursor: pointer;
+    color: var(--accent);
+    font-weight: 700;
+  }
+  .stepper button:hover { background: var(--accent-soft); }
+  .stepper input { width: 64px; text-align: center; margin-top: 0; }
+
+  /* disciplina rows */
+  .disc-row {
+    display: grid;
+    grid-template-columns: auto 1fr 140px;
+    gap: 10px;
+    align-items: center;
+    padding: 10px 0;
+    border-bottom: 1px dashed var(--line);
+  }
+  .disc-row:last-child { border-bottom: none; }
+  .disc-row .name { font-weight: 600; font-size: .9rem; }
+  .disc-row .name small { display: block; font-weight: 400; color: var(--muted); font-size: .76rem; }
+  .disc-row input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--accent); cursor: pointer; }
+  .money-input { position: relative; }
+  .money-input::before {
+    content: "R$/m²";
+    position: absolute;
+    right: 10px; top: 50%;
+    transform: translateY(-50%);
+    font-size: .7rem;
+    color: var(--muted);
+    pointer-events: none;
+  }
+  .money-input input { padding-right: 52px; margin-top: 0; }
+
+  /* tabela de adicionais */
+  table.prices { width: 100%; border-collapse: collapse; font-size: .87rem; }
+  table.prices th, table.prices td { padding: 8px 6px; text-align: left; border-bottom: 1px solid var(--line); }
+  table.prices th { color: var(--muted); font-weight: 600; font-size: .78rem; text-transform: uppercase; letter-spacing: .03em; }
+  table.prices td input { width: 110px; margin-top: 0; }
+  table.prices td.num { text-align: right; }
+
+  /* resumo lateral */
+  .summary { position: sticky; top: 16px; }
+  .summary .total-box {
+    background: linear-gradient(135deg, #0f6bd7, #0b4f9e);
+    color: #fff;
+    border-radius: var(--radius);
+    padding: 20px;
+    margin-bottom: 14px;
+  }
+  .summary .total-box .lbl { font-size: .8rem; opacity: .85; }
+  .summary .total-box .val { font-size: 2rem; font-weight: 700; }
+  .summary .total-box .per-m2 { font-size: .9rem; opacity: .9; margin-top: 4px; }
+  .sum-line { display: flex; justify-content: space-between; font-size: .88rem; padding: 6px 0; border-bottom: 1px dashed var(--line); }
+  .sum-line:last-child { border-bottom: none; }
+  .sum-line .v { font-weight: 600; white-space: nowrap; }
+  .sum-line.neg .v { color: #c0392b; }
+  .sum-line.sub { color: var(--muted); font-size: .8rem; padding-left: 12px; }
+  .sum-section-title { font-size: .78rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 12px 0 2px; font-weight: 700; }
+
+  .alert-min {
+    background: #fef3c7;
+    border: 1px solid #fcd34d;
+    color: var(--amber);
+    font-size: .82rem;
+    border-radius: 8px;
+    padding: 8px 12px;
+    margin-top: 10px;
+    display: none;
+  }
+
+  .btns { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+  .btn {
+    border: none;
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-size: .88rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .btn.primary { background: var(--accent); color: #fff; }
+  .btn.primary:hover { background: #0b58b3; }
+  .btn.ghost { background: #fff; color: var(--accent); border: 1px solid var(--accent); }
+  .btn.ghost:hover { background: var(--accent-soft); }
+  .btn.plain { background: #eef2f7; color: var(--ink); }
+  .btn.plain:hover { background: #e2e8f0; }
+
+  .toast {
+    position: fixed;
+    bottom: 20px; left: 50%;
+    transform: translateX(-50%);
+    background: var(--ink);
+    color: #fff;
+    padding: 10px 18px;
+    border-radius: 99px;
+    font-size: .85rem;
+    opacity: 0;
+    transition: opacity .3s;
+    pointer-events: none;
+    z-index: 50;
+  }
+  .toast.show { opacity: 1; }
+
+  details.config { border: 1px solid var(--line); border-radius: var(--radius); background: var(--card); margin-bottom: 20px; }
+  details.config summary {
+    cursor: pointer;
+    padding: 16px 20px;
+    font-weight: 600;
+    font-size: .95rem;
+    list-style: none;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  details.config summary::after { content: "▾"; margin-left: auto; color: var(--muted); transition: transform .2s; }
+  details.config[open] summary::after { transform: rotate(180deg); }
+  details.config .inner { padding: 0 20px 20px; }
+
+  /* impressão do resumo */
+  @media print {
+    body { background: #fff; padding: 0; }
+    .no-print, .btns, details.config { display: none !important; }
+    .layout { grid-template-columns: 1fr; }
+    .card { border: none; padding: 8px 0; margin-bottom: 8px; }
+    .summary { position: static; }
+    .summary .total-box { background: #0f6bd7 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <h1>🏗️ Calculadora de Orçamento — Projetos Complementares (Revit)</h1>
+    <p>Preencha os dados do projeto, marque as disciplinas contratadas e ajuste os preços conforme sua realidade. Todos os valores são editáveis e podem ser salvos como padrão no seu navegador.</p>
+  </header>
+
+  <div class="layout">
+    <!-- ============ COLUNA ESQUERDA: FORMULÁRIO ============ -->
+    <div>
+
+      <!-- DADOS GERAIS -->
+      <div class="card">
+        <h2>1. Dados do projeto</h2>
+        <p class="hint">Informações básicas da edificação.</p>
+        <div class="grid c3">
+          <label class="field">Área construída (m²)
+            <input type="number" id="area" min="0" step="0.01" value="120" placeholder="Ex.: 150">
+          </label>
+          <label class="field">Nº de pavimentos
+            <div class="stepper">
+              <button type="button" data-step="pavimentos" data-dir="-1">−</button>
+              <input type="number" id="pavimentos" min="1" max="10" value="1">
+              <button type="button" data-step="pavimentos" data-dir="1">+</button>
+            </div>
+          </label>
+          <label class="field">Tipo de edificação
+            <select id="tipoEdif">
+              <option value="1">Residencial unifamiliar</option>
+              <option value="1.15">Residencial multifamiliar (+15%)</option>
+              <option value="1.2">Comercial (+20%)</option>
+              <option value="1.35">Industrial / Galpão (+35%)</option>
+            </select>
+          </label>
+          <label class="field">Padrão de acabamento
+            <span class="sub">Complexidade do detalhamento</span>
+            <select id="padrao">
+              <option value="1">Simples</option>
+              <option value="1.15" selected>Médio (+15%)</option>
+              <option value="1.35">Alto padrão (+35%)</option>
+            </select>
+          </label>
+          <label class="field">Prazo de entrega
+            <select id="urgencia">
+              <option value="1" selected>Normal</option>
+              <option value="1.2">Urgente (+20%)</option>
+              <option value="1.4">Expresso (+40%)</option>
+            </select>
+          </label>
+          <label class="field">Projeto arquitetônico recebido em
+            <span class="sub">Retrabalho de modelagem</span>
+            <select id="formatoArq">
+              <option value="1" selected>Revit (modelo pronto)</option>
+              <option value="1.1">CAD / DWG (+10%)</option>
+              <option value="1.25">PDF / Imagem (+25%)</option>
+            </select>
+          </label>
+        </div>
+      </div>
+
+      <!-- AMBIENTES -->
+      <div class="card">
+        <h2>2. Ambientes hidráulicos <span class="badge">detalhe</span></h2>
+        <p class="hint">Cada ambiente molhado gera pontos hidráulicos e elétricos adicionais que encarecem o projeto.</p>
+        <div class="grid c3">
+          <label class="field">Banheiros completos
+            <span class="sub">Vaso + chuveiro + lavatório</span>
+            <div class="stepper">
+              <button type="button" data-step="banheiros" data-dir="-1">−</button>
+              <input type="number" id="banheiros" min="0" value="2">
+              <button type="button" data-step="banheiros" data-dir="1">+</button>
+            </div>
+          </label>
+          <label class="field">Lavabos
+            <span class="sub">Somente vaso + lavatório</span>
+            <div class="stepper">
+              <button type="button" data-step="lavabos" data-dir="-1">−</button>
+              <input type="number" id="lavabos" min="0" value="0">
+              <button type="button" data-step="lavabos" data-dir="1">+</button>
+            </div>
+          </label>
+          <label class="field">Cozinhas
+            <div class="stepper">
+              <button type="button" data-step="cozinhas" data-dir="-1">−</button>
+              <input type="number" id="cozinhas" min="0" value="1">
+              <button type="button" data-step="cozinhas" data-dir="1">+</button>
+            </div>
+          </label>
+          <label class="field">Pias de cozinha (total)
+            <span class="sub">Some as cubas de todas as cozinhas</span>
+            <div class="stepper">
+              <button type="button" data-step="piasCozinha" data-dir="-1">−</button>
+              <input type="number" id="piasCozinha" min="0" value="1">
+              <button type="button" data-step="piasCozinha" data-dir="1">+</button>
+            </div>
+          </label>
+          <label class="field">Lavanderias / Áreas de serviço
+            <span class="sub">Tanque + máquina de lavar</span>
+            <div class="stepper">
+              <button type="button" data-step="lavanderias" data-dir="-1">−</button>
+              <input type="number" id="lavanderias" min="0" value="1">
+              <button type="button" data-step="lavanderias" data-dir="1">+</button>
+            </div>
+          </label>
+          <label class="field">Áreas gourmet / Churrasqueiras
+            <span class="sub">Pia + ponto de gás</span>
+            <div class="stepper">
+              <button type="button" data-step="gourmet" data-dir="-1">−</button>
+              <input type="number" id="gourmet" min="0" value="0">
+              <button type="button" data-step="gourmet" data-dir="1">+</button>
+            </div>
+          </label>
+        </div>
+        <div class="grid c3" style="margin-top:14px;">
+          <label class="field" style="display:flex; align-items:center; gap:8px; font-weight:600;">
+            <input type="checkbox" id="piscina" style="width:18px;height:18px;accent-color:var(--accent);"> Piscina
+          </label>
+          <label class="field" style="display:flex; align-items:center; gap:8px; font-weight:600;">
+            <input type="checkbox" id="aquecSolar" style="width:18px;height:18px;accent-color:var(--accent);"> Aquecimento solar
+          </label>
+          <label class="field" style="display:flex; align-items:center; gap:8px; font-weight:600;">
+            <input type="checkbox" id="reuso" style="width:18px;height:18px;accent-color:var(--accent);"> Reúso de água / Cisterna
+          </label>
+        </div>
+      </div>
+
+      <!-- DISCIPLINAS -->
+      <div class="card">
+        <h2>3. Disciplinas contratadas</h2>
+        <p class="hint">Marque o que faz parte do escopo e ajuste o valor por m² de cada disciplina.</p>
+        <div id="disciplinas">
+          <div class="disc-row">
+            <input type="checkbox" class="disc-check" id="d_hidro" checked>
+            <label class="name" for="d_hidro">Hidrossanitário
+              <small>Água fria, água quente, esgoto e ventilação</small>
+            </label>
+            <div class="money-input"><input type="number" id="p_hidro" min="0" step="0.5" value="9"></div>
+          </div>
+          <div class="disc-row">
+            <input type="checkbox" class="disc-check" id="d_eletrico" checked>
+            <label class="name" for="d_eletrico">Elétrico
+              <small>Iluminação, tomadas, quadros e diagramas</small>
+            </label>
+            <div class="money-input"><input type="number" id="p_eletrico" min="0" step="0.5" value="9"></div>
+          </div>
+          <div class="disc-row">
+            <input type="checkbox" class="disc-check" id="d_pluvial">
+            <label class="name" for="d_pluvial">Águas pluviais
+              <small>Calhas, condutores e drenagem</small>
+            </label>
+            <div class="money-input"><input type="number" id="p_pluvial" min="0" step="0.5" value="4"></div>
+          </div>
+          <div class="disc-row">
+            <input type="checkbox" class="disc-check" id="d_gas">
+            <label class="name" for="d_gas">Gás (GLP / GN)
+              <small>Rede de gás para cozinha e gourmet</small>
+            </label>
+            <div class="money-input"><input type="number" id="p_gas" min="0" step="0.5" value="3"></div>
+          </div>
+          <div class="disc-row">
+            <input type="checkbox" class="disc-check" id="d_spda">
+            <label class="name" for="d_spda">SPDA
+              <small>Para-raios e aterramento</small>
+            </label>
+            <div class="money-input"><input type="number" id="p_spda" min="0" step="0.5" value="3.5"></div>
+          </div>
+          <div class="disc-row">
+            <input type="checkbox" class="disc-check" id="d_logica">
+            <label class="name" for="d_logica">Cabeamento estruturado
+              <small>Rede, TV, interfone e CFTV</small>
+            </label>
+            <div class="money-input"><input type="number" id="p_logica" min="0" step="0.5" value="3"></div>
+          </div>
+          <div class="disc-row">
+            <input type="checkbox" class="disc-check" id="d_incendio">
+            <label class="name" for="d_incendio">Preventivo de incêndio
+              <small>PPCI / extintores, hidrantes, saídas</small>
+            </label>
+            <div class="money-input"><input type="number" id="p_incendio" min="0" step="0.5" value="6"></div>
+          </div>
+          <div class="disc-row">
+            <input type="checkbox" class="disc-check" id="d_compat">
+            <label class="name" for="d_compat">Compatibilização 3D
+              <small>Clash detection entre disciplinas no Revit</small>
+            </label>
+            <div class="money-input"><input type="number" id="p_compat" min="0" step="0.5" value="4"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- CONFIGURAÇÃO DE PREÇOS -->
+      <details class="config">
+        <summary>⚙️ 4. Configuração de preços dos adicionais e regras</summary>
+        <div class="inner">
+          <p class="hint">Valores cobrados por unidade de cada ambiente/item. Ajuste conforme sua precificação e clique em "Salvar como padrão".</p>
+          <table class="prices">
+            <thead><tr><th>Item</th><th>Valor unitário (R$)</th></tr></thead>
+            <tbody>
+              <tr><td>Banheiro completo</td><td><input type="number" id="v_banheiro" min="0" step="10" value="250"></td></tr>
+              <tr><td>Lavabo</td><td><input type="number" id="v_lavabo" min="0" step="10" value="150"></td></tr>
+              <tr><td>Cozinha (base)</td><td><input type="number" id="v_cozinha" min="0" step="10" value="300"></td></tr>
+              <tr><td>Pia de cozinha adicional (além da 1ª por cozinha)</td><td><input type="number" id="v_pia" min="0" step="10" value="80"></td></tr>
+              <tr><td>Lavanderia / Área de serviço</td><td><input type="number" id="v_lavanderia" min="0" step="10" value="180"></td></tr>
+              <tr><td>Área gourmet / Churrasqueira</td><td><input type="number" id="v_gourmet" min="0" step="10" value="220"></td></tr>
+              <tr><td>Piscina</td><td><input type="number" id="v_piscina" min="0" step="10" value="600"></td></tr>
+              <tr><td>Aquecimento solar</td><td><input type="number" id="v_solar" min="0" step="10" value="500"></td></tr>
+              <tr><td>Reúso de água / Cisterna</td><td><input type="number" id="v_reuso" min="0" step="10" value="400"></td></tr>
+            </tbody>
+          </table>
+          <div class="grid c3" style="margin-top:16px;">
+            <label class="field">Acréscimo por pavimento extra (%)
+              <span class="sub">Aplicado sobre o subtotal por andar além do 1º</span>
+              <input type="number" id="v_pctAndar" min="0" step="1" value="15">
+            </label>
+            <label class="field">Valor mínimo do projeto (R$)
+              <span class="sub">Alerta caso o total fique abaixo</span>
+              <input type="number" id="v_minimo" min="0" step="50" value="1500">
+            </label>
+            <label class="field">Desconto (%)
+              <span class="sub">Pacote / cliente recorrente</span>
+              <input type="number" id="v_desconto" min="0" max="100" step="1" value="0">
+            </label>
+          </div>
+          <div class="btns">
+            <button type="button" class="btn ghost" id="btnSalvarPadrao">💾 Salvar como padrão</button>
+            <button type="button" class="btn plain" id="btnRestaurar">↩️ Restaurar valores originais</button>
+          </div>
+        </div>
+      </details>
+
+    </div>
+
+    <!-- ============ COLUNA DIREITA: RESUMO ============ -->
+    <div class="summary">
+      <div class="total-box">
+        <div class="lbl">VALOR TOTAL DO ORÇAMENTO</div>
+        <div class="val" id="outTotal">R$ 0,00</div>
+        <div class="per-m2" id="outPorM2">R$ 0,00 / m² efetivo</div>
+      </div>
+
+      <div class="card" style="margin-bottom:14px;">
+        <div class="sum-section-title">Disciplinas (base × área)</div>
+        <div id="outDisciplinas"></div>
+
+        <div class="sum-section-title">Adicionais por ambiente</div>
+        <div id="outAdicionais"></div>
+
+        <div class="sum-section-title">Multiplicadores</div>
+        <div id="outMultiplicadores"></div>
+
+        <div class="sum-section-title">Fechamento</div>
+        <div class="sum-line"><span>Subtotal</span><span class="v" id="outSubtotal">R$ 0,00</span></div>
+        <div class="sum-line neg" id="lnDesconto" style="display:none;"><span>Desconto</span><span class="v" id="outDesconto">− R$ 0,00</span></div>
+
+        <div class="alert-min" id="alertMin">⚠️ Total abaixo do seu valor mínimo de projeto. Considere cobrar o mínimo configurado.</div>
+
+        <div class="btns no-print">
+          <button type="button" class="btn primary" id="btnCopiar">📋 Copiar resumo</button>
+          <button type="button" class="btn ghost" id="btnImprimir">🖨️ Imprimir / PDF</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+(function () {
+  "use strict";
+
+  var STORAGE_KEY = "calc-orcamento-revit-v1";
+
+  var DISCIPLINAS = [
+    { check: "d_hidro",    price: "p_hidro",    nome: "Hidrossanitário" },
+    { check: "d_eletrico", price: "p_eletrico", nome: "Elétrico" },
+    { check: "d_pluvial",  price: "p_pluvial",  nome: "Águas pluviais" },
+    { check: "d_gas",      price: "p_gas",      nome: "Gás" },
+    { check: "d_spda",     price: "p_spda",     nome: "SPDA" },
+    { check: "d_logica",   price: "p_logica",   nome: "Cabeamento estruturado" },
+    { check: "d_incendio", price: "p_incendio", nome: "Preventivo de incêndio" },
+    { check: "d_compat",   price: "p_compat",   nome: "Compatibilização 3D" }
+  ];
+
+  // campos numéricos configuráveis (salvos como padrão)
+  var CONFIG_FIELDS = [
+    "p_hidro","p_eletrico","p_pluvial","p_gas","p_spda","p_logica","p_incendio","p_compat",
+    "v_banheiro","v_lavabo","v_cozinha","v_pia","v_lavanderia","v_gourmet","v_piscina",
+    "v_solar","v_reuso","v_pctAndar","v_minimo"
+  ];
+
+  var DEFAULTS = {};
+
+  function $(id) { return document.getElementById(id); }
+  function num(id) {
+    var v = parseFloat($(id).value);
+    return isNaN(v) ? 0 : v;
+  }
+  function brl(v) {
+    return v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+  }
+
+  function sumLine(label, value, opts) {
+    opts = opts || {};
+    var cls = "sum-line" + (opts.sub ? " sub" : "");
+    var val = opts.raw !== undefined ? opts.raw : brl(value);
+    return '<div class="' + cls + '"><span>' + label + '</span><span class="v">' + val + '</span></div>';
+  }
+
+  function calcular() {
+    var area = num("area");
+    var pavimentos = Math.max(1, num("pavimentos"));
+
+    // 1) disciplinas: R$/m² × área
+    var baseDisc = 0;
+    var htmlDisc = "";
+    DISCIPLINAS.forEach(function (d) {
+      if ($(d.check).checked) {
+        var valor = num(d.price) * area;
+        baseDisc += valor;
+        htmlDisc += sumLine(d.nome + " (" + num(d.price).toLocaleString("pt-BR") + " R$/m²)", valor);
+      }
+    });
+    if (!htmlDisc) htmlDisc = sumLine("Nenhuma disciplina selecionada", 0, { raw: "—" });
+
+    // 2) adicionais por ambiente
+    var adicionais = 0;
+    var htmlAd = "";
+    function addItem(label, qtd, unit) {
+      if (qtd > 0 && unit > 0) {
+        var v = qtd * unit;
+        adicionais += v;
+        htmlAd += sumLine(label + " (" + qtd + "×)", v);
+      }
+    }
+    var cozinhas = num("cozinhas");
+    var pias = num("piasCozinha");
+    var piasExtras = Math.max(0, pias - cozinhas); // 1ª pia de cada cozinha já inclusa
+
+    addItem("Banheiro completo", num("banheiros"), num("v_banheiro"));
+    addItem("Lavabo", num("lavabos"), num("v_lavabo"));
+    addItem("Cozinha", cozinhas, num("v_cozinha"));
+    addItem("Pia adicional de cozinha", piasExtras, num("v_pia"));
+    addItem("Lavanderia", num("lavanderias"), num("v_lavanderia"));
+    addItem("Área gourmet", num("gourmet"), num("v_gourmet"));
+    addItem("Piscina", $("piscina").checked ? 1 : 0, num("v_piscina"));
+    addItem("Aquecimento solar", $("aquecSolar").checked ? 1 : 0, num("v_solar"));
+    addItem("Reúso / Cisterna", $("reuso").checked ? 1 : 0, num("v_reuso"));
+    if (!htmlAd) htmlAd = sumLine("Nenhum adicional", 0, { raw: "—" });
+
+    // 3) multiplicadores
+    var subtotal = baseDisc + adicionais;
+    var htmlMult = "";
+
+    var fAndar = 1 + (pavimentos - 1) * (num("v_pctAndar") / 100);
+    var fTipo = parseFloat($("tipoEdif").value) || 1;
+    var fPadrao = parseFloat($("padrao").value) || 1;
+    var fUrgencia = parseFloat($("urgencia").value) || 1;
+    var fFormato = parseFloat($("formatoArq").value) || 1;
+
+    function multLine(label, f) {
+      if (f !== 1) {
+        htmlMult += sumLine(label, 0, { raw: "×" + f.toLocaleString("pt-BR", { maximumFractionDigits: 2 }) });
+      }
+    }
+    multLine("Pavimentos (" + pavimentos + ")", fAndar);
+    multLine("Tipo de edificação", fTipo);
+    multLine("Padrão de acabamento", fPadrao);
+    multLine("Urgência", fUrgencia);
+    multLine("Formato do arquitetônico", fFormato);
+    if (!htmlMult) htmlMult = sumLine("Sem acréscimos", 0, { raw: "×1" });
+
+    subtotal = subtotal * fAndar * fTipo * fPadrao * fUrgencia * fFormato;
+
+    // 4) desconto e mínimo
+    var descontoPct = Math.min(100, Math.max(0, num("v_desconto")));
+    var desconto = subtotal * (descontoPct / 100);
+    var total = subtotal - desconto;
+
+    var minimo = num("v_minimo");
+    var abaixoMin = minimo > 0 && total > 0 && total < minimo;
+
+    // render
+    $("outDisciplinas").innerHTML = htmlDisc;
+    $("outAdicionais").innerHTML = htmlAd;
+    $("outMultiplicadores").innerHTML = htmlMult;
+    $("outSubtotal").textContent = brl(subtotal);
+    $("lnDesconto").style.display = desconto > 0 ? "flex" : "none";
+    $("outDesconto").textContent = "− " + brl(desconto) + " (" + descontoPct + "%)";
+    $("outTotal").textContent = brl(total);
+    $("outPorM2").textContent = area > 0 ? brl(total / area) + " / m² efetivo" : "informe a área";
+    $("alertMin").style.display = abaixoMin ? "block" : "none";
+
+    return { area: area, total: total, subtotal: subtotal, desconto: desconto };
+  }
+
+  // ---------- resumo em texto ----------
+  function gerarResumoTexto() {
+    var r = calcular();
+    var linhas = [];
+    linhas.push("ORÇAMENTO — PROJETOS COMPLEMENTARES");
+    linhas.push("Data: " + new Date().toLocaleDateString("pt-BR"));
+    linhas.push("");
+    linhas.push("Área construída: " + num("area").toLocaleString("pt-BR") + " m²");
+    linhas.push("Pavimentos: " + num("pavimentos"));
+    linhas.push("Banheiros: " + num("banheiros") + " | Lavabos: " + num("lavabos"));
+    linhas.push("Cozinhas: " + num("cozinhas") + " (pias: " + num("piasCozinha") + ")");
+    linhas.push("Lavanderias: " + num("lavanderias") + " | Áreas gourmet: " + num("gourmet"));
+    var extras = [];
+    if ($("piscina").checked) extras.push("Piscina");
+    if ($("aquecSolar").checked) extras.push("Aquecimento solar");
+    if ($("reuso").checked) extras.push("Reúso/Cisterna");
+    if (extras.length) linhas.push("Extras: " + extras.join(", "));
+    linhas.push("");
+    linhas.push("Disciplinas incluídas:");
+    DISCIPLINAS.forEach(function (d) {
+      if ($(d.check).checked) linhas.push("  • " + d.nome);
+    });
+    linhas.push("");
+    if (r.desconto > 0) {
+      linhas.push("Subtotal: " + brl(r.subtotal));
+      linhas.push("Desconto: − " + brl(r.desconto));
+    }
+    linhas.push("VALOR TOTAL: " + brl(r.total));
+    if (r.area > 0) linhas.push("Valor efetivo por m²: " + brl(r.total / r.area));
+    return linhas.join("\n");
+  }
+
+  function toast(msg) {
+    var t = $("toast");
+    t.textContent = msg;
+    t.classList.add("show");
+    setTimeout(function () { t.classList.remove("show"); }, 2200);
+  }
+
+  // ---------- persistência ----------
+  function salvarPadrao() {
+    var cfg = {};
+    CONFIG_FIELDS.forEach(function (id) { cfg[id] = $(id).value; });
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(cfg));
+      toast("Valores salvos como padrão ✔");
+    } catch (e) {
+      toast("Não foi possível salvar (navegador bloqueou o armazenamento)");
+    }
+  }
+  function carregarPadrao() {
+    try {
+      var raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return;
+      var cfg = JSON.parse(raw);
+      CONFIG_FIELDS.forEach(function (id) {
+        if (cfg[id] !== undefined) $(id).value = cfg[id];
+      });
+    } catch (e) { /* ignora config corrompida */ }
+  }
+  function restaurarOriginais() {
+    CONFIG_FIELDS.forEach(function (id) { $(id).value = DEFAULTS[id]; });
+    try { localStorage.removeItem(STORAGE_KEY); } catch (e) {}
+    calcular();
+    toast("Valores originais restaurados");
+  }
+
+  // ---------- eventos ----------
+  document.addEventListener("input", calcular);
+  document.addEventListener("change", calcular);
+
+  document.querySelectorAll("[data-step]").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var input = $(btn.getAttribute("data-step"));
+      var dir = parseInt(btn.getAttribute("data-dir"), 10);
+      var min = parseFloat(input.min) || 0;
+      var v = (parseFloat(input.value) || 0) + dir;
+      input.value = Math.max(min, v);
+      calcular();
+    });
+  });
+
+  $("btnSalvarPadrao").addEventListener("click", salvarPadrao);
+  $("btnRestaurar").addEventListener("click", restaurarOriginais);
+  $("btnImprimir").addEventListener("click", function () { window.print(); });
+  $("btnCopiar").addEventListener("click", function () {
+    var texto = gerarResumoTexto();
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(texto).then(
+        function () { toast("Resumo copiado ✔"); },
+        function () { toast("Não foi possível copiar automaticamente"); }
+      );
+    } else {
+      window.prompt("Copie o resumo abaixo:", texto);
+    }
+  });
+
+  // init
+  CONFIG_FIELDS.forEach(function (id) { DEFAULTS[id] = $(id).value; });
+  carregarPadrao();
+  calcular();
+})();
+</script>
+</body>
+</html>
