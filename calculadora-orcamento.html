@@ -266,6 +266,10 @@
     padding: 8px 0 8px 26px;
     position: relative;
     border-bottom: 1px dashed #e2e8f0;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 14px;
   }
   #propostaDoc ul.p-servicos li:last-child { border-bottom: none; }
   #propostaDoc ul.p-servicos li::before {
@@ -275,8 +279,10 @@
     color: #0f9d58;
     font-weight: 700;
   }
+  #propostaDoc ul.p-servicos .s-info { flex: 1; }
   #propostaDoc ul.p-servicos .s-nome { font-weight: 700; font-size: 10.5pt; }
   #propostaDoc ul.p-servicos .s-desc { font-size: 9.5pt; color: #475569; margin-top: 1px; }
+  #propostaDoc ul.p-servicos .s-valor { font-weight: 700; font-size: 10.5pt; color: #0b4f9e; white-space: nowrap; padding-top: 1px; }
   #propostaDoc .p-invest {
     background: #e8f1fc;
     border: 1px solid #b6d4f5;
@@ -748,10 +754,12 @@
     // 1) disciplinas: R$/m² × área
     var baseDisc = 0;
     var htmlDisc = "";
+    var discSelecionadas = [];
     DISCIPLINAS.forEach(function (d) {
       if ($(d.check).checked) {
         var valor = num(d.price) * area;
         baseDisc += valor;
+        discSelecionadas.push({ nome: d.nome, base: valor });
         htmlDisc += sumLine(d.nome + " (" + num(d.price).toLocaleString("pt-BR") + " R$/m²)", valor);
       }
     });
@@ -782,10 +790,12 @@
     addItem("Reúso / Cisterna", $("reuso").checked ? 1 : 0, num("v_reuso"));
 
     // modelagem 3D do arquitetônico (quando não vem em Revit)
+    var adicionaisAmbientes = adicionais; // adicionais de ambientes, sem a modelagem
     var formato = $("formatoArq").value;
+    var vModel = 0;
     if (formato === "dwg" || formato === "pdf") {
       var precoModel = formato === "dwg" ? num("v_modelDwg") : num("v_modelPdf");
-      var vModel = precoModel * area;
+      vModel = precoModel * area;
       if (vModel > 0) {
         adicionais += vModel;
         htmlAd += sumLine("Modelagem 3D (" + (formato === "dwg" ? "DWG" : "PDF") + ", " +
@@ -824,6 +834,32 @@
     var minimo = num("v_minimo");
     var abaixoMin = minimo > 0 && total > 0 && total < minimo;
 
+    // rateio por serviço para a proposta do cliente:
+    // adicionais de ambientes são distribuídos proporcionalmente entre as
+    // disciplinas e todos os fatores/desconto são embutidos em cada linha,
+    // de modo que a soma das linhas seja igual ao total.
+    var fatorFinal = fAndar * fTipo * fPadrao * fUrgencia * (1 - descontoPct / 100);
+    var servicos = [];
+    if (discSelecionadas.length > 0) {
+      discSelecionadas.forEach(function (d) {
+        var rateio = baseDisc > 0
+          ? adicionaisAmbientes * (d.base / baseDisc)
+          : adicionaisAmbientes / discSelecionadas.length;
+        servicos.push({ nome: d.nome, valor: (d.base + rateio) * fatorFinal });
+      });
+    } else if (adicionaisAmbientes > 0) {
+      servicos.push({ nome: "Instalações dos ambientes", valor: adicionaisAmbientes * fatorFinal });
+    }
+    if (vModel > 0) {
+      servicos.push({ nome: "Modelagem 3D do projeto arquitetônico", valor: vModel * fatorFinal });
+    }
+    // ajuste de centavos: força a soma exata com o total
+    if (servicos.length > 0) {
+      var somaArred = 0;
+      servicos.forEach(function (s) { s.valor = Math.round(s.valor * 100) / 100; somaArred += s.valor; });
+      servicos[servicos.length - 1].valor += Math.round((total - somaArred) * 100) / 100;
+    }
+
     // render
     $("outDisciplinas").innerHTML = htmlDisc;
     $("outAdicionais").innerHTML = htmlAd;
@@ -835,7 +871,7 @@
     $("outPorM2").textContent = area > 0 ? brl(total / area) + " / m² efetivo" : "informe a área";
     $("alertMin").style.display = abaixoMin ? "block" : "none";
 
-    return { area: area, total: total, subtotal: subtotal, desconto: desconto };
+    return { area: area, total: total, subtotal: subtotal, desconto: desconto, servicos: servicos };
   }
 
   // ---------- resumo em texto ----------
@@ -894,7 +930,6 @@
     var obra = $("obra").value.trim();
     var prestador = $("prestador").value.trim() || "Projetos Complementares";
     var contato = $("contato").value.trim();
-    var area = num("area");
     var pavimentos = Math.max(1, num("pavimentos"));
 
     // resumo da edificação (sem preços)
@@ -911,21 +946,23 @@
     if ($("aquecSolar").checked) ambientes.push("aquecimento solar");
     if ($("reuso").checked) ambientes.push("reúso de água");
 
-    // serviços contratados
-    var servicos = "";
-    DISCIPLINAS.forEach(function (d) {
-      if ($(d.check).checked) {
-        servicos += '<li><div class="s-nome">' + esc(d.nome) + '</div>' +
-          '<div class="s-desc">' + esc(SERVICOS_DESC[d.check] || "") + '</div></li>';
-      }
-    });
+    // serviços contratados, cada um com seu valor (rateado pelo calcular)
     var formato = $("formatoArq").value;
-    if (formato === "dwg" || formato === "pdf") {
-      servicos += '<li><div class="s-nome">Modelagem 3D do projeto arquitetônico</div>' +
-        '<div class="s-desc">Modelagem completa da edificação em Revit a partir do projeto arquitetônico fornecido em ' +
-        (formato === "dwg" ? "CAD/DWG" : "PDF") + ', servindo de base para todas as disciplinas.</div></li>';
-    }
-    if (!servicos) servicos = '<li><div class="s-nome">Nenhum serviço selecionado</div></li>';
+    var descPorNome = {};
+    DISCIPLINAS.forEach(function (d) { descPorNome[d.nome] = SERVICOS_DESC[d.check] || ""; });
+    descPorNome["Modelagem 3D do projeto arquitetônico"] =
+      "Modelagem completa da edificação em Revit a partir do projeto arquitetônico fornecido em " +
+      (formato === "dwg" ? "CAD/DWG" : "PDF") + ", servindo de base para todas as disciplinas.";
+    descPorNome["Instalações dos ambientes"] =
+      "Instalações dos ambientes hidráulicos contemplados no projeto.";
+
+    var servicos = "";
+    r.servicos.forEach(function (s) {
+      servicos += '<li><div class="s-info"><div class="s-nome">' + esc(s.nome) + '</div>' +
+        '<div class="s-desc">' + esc(descPorNome[s.nome] || "") + '</div></div>' +
+        '<div class="s-valor">' + brl(s.valor) + '</div></li>';
+    });
+    if (!servicos) servicos = '<li><div class="s-info"><div class="s-nome">Nenhum serviço selecionado</div></div></li>';
 
     var html = "";
     html += '<div class="p-header">';
@@ -941,7 +978,6 @@
     html += '<div class="p-section"><h2>Dados do cliente e da obra</h2><table class="p-info">';
     html += '<tr><td class="k">Cliente</td><td>' + esc(cliente) + '</td></tr>';
     if (obra) html += '<tr><td class="k">Obra</td><td>' + esc(obra) + '</td></tr>';
-    html += '<tr><td class="k">Área construída</td><td>' + area.toLocaleString("pt-BR") + ' m²</td></tr>';
     html += '<tr><td class="k">Pavimentos</td><td>' + pavimentos + '</td></tr>';
     if (ambientes.length) html += '<tr><td class="k">Ambientes contemplados</td><td>' + esc(ambientes.join(", ")) + '</td></tr>';
     html += '</table></div>';
@@ -949,7 +985,7 @@
     html += '<div class="p-section"><h2>Serviços inclusos</h2><ul class="p-servicos">' + servicos + '</ul></div>';
 
     html += '<div class="p-section"><h2>Investimento</h2>';
-    html += '<div class="p-invest"><div class="lbl">Valor total dos projetos<small>Inclui todos os serviços listados acima</small></div>';
+    html += '<div class="p-invest"><div class="lbl">Valor total dos projetos<small>Soma dos serviços listados acima</small></div>';
     html += '<div class="val">' + brl(r.total) + '</div></div>';
     html += '<div class="p-validade">⏳ Proposta válida até ' + fmtData(validade.fim) + ' (' + validade.dias + ' dias)</div>';
     html += '</div>';
