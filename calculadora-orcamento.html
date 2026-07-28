@@ -219,6 +219,111 @@
     .summary { position: static; }
     .summary .total-box { background: #0f6bd7 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   }
+
+  /* ===== documento de proposta para o cliente ===== */
+  #propostaDoc { display: none; }
+  @media print {
+    body.print-proposta .wrap { display: none !important; }
+    body.print-proposta #propostaDoc { display: block !important; }
+  }
+  #propostaDoc {
+    max-width: 760px;
+    margin: 0 auto;
+    color: #1e2a38;
+    font-size: 11pt;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  #propostaDoc .p-header {
+    border-bottom: 3px solid #0f6bd7;
+    padding-bottom: 14px;
+    margin-bottom: 22px;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    gap: 16px;
+  }
+  #propostaDoc .p-header .p-brand { font-size: 15pt; font-weight: 700; color: #0b4f9e; }
+  #propostaDoc .p-header .p-brand small { display: block; font-size: 9pt; font-weight: 400; color: #64748b; margin-top: 2px; }
+  #propostaDoc .p-header .p-meta { text-align: right; font-size: 9pt; color: #64748b; }
+  #propostaDoc h1.p-titulo { font-size: 14pt; margin: 0 0 4px; color: #1e2a38; }
+  #propostaDoc .p-sub { color: #64748b; font-size: 10pt; margin-bottom: 18px; }
+  #propostaDoc .p-section { margin-bottom: 18px; page-break-inside: avoid; }
+  #propostaDoc .p-section > h2 {
+    font-size: 10pt;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    color: #0b4f9e;
+    border-bottom: 1px solid #e2e8f0;
+    padding-bottom: 4px;
+    margin-bottom: 10px;
+  }
+  #propostaDoc table.p-info { width: 100%; border-collapse: collapse; font-size: 10.5pt; }
+  #propostaDoc table.p-info td { padding: 3px 0; vertical-align: top; }
+  #propostaDoc table.p-info td.k { color: #64748b; width: 170px; }
+  #propostaDoc ul.p-servicos { list-style: none; padding: 0; margin: 0; }
+  #propostaDoc ul.p-servicos li {
+    padding: 8px 0 8px 26px;
+    position: relative;
+    border-bottom: 1px dashed #e2e8f0;
+  }
+  #propostaDoc ul.p-servicos li:last-child { border-bottom: none; }
+  #propostaDoc ul.p-servicos li::before {
+    content: "✓";
+    position: absolute;
+    left: 2px; top: 8px;
+    color: #0f9d58;
+    font-weight: 700;
+  }
+  #propostaDoc ul.p-servicos .s-nome { font-weight: 700; font-size: 10.5pt; }
+  #propostaDoc ul.p-servicos .s-desc { font-size: 9.5pt; color: #475569; margin-top: 1px; }
+  #propostaDoc .p-invest {
+    background: #e8f1fc;
+    border: 1px solid #b6d4f5;
+    border-radius: 10px;
+    padding: 16px 20px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 16px;
+  }
+  #propostaDoc .p-invest .lbl { font-size: 10pt; color: #0b4f9e; font-weight: 700; }
+  #propostaDoc .p-invest .lbl small { display: block; font-weight: 400; color: #64748b; font-size: 8.5pt; }
+  #propostaDoc .p-invest .val { font-size: 18pt; font-weight: 800; color: #0b4f9e; white-space: nowrap; }
+  #propostaDoc .p-cond { font-size: 10pt; }
+  #propostaDoc .p-cond p { margin: 3px 0; }
+  #propostaDoc .p-obs { font-size: 9.5pt; color: #475569; white-space: pre-wrap; }
+  #propostaDoc .p-validade {
+    margin-top: 6px;
+    font-size: 9pt;
+    color: #b45309;
+    background: #fef3c7;
+    border-radius: 6px;
+    padding: 6px 10px;
+    display: inline-block;
+  }
+  #propostaDoc .p-assinaturas {
+    display: flex;
+    gap: 40px;
+    margin-top: 48px;
+    page-break-inside: avoid;
+  }
+  #propostaDoc .p-assinaturas .linha {
+    flex: 1;
+    border-top: 1px solid #1e2a38;
+    padding-top: 6px;
+    text-align: center;
+    font-size: 9pt;
+    color: #475569;
+  }
+  #propostaDoc .p-rodape {
+    margin-top: 30px;
+    border-top: 1px solid #e2e8f0;
+    padding-top: 8px;
+    font-size: 8.5pt;
+    color: #94a3b8;
+    text-align: center;
+  }
 </style>
 </head>
 <body>
@@ -258,6 +363,26 @@
             <input type="text" id="validaAte" readonly style="background:#eef2f7; cursor:default;">
           </label>
         </div>
+        <div class="grid c2" style="margin-top:12px;">
+          <label class="field">Seu nome / empresa
+            <span class="sub">Aparece no cabeçalho da proposta — salvo como padrão</span>
+            <input type="text" id="prestador" placeholder="Ex.: Iris Gabriely — Projetos Complementares" maxlength="80">
+          </label>
+          <label class="field">Seu contato
+            <span class="sub">Telefone, e-mail ou @instagram</span>
+            <input type="text" id="contato" placeholder="Ex.: (11) 99999-9999 · contato@email.com" maxlength="80">
+          </label>
+          <label class="field">Condições de pagamento
+            <input type="text" id="pagamento" value="50% na aprovação da proposta e 50% na entrega dos projetos" maxlength="160">
+          </label>
+          <label class="field">Prazo de entrega estimado
+            <input type="text" id="prazoEntrega" value="15 dias úteis após aprovação e recebimento do arquitetônico" maxlength="120">
+          </label>
+        </div>
+        <label class="field" style="margin-top:12px;">Observações (opcional)
+          <span class="sub">Texto livre incluído no final da proposta</span>
+          <textarea id="observacoes" rows="2" maxlength="600" placeholder="Ex.: Estão inclusas até 2 rodadas de revisão após a entrega." style="width:100%; margin-top:4px; padding:9px 10px; border:1px solid var(--line); border-radius:8px; font-size:.95rem; font-family:inherit; resize:vertical;"></textarea>
+        </label>
       </div>
 
       <!-- DADOS GERAIS -->
@@ -511,15 +636,23 @@
         <div class="alert-min" id="alertMin">⚠️ Total abaixo do seu valor mínimo de projeto. Considere cobrar o mínimo configurado.</div>
 
         <div class="btns no-print">
-          <button type="button" class="btn primary" id="btnCopiar">📋 Copiar resumo</button>
-          <button type="button" class="btn ghost" id="btnImprimir">🖨️ Imprimir / PDF</button>
+          <button type="button" class="btn primary" id="btnProposta">📄 Proposta em PDF (cliente)</button>
+          <button type="button" class="btn ghost" id="btnCopiar">📋 Copiar resumo</button>
+          <button type="button" class="btn plain" id="btnImprimir">🖨️ Resumo interno</button>
         </div>
+        <p style="font-size:.75rem; color:var(--muted); margin-top:8px;" class="no-print">
+          A <strong>proposta</strong> é o documento para enviar ao cliente (sem valores por m² nem preços unitários).
+          O <strong>resumo interno</strong> imprime esta tela com o detalhamento completo.
+        </p>
       </div>
     </div>
   </div>
 </div>
 
 <div class="toast" id="toast"></div>
+
+<!-- documento de proposta (aparece apenas na impressão) -->
+<div id="propostaDoc"></div>
 
 <script>
 (function () {
@@ -538,12 +671,25 @@
     { check: "d_compat",   price: "p_compat",   nome: "Compatibilização 3D" }
   ];
 
-  // campos numéricos configuráveis (salvos como padrão)
+  // campos configuráveis (salvos como padrão)
   var CONFIG_FIELDS = [
     "p_hidro","p_eletrico","p_pluvial","p_gas","p_spda","p_logica","p_incendio","p_compat",
     "v_banheiro","v_lavabo","v_cozinha","v_pia","v_lavanderia","v_gourmet","v_piscina",
-    "v_solar","v_reuso","v_modelDwg","v_modelPdf","v_pctAndar","v_minimo"
+    "v_solar","v_reuso","v_modelDwg","v_modelPdf","v_pctAndar","v_minimo",
+    "prestador","contato","pagamento","prazoEntrega"
   ];
+
+  // descrições dos serviços exibidas na proposta do cliente
+  var SERVICOS_DESC = {
+    d_hidro:    "Projeto completo de água fria, água quente, esgoto sanitário e ventilação, com plantas por pavimento, detalhes isométricos, dimensionamento e lista de materiais.",
+    d_eletrico: "Projeto de iluminação, tomadas e circuitos, com quadro de cargas, diagrama unifilar, dimensionamento conforme NBR 5410 e lista de materiais.",
+    d_pluvial:  "Projeto de captação de águas pluviais, com dimensionamento de calhas, condutores verticais e encaminhamento da drenagem.",
+    d_gas:      "Projeto da rede de gás (GLP ou gás natural), com traçado, dimensionamento e especificação dos pontos de consumo.",
+    d_spda:     "Projeto de proteção contra descargas atmosféricas (para-raios), com malha de aterramento e detalhamento conforme NBR 5419.",
+    d_logica:   "Projeto de cabeamento estruturado: pontos de rede, TV, interfone e infraestrutura para CFTV.",
+    d_incendio: "Projeto preventivo de incêndio conforme normas do corpo de bombeiros, com extintores, sinalização e saídas de emergência.",
+    d_compat:   "Compatibilização das disciplinas em modelo 3D (Revit), com verificação e resolução de interferências entre instalações e estrutura."
+  };
 
   var DEFAULTS = {};
 
@@ -734,6 +880,113 @@
     return linhas.join("\n");
   }
 
+  // ---------- proposta em PDF para o cliente ----------
+  function esc(s) {
+    return String(s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+
+  function montarProposta() {
+    var r = calcular();
+    var validade = calcularValidade();
+    var cliente = $("cliente").value.trim() || "________________________";
+    var obra = $("obra").value.trim();
+    var prestador = $("prestador").value.trim() || "Projetos Complementares";
+    var contato = $("contato").value.trim();
+    var area = num("area");
+    var pavimentos = Math.max(1, num("pavimentos"));
+
+    // resumo da edificação (sem preços)
+    var ambientes = [];
+    function amb(qtd, singular, plural) {
+      if (qtd > 0) ambientes.push(qtd + " " + (qtd === 1 ? singular : plural));
+    }
+    amb(num("banheiros"), "banheiro", "banheiros");
+    amb(num("lavabos"), "lavabo", "lavabos");
+    amb(num("cozinhas"), "cozinha", "cozinhas");
+    amb(num("lavanderias"), "lavanderia", "lavanderias");
+    amb(num("gourmet"), "área gourmet", "áreas gourmet");
+    if ($("piscina").checked) ambientes.push("piscina");
+    if ($("aquecSolar").checked) ambientes.push("aquecimento solar");
+    if ($("reuso").checked) ambientes.push("reúso de água");
+
+    // serviços contratados
+    var servicos = "";
+    DISCIPLINAS.forEach(function (d) {
+      if ($(d.check).checked) {
+        servicos += '<li><div class="s-nome">' + esc(d.nome) + '</div>' +
+          '<div class="s-desc">' + esc(SERVICOS_DESC[d.check] || "") + '</div></li>';
+      }
+    });
+    var formato = $("formatoArq").value;
+    if (formato === "dwg" || formato === "pdf") {
+      servicos += '<li><div class="s-nome">Modelagem 3D do projeto arquitetônico</div>' +
+        '<div class="s-desc">Modelagem completa da edificação em Revit a partir do projeto arquitetônico fornecido em ' +
+        (formato === "dwg" ? "CAD/DWG" : "PDF") + ', servindo de base para todas as disciplinas.</div></li>';
+    }
+    if (!servicos) servicos = '<li><div class="s-nome">Nenhum serviço selecionado</div></li>';
+
+    var html = "";
+    html += '<div class="p-header">';
+    html += '<div class="p-brand">' + esc(prestador);
+    if (contato) html += '<small>' + esc(contato) + '</small>';
+    html += '</div>';
+    html += '<div class="p-meta">Proposta de serviços<br>' + fmtData(validade.inicio) + '</div>';
+    html += '</div>';
+
+    html += '<h1 class="p-titulo">Proposta de Projetos Complementares</h1>';
+    html += '<div class="p-sub">Projetos desenvolvidos em Revit (BIM), com detalhamento completo para execução da obra.</div>';
+
+    html += '<div class="p-section"><h2>Dados do cliente e da obra</h2><table class="p-info">';
+    html += '<tr><td class="k">Cliente</td><td>' + esc(cliente) + '</td></tr>';
+    if (obra) html += '<tr><td class="k">Obra</td><td>' + esc(obra) + '</td></tr>';
+    html += '<tr><td class="k">Área construída</td><td>' + area.toLocaleString("pt-BR") + ' m²</td></tr>';
+    html += '<tr><td class="k">Pavimentos</td><td>' + pavimentos + '</td></tr>';
+    if (ambientes.length) html += '<tr><td class="k">Ambientes contemplados</td><td>' + esc(ambientes.join(", ")) + '</td></tr>';
+    html += '</table></div>';
+
+    html += '<div class="p-section"><h2>Serviços inclusos</h2><ul class="p-servicos">' + servicos + '</ul></div>';
+
+    html += '<div class="p-section"><h2>Investimento</h2>';
+    html += '<div class="p-invest"><div class="lbl">Valor total dos projetos<small>Inclui todos os serviços listados acima</small></div>';
+    html += '<div class="val">' + brl(r.total) + '</div></div>';
+    html += '<div class="p-validade">⏳ Proposta válida até ' + fmtData(validade.fim) + ' (' + validade.dias + ' dias)</div>';
+    html += '</div>';
+
+    html += '<div class="p-section"><h2>Condições</h2><div class="p-cond">';
+    var pagamento = $("pagamento").value.trim();
+    var prazo = $("prazoEntrega").value.trim();
+    if (pagamento) html += '<p><strong>Pagamento:</strong> ' + esc(pagamento) + '</p>';
+    if (prazo) html += '<p><strong>Prazo de entrega:</strong> ' + esc(prazo) + '</p>';
+    html += '<p><strong>Entrega:</strong> arquivos em PDF para impressão e execução; modelo Revit/IFC mediante solicitação.</p>';
+    html += '</div></div>';
+
+    var obs = $("observacoes").value.trim();
+    if (obs) {
+      html += '<div class="p-section"><h2>Observações</h2><div class="p-obs">' + esc(obs) + '</div></div>';
+    }
+
+    html += '<div class="p-assinaturas">';
+    html += '<div class="linha">' + esc(prestador) + '</div>';
+    html += '<div class="linha">' + esc(cliente) + '</div>';
+    html += '</div>';
+
+    html += '<div class="p-rodape">Proposta gerada em ' + fmtData(validade.inicio) +
+      (contato ? ' · ' + esc(contato) : '') + '</div>';
+
+    $("propostaDoc").innerHTML = html;
+  }
+
+  function imprimirProposta() {
+    montarProposta();
+    document.body.classList.add("print-proposta");
+    window.print();
+  }
+  window.addEventListener("afterprint", function () {
+    document.body.classList.remove("print-proposta");
+  });
+
   function toast(msg) {
     var t = $("toast");
     t.textContent = msg;
@@ -786,7 +1039,11 @@
 
   $("btnSalvarPadrao").addEventListener("click", salvarPadrao);
   $("btnRestaurar").addEventListener("click", restaurarOriginais);
-  $("btnImprimir").addEventListener("click", function () { window.print(); });
+  $("btnImprimir").addEventListener("click", function () {
+    document.body.classList.remove("print-proposta");
+    window.print();
+  });
+  $("btnProposta").addEventListener("click", imprimirProposta);
   $("btnCopiar").addEventListener("click", function () {
     var texto = gerarResumoTexto();
     if (navigator.clipboard && navigator.clipboard.writeText) {
