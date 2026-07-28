@@ -212,7 +212,10 @@
 
   /* impressão do resumo */
   @media print {
-    body { background: #fff; padding: 0; }
+    /* margem zero no papel esconde o cabeçalho/rodapé automático do
+       navegador (data, título e URL); o respiro vem do padding interno */
+    @page { size: A4; margin: 0; }
+    body { background: #fff; padding: 14mm 14mm 16mm; }
     .no-print, .btns, details.config { display: none !important; }
     .layout { grid-template-columns: 1fr; }
     .card { border: none; padding: 8px 0; margin-bottom: 8px; }
