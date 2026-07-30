@@ -1,0 +1,1033 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Calculadora de Orçamento de Casamento</title>
+<style>
+/* ---------- tokens ---------- */
+:root{
+  --paper:#F1F3EE; --surface:#FBFCFA; --surface-2:#E9EDE6; --surface-3:#E2E8DF;
+  --ink:#17201A; --ink-2:#4A574E; --ink-3:#7A867D;
+  --line:#D5DCD2; --line-strong:#BEC8BA;
+  --accent:#2E6B4E; --accent-ink:#FFFFFF; --accent-soft:#DBE7DC;
+  --brass:#8A6420; --brass-soft:#F0E7D5;
+  --good:#2E6B4E; --warn:#8F6410; --crit:#A43A2C;
+  --good-soft:#DBE7DC; --warn-soft:#F4E9D2; --crit-soft:#F6DED9;
+  --shadow:0 1px 2px rgba(23,32,26,.05), 0 8px 24px -16px rgba(23,32,26,.28);
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --paper:#111511; --surface:#191F19; --surface-2:#222922; --surface-3:#2A322A;
+    --ink:#E8EEE6; --ink-2:#A9B4A8; --ink-3:#7E8A7D;
+    --line:#2C342C; --line-strong:#3C463C;
+    --accent:#6FBE90; --accent-ink:#0E1710; --accent-soft:#213026;
+    --brass:#D3A961; --brass-soft:#2C2618;
+    --good:#6FBE90; --warn:#D6A83F; --crit:#E0705F;
+    --good-soft:#213026; --warn-soft:#2C2618; --crit-soft:#331F1C;
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px -16px rgba(0,0,0,.8);
+  }
+}
+:root[data-theme="light"]{
+  --paper:#F1F3EE; --surface:#FBFCFA; --surface-2:#E9EDE6; --surface-3:#E2E8DF;
+  --ink:#17201A; --ink-2:#4A574E; --ink-3:#7A867D;
+  --line:#D5DCD2; --line-strong:#BEC8BA;
+  --accent:#2E6B4E; --accent-ink:#FFFFFF; --accent-soft:#DBE7DC;
+  --brass:#8A6420; --brass-soft:#F0E7D5;
+  --good:#2E6B4E; --warn:#8F6410; --crit:#A43A2C;
+  --good-soft:#DBE7DC; --warn-soft:#F4E9D2; --crit-soft:#F6DED9;
+  --shadow:0 1px 2px rgba(23,32,26,.05), 0 8px 24px -16px rgba(23,32,26,.28);
+}
+:root[data-theme="dark"]{
+  --paper:#111511; --surface:#191F19; --surface-2:#222922; --surface-3:#2A322A;
+  --ink:#E8EEE6; --ink-2:#A9B4A8; --ink-3:#7E8A7D;
+  --line:#2C342C; --line-strong:#3C463C;
+  --accent:#6FBE90; --accent-ink:#0E1710; --accent-soft:#213026;
+  --brass:#D3A961; --brass-soft:#2C2618;
+  --good:#6FBE90; --warn:#D6A83F; --crit:#E0705F;
+  --good-soft:#213026; --warn-soft:#2C2618; --crit-soft:#331F1C;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px -16px rgba(0,0,0,.8);
+}
+
+/* ---------- fontes: três papéis — serifa nos títulos, sans na interface,
+     monoespaçada tabular em todo valor em reais (é um livro-caixa) ---------- */
+:root{
+  --serif: Georgia, "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Palatino, serif;
+  --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, "SF Mono", SFMono-Regular, "Cascadia Mono", "Roboto Mono", Menlo, Consolas, monospace;
+}
+
+*{box-sizing:border-box}
+p{margin:0}
+body{
+  margin:0; background:var(--paper); color:var(--ink);
+  font-family:var(--sans); font-size:15px; line-height:1.5;
+  -webkit-font-smoothing:antialiased;
+}
+.money{font-family:var(--mono); font-variant-numeric:tabular-nums; letter-spacing:-.02em}
+h1,h2,h3{font-family:var(--serif); font-weight:600; text-wrap:balance; margin:0}
+button{font:inherit; color:inherit; cursor:pointer}
+input,select{font:inherit; color:inherit}
+:focus-visible{outline:2px solid var(--accent); outline-offset:2px; border-radius:3px}
+.eyebrow{
+  font-size:11px; letter-spacing:.14em; text-transform:uppercase;
+  color:var(--ink-3); font-weight:600;
+}
+
+/* ---------- shell ---------- */
+.wrap{max-width:1260px; margin:0 auto; padding:0 20px 80px}
+
+header.top{
+  border-bottom:1px solid var(--line);
+  background:var(--surface);
+}
+.top-in{
+  max-width:1260px; margin:0 auto; padding:26px 20px 24px;
+  display:flex; flex-wrap:wrap; align-items:flex-end; gap:16px 28px; justify-content:space-between;
+}
+h1{font-size:clamp(26px,3.4vw,38px); line-height:1.1; letter-spacing:-.015em}
+h1 em{font-style:italic; color:var(--accent)}
+.sub{color:var(--ink-2); max-width:56ch; margin-top:8px; font-size:14.5px}
+
+/* ---------- base panel ---------- */
+.base{
+  background:var(--surface); border:1px solid var(--line); border-radius:10px;
+  padding:18px 18px 20px; margin-top:22px; box-shadow:var(--shadow);
+}
+.grid-base{
+  display:grid; gap:14px 18px;
+  grid-template-columns:repeat(auto-fit,minmax(168px,1fr));
+}
+.field{display:flex; flex-direction:column; gap:6px; min-width:0}
+.field label{font-size:12.5px; font-weight:600; color:var(--ink-2)}
+.field .hint{font-size:11.5px; color:var(--ink-3); line-height:1.35}
+.control{
+  background:var(--paper); border:1px solid var(--line-strong); border-radius:7px;
+  padding:9px 11px; width:100%; min-width:0;
+}
+input.control{font-family:var(--mono); font-variant-numeric:tabular-nums}
+select.control{font-family:var(--sans); cursor:pointer}
+.control:hover{border-color:var(--ink-3)}
+
+.segment{display:flex; gap:0; border:1px solid var(--line-strong); border-radius:7px; overflow:hidden; background:var(--paper)}
+.segment button{
+  flex:1; border:0; background:transparent; padding:9px 6px; font-size:13px; font-weight:600;
+  color:var(--ink-2); border-right:1px solid var(--line);
+}
+.segment button:last-child{border-right:0}
+.segment button[aria-pressed="true"]{background:var(--accent); color:var(--accent-ink)}
+.segment button:not([aria-pressed="true"]):hover{background:var(--surface-2)}
+
+.base-foot{
+  margin-top:16px; padding-top:14px; border-top:1px dashed var(--line-strong);
+  display:flex; flex-wrap:wrap; gap:10px 18px; align-items:center; justify-content:space-between;
+}
+.linkbtns{display:flex; flex-wrap:wrap; gap:8px}
+.lbtn{
+  border:1px solid var(--line-strong); background:var(--surface-2); color:var(--ink-2);
+  border-radius:999px; padding:6px 13px; font-size:12.5px; font-weight:600;
+}
+.lbtn:hover{border-color:var(--accent); color:var(--accent)}
+
+/* ---------- layout ---------- */
+.cols{display:grid; grid-template-columns:minmax(0,1fr) 344px; gap:28px; align-items:start; margin-top:28px}
+@media (max-width:1000px){ .cols{grid-template-columns:minmax(0,1fr)} }
+
+/* ---------- categorias ---------- */
+.cat{
+  background:var(--surface); border:1px solid var(--line); border-radius:10px;
+  margin-bottom:14px; overflow:hidden;
+}
+.cat-head{
+  width:100%; display:flex; align-items:center; gap:12px; text-align:left;
+  padding:14px 16px; background:transparent; border:0; border-bottom:1px solid transparent;
+}
+.cat[data-open="true"] .cat-head{border-bottom-color:var(--line); background:var(--surface-2)}
+.cat-head:hover{background:var(--surface-2)}
+.chev{color:var(--ink-3); font-size:11px; transition:transform .18s ease; width:10px; flex:none}
+.cat[data-open="true"] .chev{transform:rotate(90deg)}
+.cat-name{font-family:var(--serif); font-size:17px; font-weight:600; flex:1; min-width:0}
+.cat-count{font-size:11.5px; color:var(--ink-3); font-weight:600; white-space:nowrap}
+.cat-sum{font-family:var(--mono); font-variant-numeric:tabular-nums; font-size:14px; font-weight:600; color:var(--brass); white-space:nowrap}
+.cat-body{display:none; padding:4px 0 6px}
+.cat[data-open="true"] .cat-body{display:block}
+
+.row{
+  display:grid; grid-template-columns:26px minmax(0,1fr) 132px 116px;
+  gap:10px 12px; align-items:start; padding:11px 16px; border-bottom:1px solid var(--line);
+}
+.row:last-child{border-bottom:0}
+.row[data-on="false"]{opacity:.5}
+.row:hover{background:var(--surface-2)}
+.chk{width:17px; height:17px; margin-top:3px; accent-color:var(--accent); cursor:pointer}
+.item-name{font-weight:600; font-size:14.5px; display:flex; flex-wrap:wrap; gap:6px; align-items:center}
+.item-hint{font-size:12.5px; color:var(--ink-3); line-height:1.4; margin-top:3px; max-width:60ch}
+.qty{font-size:11.5px; color:var(--ink-2); margin-top:4px; font-family:var(--mono)}
+
+.tag{
+  font-size:10.5px; font-weight:700; letter-spacing:.03em; text-transform:uppercase;
+  padding:2px 7px; border-radius:999px; white-space:nowrap;
+}
+.tag-parcelado{background:var(--good-soft); color:var(--good)}
+.tag-sinal{background:var(--brass-soft); color:var(--brass)}
+.tag-avista{background:var(--crit-soft); color:var(--crit)}
+.tag-lembrete{background:var(--surface-3); color:var(--ink-2)}
+
+.val-wrap{position:relative}
+.val-wrap .pfx{
+  position:absolute; left:9px; top:50%; transform:translateY(-50%);
+  font-size:12px; color:var(--ink-3); font-family:var(--mono); pointer-events:none;
+}
+input.val{
+  width:100%; padding:8px 9px 8px 32px; text-align:right;
+  background:var(--paper); border:1px solid var(--line-strong); border-radius:7px;
+  font-family:var(--mono); font-variant-numeric:tabular-nums; font-size:14px;
+}
+input.val:hover{border-color:var(--ink-3)}
+.unit{font-size:11px; color:var(--ink-3); text-align:right; margin-top:3px}
+.sub-val{
+  font-family:var(--mono); font-variant-numeric:tabular-nums; font-size:14.5px;
+  font-weight:600; text-align:right; padding-top:8px; white-space:nowrap;
+}
+@media (max-width:620px){
+  .row{grid-template-columns:24px minmax(0,1fr) 112px; }
+  .sub-val{grid-column:2 / -1; text-align:right; padding-top:2px; color:var(--brass); font-size:13.5px}
+}
+
+/* ---------- resumo ---------- */
+aside{position:sticky; top:16px; display:flex; flex-direction:column; gap:14px}
+@media (max-width:1000px){ aside{position:static} }
+.card{background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:16px; box-shadow:var(--shadow)}
+.card h2{font-size:15px; margin-bottom:12px; letter-spacing:-.01em}
+
+.total-big{
+  font-family:var(--mono); font-variant-numeric:tabular-nums;
+  font-size:clamp(30px,4.6vw,40px); font-weight:700; letter-spacing:-.035em; line-height:1;
+  color:var(--ink); margin:2px 0 4px;
+}
+.total-note{font-size:12.5px; color:var(--ink-2)}
+.total-note b{color:var(--brass); font-family:var(--mono)}
+
+.split{display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:14px}
+.split div{background:var(--surface-2); border-radius:8px; padding:10px 11px}
+.split .k{font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-3); font-weight:700}
+.split .v{font-family:var(--mono); font-variant-numeric:tabular-nums; font-size:16px; font-weight:700; margin-top:3px}
+.split .n{font-size:11px; color:var(--ink-3); margin-top:2px; line-height:1.3}
+
+.meter{height:8px; border-radius:99px; background:var(--surface-3); overflow:hidden; display:flex; margin-top:14px}
+.meter i{display:block; height:100%}
+.meter-key{display:flex; gap:14px; margin-top:7px; font-size:11.5px; color:var(--ink-2); flex-wrap:wrap}
+.meter-key span{display:flex; align-items:center; gap:5px}
+.dot{width:8px; height:8px; border-radius:99px; flex:none}
+
+.plan-row{display:flex; justify-content:space-between; gap:12px; padding:8px 0; border-bottom:1px solid var(--line); font-size:13.5px}
+.plan-row:last-of-type{border-bottom:0}
+.plan-row span{color:var(--ink-2)}
+.plan-row b{font-family:var(--mono); font-variant-numeric:tabular-nums; white-space:nowrap}
+
+.status{
+  border-radius:8px; padding:11px 12px; font-size:13px; line-height:1.45; margin-top:12px;
+  border:1px solid transparent;
+}
+.status b{display:block; font-size:13.5px; margin-bottom:2px}
+.status[data-s="ok"]{background:var(--good-soft); color:var(--good); border-color:color-mix(in srgb, var(--good) 30%, transparent)}
+.status[data-s="warn"]{background:var(--warn-soft); color:var(--warn); border-color:color-mix(in srgb, var(--warn) 30%, transparent)}
+.status[data-s="crit"]{background:var(--crit-soft); color:var(--crit); border-color:color-mix(in srgb, var(--crit) 30%, transparent)}
+
+/* barras por categoria */
+.bars{display:flex; flex-direction:column; gap:9px}
+.bar-l{display:flex; justify-content:space-between; gap:10px; font-size:12.5px; margin-bottom:4px}
+.bar-l span:last-child{font-family:var(--mono); font-variant-numeric:tabular-nums; color:var(--ink-2); white-space:nowrap}
+.bar-t{height:6px; background:var(--surface-3); border-radius:99px; overflow:hidden}
+.bar-t i{display:block; height:100%; background:var(--accent); border-radius:99px}
+
+/* sugestões */
+.tips{display:flex; flex-direction:column; gap:10px}
+.tip{
+  display:flex; gap:10px; font-size:13px; line-height:1.45; color:var(--ink-2);
+  padding-bottom:10px; border-bottom:1px solid var(--line);
+}
+.tip:last-child{border-bottom:0; padding-bottom:0}
+.tip .mk{
+  flex:none; width:20px; height:20px; border-radius:5px; display:grid; place-items:center;
+  font-size:11px; font-weight:800; background:var(--accent-soft); color:var(--accent); margin-top:1px;
+}
+.tip[data-k="alerta"] .mk{background:var(--crit-soft); color:var(--crit)}
+.tip[data-k="grana"] .mk{background:var(--brass-soft); color:var(--brass)}
+.tip b{color:var(--ink)}
+.tip .money{color:var(--brass); font-weight:700}
+
+footer.legal{margin-top:34px; padding-top:18px; border-top:1px solid var(--line); font-size:12.5px; color:var(--ink-3); max-width:75ch}
+
+.toast{
+  position:fixed; left:50%; bottom:24px; transform:translate(-50%,20px);
+  background:var(--ink); color:var(--paper); padding:10px 18px; border-radius:99px;
+  font-size:13px; font-weight:600; opacity:0; pointer-events:none; transition:.22s ease; z-index:50;
+}
+.toast[data-show="true"]{opacity:1; transform:translate(-50%,0)}
+
+@media (prefers-reduced-motion: reduce){ *{transition:none !important; animation:none !important} }
+
+@media print{
+  header.top,.base,.linkbtns,.cat-head,.toast{break-inside:avoid}
+  .lbtn,.segment,.chk{display:none !important}
+  .cols{grid-template-columns:1fr}
+  body{background:#fff}
+}
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="top-in">
+    <div>
+      <p class="eyebrow">Planejamento financeiro do casamento</p>
+      <h1>Quanto custa <em>o nosso casamento</em></h1>
+      <p class="sub">Marque o que você quer ter, ajuste os valores e veja na hora o total, quanto precisa pagar à vista, o que dá pra parcelar e quanto guardar por mês até a data.</p>
+    </div>
+    <div class="linkbtns">
+      <button class="lbtn" id="btn-print">Imprimir / salvar PDF</button>
+      <button class="lbtn" id="btn-reset">Recomeçar do zero</button>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <section class="base" aria-label="Dados básicos">
+    <div class="grid-base">
+      <div class="field">
+        <label for="f-conv">Número de convidados</label>
+        <input class="control" id="f-conv" type="text" inputmode="numeric" value="120">
+        <span class="hint">Conte todo mundo que vai comer e beber, inclusive vocês dois.</span>
+      </div>
+
+      <div class="field">
+        <label for="f-data">Data do casamento</label>
+        <input class="control" id="f-data" type="date">
+        <span class="hint" id="hint-meses">Deixe em branco para simular com 12 meses.</span>
+      </div>
+
+      <div class="field">
+        <label for="f-guardado">Já tenho guardado</label>
+        <input class="control" id="f-guardado" type="text" inputmode="numeric" value="0">
+        <span class="hint">Poupança, presente de família, o que já existe hoje.</span>
+      </div>
+
+      <div class="field">
+        <label for="f-mes">Consigo guardar por mês</label>
+        <input class="control" id="f-mes" type="text" inputmode="numeric" value="1500">
+        <span class="hint">O que sobra por mês dos dois juntos.</span>
+      </div>
+
+      <div class="field">
+        <label for="f-regiao">Onde vai ser</label>
+        <select class="control" id="f-regiao">
+          <option value="0.78">Interior / cidade pequena</option>
+          <option value="1" selected>Cidade média ou capital</option>
+          <option value="1.3">Grande capital (SP, RJ, DF)</option>
+        </select>
+        <span class="hint">Ajusta todos os preços sugeridos de uma vez.</span>
+      </div>
+
+      <div class="field">
+        <label>Padrão da festa</label>
+        <div class="segment" role="group" aria-label="Padrão da festa">
+          <button type="button" data-preset="0" aria-pressed="false">Simples</button>
+          <button type="button" data-preset="1" aria-pressed="true">Médio</button>
+          <button type="button" data-preset="2" aria-pressed="false">Luxo</button>
+        </div>
+        <span class="hint">Preenche os valores sugeridos. Depois é só editar o que já tem orçamento.</span>
+      </div>
+    </div>
+
+    <div class="base-foot">
+      <div class="field" style="flex-direction:row; align-items:center; gap:9px">
+        <input type="checkbox" id="f-reserva" class="chk" checked style="margin-top:0">
+        <label for="f-reserva" style="font-weight:600; cursor:pointer">
+          Somar 10% de reserva para imprevistos
+          <span class="hint" style="display:block; font-weight:400">Sempre aparece algo em cima da hora. Recomendo deixar marcado.</span>
+        </label>
+      </div>
+      <div class="linkbtns">
+        <button class="lbtn" id="btn-abrir">Abrir todas</button>
+        <button class="lbtn" id="btn-fechar">Fechar todas</button>
+        <button class="lbtn" id="btn-so-marcados">Ver só o que está marcado</button>
+      </div>
+    </div>
+  </section>
+
+  <div class="cols">
+    <main id="cats" aria-label="Itens do orçamento"></main>
+
+    <aside>
+      <div class="card">
+        <p class="eyebrow">Custo total estimado</p>
+        <p class="total-big money" id="s-total">R$ 0</p>
+        <p class="total-note">Dá <b class="money" id="s-porconv">R$ 0</b> por convidado · <span id="s-qtd">0 convidados</span></p>
+
+        <div class="meter" aria-hidden="true">
+          <i id="m-avista" style="background:var(--crit)"></i>
+          <i id="m-parcela" style="background:var(--accent)"></i>
+        </div>
+        <div class="meter-key">
+          <span><i class="dot" style="background:var(--crit)"></i> À vista</span>
+          <span><i class="dot" style="background:var(--accent)"></i> Parcelável</span>
+        </div>
+
+        <div class="split">
+          <div>
+            <p class="k">Precisa à vista</p>
+            <p class="v money" id="s-avista">R$ 0</p>
+            <p class="n">Sinais, cartório, equipe e reserva</p>
+          </div>
+          <div>
+            <p class="k">Dá pra parcelar</p>
+            <p class="v money" id="s-parcela">R$ 0</p>
+            <p class="n" id="s-parcela-n">—</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>O plano até a data</h2>
+        <div class="plan-row"><span>Tempo até o casamento</span><b id="p-meses">12 meses</b></div>
+        <div class="plan-row"><span>Já guardado</span><b id="p-guardado">R$ 0</b></div>
+        <div class="plan-row"><span>Falta juntar</span><b id="p-falta">R$ 0</b></div>
+        <div class="plan-row"><span>Precisa guardar por mês</span><b id="p-mes">R$ 0</b></div>
+        <div class="plan-row"><span>Você consegue guardar</span><b id="p-cons">R$ 0</b></div>
+        <div class="status" id="p-status" data-s="ok"><b>—</b></div>
+      </div>
+
+      <div class="card">
+        <h2>Para onde vai o dinheiro</h2>
+        <div class="bars" id="s-bars"></div>
+      </div>
+
+      <div class="card">
+        <h2>Dicas para o seu caso</h2>
+        <div class="tips" id="s-tips"></div>
+      </div>
+    </aside>
+  </div>
+
+  <footer class="legal">
+    Os valores sugeridos são médias de mercado brasileiro para 2026 e servem como ponto de partida — preço de casamento varia muito por cidade, dia da semana e época do ano. Peça sempre três orçamentos por fornecedor e substitua os números aqui pelos reais conforme for fechando.
+  </footer>
+</div>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script>
+/* ============================================================
+   Dados: cada item tem valores sugeridos [simples, médio, luxo]
+   tipo:  fixo | convidado | convite (1 p/ 2 pessoas) | garcom (1 p/ 12 pessoas)
+   pgto:  parcelado | sinal (30% de entrada) | avista
+   ============================================================ */
+const SINAL_PCT = 0.30;
+const CATEGORIAS = [
+{ id:'doc', nome:'Documentos e cerimônia', itens:[
+  { id:'cartorio', nome:'Cartório e habilitação', tipo:'fixo', pgto:'avista', on:true, base:[300,450,700],
+    dica:'Dá entrada com 45 a 90 dias de antecedência. Casamento civil no fórum comunitário costuma ser gratuito.' },
+  { id:'celebrante', nome:'Celebrante ou padre/pastor', tipo:'fixo', pgto:'sinal', on:true, base:[700,1800,4500],
+    dica:'Celebrante independente cobra mais que a paróquia, mas escreve a cerimônia junto com vocês.' },
+  { id:'taxa-igreja', nome:'Taxa da igreja ou do espaço da cerimônia', tipo:'fixo', pgto:'avista', on:false, base:[400,1200,3000],
+    dica:'Só marque se a cerimônia for em local separado da festa.' },
+  { id:'curso', nome:'Curso de noivos / documentação religiosa', tipo:'fixo', pgto:'avista', on:false, base:[150,300,600],
+    dica:'Exigido pela maioria das paróquias. Barato, mas todo mundo esquece de somar.', lembrete:true },
+  { id:'decor-cerimonia', nome:'Decoração da cerimônia', tipo:'fixo', pgto:'parcelado', on:true, base:[1200,4000,13000],
+    dica:'Altar, corredor, arranjos. Se cerimônia e festa forem no mesmo lugar, dá pra reaproveitar as flores e economizar muito.' }
+]},
+
+{ id:'local', nome:'Local e estrutura', itens:[
+  { id:'espaco', nome:'Aluguel do espaço', tipo:'fixo', pgto:'parcelado', on:true, base:[4000,13000,38000],
+    dica:'Sexta-feira e domingo costumam custar 20% a 30% menos que sábado. Pergunte sempre.' },
+  { id:'mobiliario', nome:'Mesas, cadeiras, louças e toalhas', tipo:'convidado', pgto:'sinal', on:true, base:[22,45,90],
+    dica:'Muitos buffets já incluem. Confirme antes de contratar em separado para não pagar duas vezes.', lembrete:true },
+  { id:'climatizacao', nome:'Climatização, gerador ou aquecimento', tipo:'fixo', pgto:'avista', on:false, base:[700,2000,5500],
+    dica:'Praticamente obrigatório em espaço aberto ou sítio. Gerador evita o pesadelo de a festa acabar no escuro.', lembrete:true },
+  { id:'tenda', nome:'Tenda ou cobertura', tipo:'fixo', pgto:'sinal', on:false, base:[2000,6000,18000],
+    dica:'Só para área externa. Considere como plano B de chuva mesmo em época seca.' },
+  { id:'banheiro', nome:'Banheiro químico de luxo', tipo:'fixo', pgto:'avista', on:false, base:[900,1800,4000],
+    dica:'Necessário em sítio, fazenda e praia. Um módulo a cada 50 convidados.', lembrete:true }
+]},
+
+{ id:'comida', nome:'Comida e bebida', itens:[
+  { id:'buffet', nome:'Buffet (jantar ou almoço)', tipo:'convidado', pgto:'parcelado', on:true, base:[95,170,320],
+    dica:'É o maior gasto do casamento. Buffet volante custa menos que jantar servido à francesa.' },
+  { id:'bebidas', nome:'Bebidas / open bar', tipo:'convidado', pgto:'parcelado', on:true, base:[45,90,180],
+    dica:'Levar a própria bebida (rolha) pode cortar até 40%, mas nem todo espaço permite.' },
+  { id:'bolo', nome:'Bolo dos noivos', tipo:'fixo', pgto:'avista', on:true, base:[450,1300,4000],
+    dica:'Bolo cenográfico com um andar real sai bem mais barato e fica igual na foto.' },
+  { id:'doces', nome:'Doces finos e bem-casados', tipo:'convidado', pgto:'sinal', on:true, base:[7,14,28],
+    dica:'Calcule 3 a 4 docinhos por pessoa mais 1 bem-casado de lembrança.' },
+  { id:'madrugada', nome:'Comida da madrugada', tipo:'convidado', pgto:'avista', on:false, base:[12,25,48],
+    dica:'Hot dog, mini hambúrguer, cachorro-quente. Segura o pessoal na pista até o fim.', lembrete:true },
+  { id:'cafe', nome:'Café da manhã / brunch do dia seguinte', tipo:'fixo', pgto:'avista', on:false, base:[600,1800,5000],
+    dica:'Só faz sentido se muita gente vai dormir no local.' },
+  { id:'brinde', nome:'Espumante do brinde', tipo:'convidado', pgto:'avista', on:false, base:[10,22,60],
+    dica:'Costuma ser cobrado à parte do open bar. Confira o contrato.', lembrete:true }
+]},
+
+{ id:'noivos', nome:'Noiva, noivo e beleza', itens:[
+  { id:'vestido', nome:'Vestido da noiva', tipo:'fixo', pgto:'parcelado', on:true, base:[2000,6500,22000],
+    dica:'Aluguel custa 30% a 50% do valor de compra. Ajustes e sapato costumam ser cobrados fora.' },
+  { id:'traje-noivo', nome:'Traje do noivo', tipo:'fixo', pgto:'parcelado', on:true, base:[800,2200,7000],
+    dica:'Alugar terno é comum e ninguém percebe na foto. Comprar vale se ele for usar de novo.' },
+  { id:'acessorios', nome:'Sapatos, véu, joias e acessórios', tipo:'fixo', pgto:'avista', on:true, base:[500,1400,4500],
+    dica:'Compre um segundo sapato confortável para a festa. Você vai me agradecer às 23h.', lembrete:true },
+  { id:'aliancas', nome:'Alianças', tipo:'fixo', pgto:'parcelado', on:true, base:[1500,4500,14000],
+    dica:'Ouro 18k pesa mais no bolso; prata e ouro 10k são alternativas honestas.' },
+  { id:'beleza-noiva', nome:'Cabelo e maquiagem da noiva (com prova)', tipo:'fixo', pgto:'sinal', on:true, base:[700,2000,5500],
+    dica:'A prova quase sempre é cobrada à parte. Faça no mesmo horário do casamento para ver a durabilidade.' },
+  { id:'beleza-equipe', nome:'Beleza das mães e madrinhas', tipo:'fixo', pgto:'avista', on:false, base:[600,1600,4500],
+    dica:'Combine antes quem paga. Muita noiva acaba absorvendo esse custo sem ter previsto.', lembrete:true },
+  { id:'dayuse', nome:'Day use / suíte para se arrumar', tipo:'fixo', pgto:'avista', on:false, base:[400,1200,4000],
+    dica:'Vale muito pela logística e pelas fotos de making of.' }
+]},
+
+{ id:'foto', nome:'Foto e vídeo', itens:[
+  { id:'fotografo', nome:'Fotografia', tipo:'fixo', pgto:'parcelado', on:true, base:[2500,6500,17000],
+    dica:'É o que sobra depois da festa. Se for cortar em algum lugar, que não seja aqui.' },
+  { id:'video', nome:'Filmagem', tipo:'fixo', pgto:'parcelado', on:true, base:[2500,6500,18000],
+    dica:'Pacote com o mesmo estúdio da foto costuma sair com desconto de 10% a 20%.' },
+  { id:'ensaio', nome:'Ensaio pré-wedding', tipo:'fixo', pgto:'parcelado', on:false, base:[700,1500,3500],
+    dica:'Serve para vocês se soltarem na frente da câmera e rende as fotos do site e da decoração.' },
+  { id:'totem', nome:'Cabine de fotos / totem instantâneo', tipo:'fixo', pgto:'avista', on:false, base:[900,1600,3200],
+    dica:'Entretém os convidados e já entrega lembrancinha pronta.' },
+  { id:'drone', nome:'Drone', tipo:'fixo', pgto:'avista', on:false, base:[500,1000,2500],
+    dica:'Só rende em espaço aberto e com luz do dia.' }
+]},
+
+{ id:'som', nome:'Música e festa', itens:[
+  { id:'dj', nome:'DJ', tipo:'fixo', pgto:'parcelado', on:true, base:[1500,3200,8000],
+    dica:'Peça para ver um vídeo de pista cheia, não só o equipamento.' },
+  { id:'som-luz', nome:'Som e iluminação', tipo:'fixo', pgto:'sinal', on:true, base:[1200,3200,10000],
+    dica:'Às vezes vem junto com o DJ. Confirme se a iluminação cênica está inclusa.', lembrete:true },
+  { id:'musica-cerimonia', nome:'Música ao vivo na cerimônia', tipo:'fixo', pgto:'avista', on:true, base:[900,2200,6000],
+    dica:'Voz e violão já resolvem lindamente. Coral e quarteto de cordas pesam bem mais.' },
+  { id:'banda', nome:'Banda para a festa', tipo:'fixo', pgto:'sinal', on:false, base:[3000,7000,20000],
+    dica:'Costuma tocar 2 blocos e dividir a noite com o DJ.' },
+  { id:'efeitos', nome:'Efeitos (gelo seco, chuva de prata, pirotecnia fria)', tipo:'fixo', pgto:'avista', on:false, base:[500,1200,3200],
+    dica:'Barato e faz muito efeito na hora da entrada e da valsa.' }
+]},
+
+{ id:'decor', nome:'Decoração e papelaria', itens:[
+  { id:'decor-festa', nome:'Decoração da festa e flores', tipo:'fixo', pgto:'parcelado', on:true, base:[3000,9500,32000],
+    dica:'Flores da estação custam metade. Peça ao decorador a lista do que está florido no seu mês.' },
+  { id:'buque', nome:'Buquê e boutonnières', tipo:'fixo', pgto:'avista', on:true, base:[350,900,2800],
+    dica:'Peça também um buquê pequeno de réplica para jogar.', lembrete:true },
+  { id:'convites', nome:'Convites', tipo:'convite', pgto:'avista', on:true, base:[7,16,40],
+    dica:'Um convite por casal ou família, não por pessoa. Convite digital zera esse custo.' },
+  { id:'papelaria', nome:'Papelaria do dia (menu, placas, seating chart)', tipo:'fixo', pgto:'avista', on:false, base:[350,1100,3000],
+    dica:'Dá pra fazer no Canva e imprimir em gráfica rápida por bem menos.' },
+  { id:'lembrancinhas', nome:'Lembrancinhas', tipo:'convidado', pgto:'avista', on:false, base:[8,18,45],
+    dica:'É o item mais fácil de cortar sem ninguém sentir falta. Se cortar, ninguém reclama.' }
+]},
+
+{ id:'equipe', nome:'Equipe e serviços', itens:[
+  { id:'assessoria', nome:'Assessoria / cerimonialista', tipo:'fixo', pgto:'parcelado', on:true, base:[2500,6000,16000],
+    dica:'Acima de 100 convidados, se paga sozinha: negocia fornecedor, monta cronograma e resolve o caos do dia.' },
+  { id:'garcons', nome:'Garçons e copeiros', tipo:'garcom', pgto:'avista', on:true, base:[180,260,420],
+    dica:'Um profissional a cada 12 convidados. Muitos buffets já incluem — confirme antes.' },
+  { id:'seguranca', nome:'Segurança', tipo:'fixo', pgto:'avista', on:false, base:[500,1100,2800],
+    dica:'Exigido por vários espaços em contrato. Leia a papelada.', lembrete:true },
+  { id:'manobrista', nome:'Manobrista (valet)', tipo:'fixo', pgto:'avista', on:false, base:[700,1600,3800],
+    dica:'Faz diferença em rua estreita ou espaço sem estacionamento próprio.' },
+  { id:'limpeza', nome:'Limpeza pós-evento', tipo:'fixo', pgto:'avista', on:false, base:[300,700,1600],
+    dica:'Costuma vir como taxa obrigatória do espaço. Pergunte se já está no contrato.', lembrete:true }
+]},
+
+{ id:'transp', nome:'Transporte e hospedagem', itens:[
+  { id:'carro', nome:'Carro dos noivos', tipo:'fixo', pgto:'avista', on:false, base:[400,1000,3000],
+    dica:'Carro de amigo enfeitado resolve. O clássico só vale se aparecer nas fotos.' },
+  { id:'transporte-conv', nome:'Transporte dos convidados (van/ônibus)', tipo:'fixo', pgto:'avista', on:false, base:[800,2200,6000],
+    dica:'Quase obrigatório se a festa for em sítio ou fazenda longe da cidade.', lembrete:true },
+  { id:'hotel', nome:'Hospedagem da noite de núpcias', tipo:'fixo', pgto:'avista', on:false, base:[400,1200,4500],
+    dica:'Reserve com check-out tarde. Vocês vão dormir pouco e acordar destruídos.' }
+]},
+
+{ id:'extras', nome:'Antes e depois', itens:[
+  { id:'lua-mel', nome:'Lua de mel', tipo:'fixo', pgto:'parcelado', on:false, base:[4000,13000,45000],
+    dica:'Marque aqui se a lua de mel entra no mesmo bolso. Muita gente separa em outro planejamento.' },
+  { id:'cha', nome:'Chá de panela / chá bar', tipo:'fixo', pgto:'avista', on:false, base:[500,1500,4500],
+    dica:'Normalmente as madrinhas dividem, mas o custo existe.', lembrete:true },
+  { id:'despedida', nome:'Despedida de solteiro(a)', tipo:'fixo', pgto:'avista', on:false, base:[400,1500,6000],
+    dica:'Tradicionalmente pago pelos padrinhos, mas nem sempre.' },
+  { id:'site', nome:'Site, RSVP e lista de presentes', tipo:'fixo', pgto:'avista', on:false, base:[100,350,900],
+    dica:'Plataformas cobram taxa sobre os presentes recebidos. Leia o percentual.', lembrete:true },
+  { id:'pre-nupcial', nome:'Pacto antenupcial (se houver)', tipo:'fixo', pgto:'avista', on:false, base:[800,2000,5000],
+    dica:'Necessário para regime diferente de comunhão parcial. Feito em cartório antes do casamento.', lembrete:true }
+]}
+];
+
+const PGTO_LABEL = {
+  parcelado:{ txt:'Dá pra parcelar', cls:'tag-parcelado' },
+  sinal:{ txt:'Sinal + parcelas', cls:'tag-sinal' },
+  avista:{ txt:'Só à vista', cls:'tag-avista' }
+};
+const TIPO_UNIT = { fixo:'valor total', convidado:'por convidado', convite:'por convite', garcom:'por profissional' };
+
+/* ---------- estado ---------- */
+const CHAVE = 'orcamento-casamento-v1';
+const state = {
+  convidados:120, data:'', guardado:0, guardaMes:1500,
+  regiao:1, preset:1, reserva:true, soMarcados:false,
+  itens:{}, abertas:{}
+};
+
+const todosItens = () => CATEGORIAS.flatMap(c => c.itens.map(i => ({...i, cat:c.id, catNome:c.nome})));
+
+function valoresSugeridos(){
+  todosItens().forEach(i => {
+    const v = Math.round(i.base[state.preset] * state.regiao);
+    state.itens[i.id] = { on: state.itens[i.id] ? state.itens[i.id].on : i.on, valor: v };
+  });
+}
+function initEstado(){
+  todosItens().forEach(i => { state.itens[i.id] = { on:i.on, valor:Math.round(i.base[state.preset]*state.regiao) }; });
+  CATEGORIAS.forEach((c,idx) => state.abertas[c.id] = idx < 3);
+}
+
+/* ---------- utilidades ---------- */
+const brl = n => 'R$ ' + Math.round(n).toLocaleString('pt-BR');
+const brlCurto = n => n >= 1000 ? 'R$ ' + (Math.round(n/100)/10).toLocaleString('pt-BR',{minimumFractionDigits:1,maximumFractionDigits:1}) + ' mil' : brl(n);
+const soDigitos = s => Number(String(s).replace(/\D/g,'')) || 0;
+const fmtInt = n => Number(n).toLocaleString('pt-BR');
+
+function quantidade(item){
+  if(item.tipo === 'convidado') return state.convidados;
+  if(item.tipo === 'convite') return Math.ceil(state.convidados/2);
+  if(item.tipo === 'garcom') return Math.ceil(state.convidados/12);
+  return 1;
+}
+function mesesRestantes(){
+  if(!state.data) return 12;
+  const hoje = new Date(); hoje.setHours(0,0,0,0);
+  const alvo = new Date(state.data + 'T00:00:00');
+  if(isNaN(alvo)) return 12;
+  const dias = (alvo - hoje) / 86400000;
+  return Math.max(1, Math.round(dias/30.44));
+}
+
+/* ---------- cálculo ---------- */
+function calcular(){
+  let total = 0, avista = 0, parcelavel = 0, marginal = 0;
+  const porCat = {}, ligados = [];
+
+  CATEGORIAS.forEach(c => porCat[c.id] = { nome:c.nome, valor:0 });
+
+  todosItens().forEach(i => {
+    const st = state.itens[i.id];
+    if(!st || !st.on) return;
+    const sub = st.valor * quantidade(i);
+    total += sub;
+    porCat[i.cat].valor += sub;
+    ligados.push({ ...i, unit:st.valor, sub });
+
+    if(i.pgto === 'avista') avista += sub;
+    else if(i.pgto === 'sinal'){ avista += sub*SINAL_PCT; parcelavel += sub*(1-SINAL_PCT); }
+    else parcelavel += sub;
+
+    if(i.tipo === 'convidado') marginal += st.valor;
+    if(i.tipo === 'convite') marginal += st.valor/2;
+    if(i.tipo === 'garcom') marginal += st.valor/12;
+  });
+
+  const reserva = state.reserva ? total*0.10 : 0;
+  const totalGeral = total + reserva;
+  avista += reserva; // imprevisto sempre sai do bolso na hora
+
+  const meses = mesesRestantes();
+  const falta = Math.max(0, totalGeral - state.guardado);
+  const porMes = falta / meses;
+  const capacidade = state.guardado + state.guardaMes*meses;
+  const diferenca = capacidade - totalGeral;
+
+  return { total, reserva, totalGeral, avista, parcelavel, marginal, porCat, ligados,
+           meses, falta, porMes, capacidade, diferenca };
+}
+
+/* ---------- montagem da tela ---------- */
+function montarCategorias(){
+  const alvo = document.getElementById('cats');
+  alvo.innerHTML = '';
+  CATEGORIAS.forEach(c => {
+    const sec = document.createElement('section');
+    sec.className = 'cat'; sec.dataset.open = state.abertas[c.id] ? 'true' : 'false'; sec.dataset.cat = c.id;
+
+    const head = document.createElement('button');
+    head.type = 'button'; head.className = 'cat-head';
+    head.setAttribute('aria-expanded', String(!!state.abertas[c.id]));
+    head.innerHTML = `<span class="chev" aria-hidden="true">▶</span>
+      <span class="cat-name">${c.nome}</span>
+      <span class="cat-count" data-count></span>
+      <span class="cat-sum money" data-sum>R$ 0</span>`;
+    head.addEventListener('click', () => {
+      state.abertas[c.id] = !state.abertas[c.id];
+      sec.dataset.open = state.abertas[c.id] ? 'true' : 'false';
+      head.setAttribute('aria-expanded', String(state.abertas[c.id]));
+      salvar();
+    });
+    sec.appendChild(head);
+
+    const body = document.createElement('div');
+    body.className = 'cat-body';
+    c.itens.forEach(i => body.appendChild(montarLinha(i)));
+    sec.appendChild(body);
+    alvo.appendChild(sec);
+  });
+}
+
+function montarLinha(item){
+  const st = state.itens[item.id];
+  const row = document.createElement('div');
+  row.className = 'row'; row.dataset.on = st.on ? 'true' : 'false'; row.dataset.item = item.id;
+
+  const chk = document.createElement('input');
+  chk.type = 'checkbox'; chk.className = 'chk'; chk.checked = st.on;
+  chk.id = 'chk-' + item.id;
+  chk.setAttribute('aria-label', 'Incluir ' + item.nome);
+  chk.addEventListener('change', () => {
+    state.itens[item.id].on = chk.checked;
+    row.dataset.on = chk.checked ? 'true' : 'false';
+    atualizar();
+  });
+
+  const info = document.createElement('div');
+  const pg = PGTO_LABEL[item.pgto];
+  info.innerHTML = `
+    <div class="item-name">
+      <label for="chk-${item.id}" style="cursor:pointer">${item.nome}</label>
+      <span class="tag ${pg.cls}">${pg.txt}</span>
+      ${item.lembrete ? '<span class="tag tag-lembrete">muita gente esquece</span>' : ''}
+    </div>
+    <p class="item-hint">${item.dica}</p>
+    ${item.tipo !== 'fixo' ? '<p class="qty" data-qty></p>' : ''}`;
+
+  const wrap = document.createElement('div');
+  wrap.innerHTML = `<div class="val-wrap"><span class="pfx">R$</span></div>
+                    <p class="unit">${TIPO_UNIT[item.tipo]}</p>`;
+  const input = document.createElement('input');
+  input.type = 'text'; input.className = 'val'; input.inputMode = 'numeric';
+  input.value = fmtInt(st.valor);
+  input.setAttribute('aria-label', 'Valor de ' + item.nome);
+  input.addEventListener('input', () => {
+    const n = soDigitos(input.value);
+    state.itens[item.id].valor = n;
+    const pos = input.selectionStart, antes = input.value.length;
+    input.value = fmtInt(n);
+    const depois = input.value.length;
+    try{ input.setSelectionRange(Math.max(0,pos + (depois-antes)), Math.max(0,pos + (depois-antes))); }catch(e){}
+    atualizar();
+  });
+  wrap.querySelector('.val-wrap').appendChild(input);
+
+  const sub = document.createElement('p');
+  sub.className = 'sub-val money'; sub.dataset.sub = '';
+
+  row.append(chk, info, wrap, sub);
+  return row;
+}
+
+/* ---------- atualização ---------- */
+function atualizar(){
+  const r = calcular();
+
+  // linhas e categorias
+  CATEGORIAS.forEach(c => {
+    const sec = document.querySelector(`[data-cat="${c.id}"]`);
+    let marcados = 0;
+    c.itens.forEach(i => {
+      const st = state.itens[i.id];
+      const row = sec.querySelector(`[data-item="${i.id}"]`);
+      const qtd = quantidade(i);
+      const sub = st.on ? st.valor*qtd : 0;
+      if(st.on) marcados++;
+      row.querySelector('[data-sub]').textContent = st.on ? brl(sub) : '—';
+      const q = row.querySelector('[data-qty]');
+      if(q) q.textContent = `${fmtInt(qtd)} × ${brl(st.valor)}`;
+      row.style.display = (state.soMarcados && !st.on) ? 'none' : '';
+    });
+    sec.querySelector('[data-sum]').textContent = brl(r.porCat[c.id].valor);
+    sec.querySelector('[data-count]').textContent = `${marcados}/${c.itens.length} itens`;
+  });
+
+  // resumo
+  document.getElementById('s-total').textContent = brl(r.totalGeral);
+  document.getElementById('s-porconv').textContent = brl(r.totalGeral / Math.max(1,state.convidados));
+  document.getElementById('s-qtd').textContent = `${fmtInt(state.convidados)} convidados`;
+  document.getElementById('s-avista').textContent = brl(r.avista);
+  document.getElementById('s-parcela').textContent = brl(r.parcelavel);
+  document.getElementById('s-parcela-n').textContent =
+    r.parcelavel > 0 ? `≈ ${brl(r.parcelavel / r.meses)} por mês em ${r.meses}x` : '—';
+
+  const somaBar = Math.max(1, r.avista + r.parcelavel);
+  document.getElementById('m-avista').style.width = (r.avista/somaBar*100) + '%';
+  document.getElementById('m-parcela').style.width = (r.parcelavel/somaBar*100) + '%';
+
+  // plano
+  document.getElementById('p-meses').textContent = r.meses === 1 ? '1 mês' : `${r.meses} meses`;
+  document.getElementById('p-guardado').textContent = brl(state.guardado);
+  document.getElementById('p-falta').textContent = brl(r.falta);
+  document.getElementById('p-mes').textContent = brl(r.porMes);
+  document.getElementById('p-cons').textContent = brl(state.guardaMes) + ' /mês';
+
+  const box = document.getElementById('p-status');
+  if(r.diferenca >= r.totalGeral*0.05){
+    box.dataset.s = 'ok';
+    box.innerHTML = `<b>Fecha com folga</b>Guardando ${brl(state.guardaMes)} por mês, sobra ${brl(r.diferenca)} até a data. Dá pra subir um pouco o padrão de algum item que importa para vocês.`;
+  } else if(r.diferenca >= 0){
+    box.dataset.s = 'warn';
+    box.innerHTML = `<b>Fecha no limite</b>Sobra só ${brl(r.diferenca)}. Qualquer imprevisto estoura — segure o padrão como está.`;
+  } else {
+    const cortePorConv = r.marginal > 0 ? Math.ceil(Math.abs(r.diferenca)/r.marginal) : 0;
+    box.dataset.s = 'crit';
+    box.innerHTML = `<b>Falta ${brl(Math.abs(r.diferenca))}</b>Você precisaria guardar ${brl(r.porMes)} por mês, e hoje consegue ${brl(state.guardaMes)}.` +
+      (cortePorConv > 0 && cortePorConv < state.convidados ? ` Cortar ${cortePorConv} convidados já resolveria.` : ' Considere adiar a data ou cortar itens.');
+  }
+
+  desenharBarras(r);
+  desenharDicas(r);
+  salvar();
+}
+
+function desenharBarras(r){
+  const alvo = document.getElementById('s-bars');
+  const lista = CATEGORIAS.map(c => ({ nome:c.nome, valor:r.porCat[c.id].valor }))
+    .concat(r.reserva ? [{ nome:'Reserva para imprevistos', valor:r.reserva }] : [])
+    .filter(x => x.valor > 0).sort((a,b) => b.valor - a.valor);
+  const max = lista.length ? lista[0].valor : 1;
+  const tot = Math.max(1, r.totalGeral);
+
+  alvo.innerHTML = lista.map(x => `
+    <div>
+      <div class="bar-l"><span>${x.nome}</span><span>${brlCurto(x.valor)} · ${Math.round(x.valor/tot*100)}%</span></div>
+      <div class="bar-t"><i style="width:${Math.max(2,x.valor/max*100)}%"></i></div>
+    </div>`).join('') || '<p class="item-hint">Marque alguns itens para ver a distribuição.</p>';
+}
+
+function desenharDicas(r){
+  const dicas = [];
+  const tot = Math.max(1, r.totalGeral);
+  const ligado = id => state.itens[id] && state.itens[id].on;
+
+  // 1. custo marginal do convidado — o número mais acionável do orçamento
+  if(r.marginal > 0){
+    dicas.push({ k:'grana', mk:'1', txt:
+      `<b>Cada convidado a mais custa <span class="money">${brl(r.marginal)}</span>.</b> Cortar 20 pessoas da lista economiza <span class="money">${brl(r.marginal*20)}</span> sem mudar nada do resto da festa. É a alavanca mais forte que vocês têm.` });
+  }
+  // 2. peso de comida e bebida
+  const cb = r.porCat['comida'].valor;
+  if(cb/tot > 0.42){
+    dicas.push({ k:'dica', mk:'2', txt:
+      `Comida e bebida somam <b>${Math.round(cb/tot*100)}%</b> do orçamento. É normal ficar entre 35% e 45% — acima disso, negocie o cardápio ou troque jantar servido por buffet volante.` });
+  }
+  // 3. prazo curto
+  if(r.meses <= 6){
+    dicas.push({ k:'alerta', mk:'!', txt:
+      `Faltam só <b>${r.meses} ${r.meses===1?'mês':'meses'}</b>. Prazo curto reduz o número de parcelas e tira poder de negociação: fornecedor bom já está com agenda cheia. Feche primeiro espaço, buffet e foto.` });
+  }
+  // 4. à vista pesado
+  if(r.avista/tot > 0.45){
+    dicas.push({ k:'alerta', mk:'!', txt:
+      `<b>${Math.round(r.avista/tot*100)}%</b> do total (<span class="money">${brl(r.avista)}</span>) precisa sair do bolso à vista, boa parte na semana do casamento. Deixe esse dinheiro separado e não conte com ele para outra coisa.` });
+  }
+  // 5. assessoria
+  if(!ligado('assessoria') && state.convidados >= 100){
+    dicas.push({ k:'dica', mk:'+', txt:
+      `Com ${fmtInt(state.convidados)} convidados, vale marcar <b>assessoria</b>. Ela negocia com fornecedor, costuma conseguir desconto que cobre parte do próprio cachê, e evita que vocês trabalhem no próprio casamento.` });
+  }
+  // 6. reserva
+  if(!state.reserva){
+    dicas.push({ k:'alerta', mk:'!', txt:
+      `Você desmarcou a <b>reserva para imprevistos</b>. Praticamente todo casamento estoura de 5% a 15%: taxa de rolha, hora extra do buffet, convidado a mais. Considere voltar a marcar.` });
+  }
+  // 7. esquecidos que estão desmarcados
+  const esquecidos = todosItens().filter(i => i.lembrete && !ligado(i.id)).slice(0,4);
+  if(esquecidos.length){
+    dicas.push({ k:'dica', mk:'?', txt:
+      `<b>Ainda não marcados e que costumam aparecer na conta:</b> ${esquecidos.map(i=>i.nome.toLowerCase()).join(', ')}. Confirme com cada fornecedor se já está incluso antes de descartar.` });
+  }
+  // 8. onde cortar quando falta dinheiro
+  if(r.diferenca < 0){
+    const superfluos = ['lembrancinhas','totem','drone','efeitos','manobrista','carro','banda','papelaria','madrugada','cafe','ensaio','despedida']
+      .filter(ligado)
+      .map(id => { const it = todosItens().find(i=>i.id===id); return { nome:it.nome, v: state.itens[id].valor*quantidade(it) }; })
+      .sort((a,b)=>b.v-a.v).slice(0,4);
+    if(superfluos.length){
+      const eco = superfluos.reduce((a,b)=>a+b.v,0);
+      dicas.push({ k:'grana', mk:'✓', txt:
+        `<b>Corte mais fácil primeiro:</b> ${superfluos.map(s=>`${s.nome.toLowerCase()} (${brlCurto(s.v)})`).join(', ')}. Juntos liberam <span class="money">${brl(eco)}</span> e nenhum convidado vai sentir falta.` });
+    }
+    dicas.push({ k:'dica', mk:'→', txt:
+      `Outra saída sem cortar nada: <b>adiar a data</b>. Cada 3 meses a mais rendem <span class="money">${brl(state.guardaMes*3)}</span> guardados e ainda liberam mais parcelas.` });
+  }
+  // 9. dia da semana
+  if(ligado('espaco') && state.itens['espaco'].valor > 8000){
+    dicas.push({ k:'grana', mk:'%', txt:
+      `Pergunte o preço do espaço em <b>sexta-feira ou domingo</b>. O desconto costuma ser de 20% a 30% — aqui seriam até <span class="money">${brl(state.itens['espaco'].valor*0.25)}</span>.` });
+  }
+  // 10. ordem de contratação
+  dicas.push({ k:'dica', mk:'→', txt:
+    `<b>Ordem para fechar:</b> data e espaço → buffet → foto e vídeo → decoração → resto. Os três primeiros definem tudo e são os que esgotam agenda primeiro.` });
+
+  document.getElementById('s-tips').innerHTML = dicas.map(d =>
+    `<div class="tip" data-k="${d.k}"><span class="mk" aria-hidden="true">${d.mk}</span><p>${d.txt}</p></div>`).join('');
+}
+
+/* ---------- persistência ---------- */
+let tSalvar, ultimoSalvo = 0;
+function gravar(){
+  clearTimeout(tSalvar); tSalvar = null; ultimoSalvo = Date.now();
+  try{ localStorage.setItem(CHAVE, JSON.stringify(state)); }catch(e){}
+}
+function salvar(){
+  // debounce com espera máxima: mexer sem parar não pode adiar a gravação para sempre
+  if(Date.now() - ultimoSalvo > 1200) return gravar();
+  clearTimeout(tSalvar);
+  tSalvar = setTimeout(gravar, 250);
+}
+addEventListener('pagehide', () => { if(tSalvar) gravar(); });
+addEventListener('visibilitychange', () => { if(document.visibilityState === 'hidden' && tSalvar) gravar(); });
+function carregar(){
+  try{
+    const raw = localStorage.getItem(CHAVE);
+    if(!raw) return false;
+    const s = JSON.parse(raw);
+    Object.assign(state, s);
+    // garante que itens novos apareçam mesmo em orçamento salvo antes
+    todosItens().forEach(i => {
+      if(!state.itens[i.id]) state.itens[i.id] = { on:i.on, valor:Math.round(i.base[state.preset]*state.regiao) };
+    });
+    return true;
+  }catch(e){ return false; }
+}
+
+function toast(msg){
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.dataset.show = 'true';
+  clearTimeout(t._t); t._t = setTimeout(() => t.dataset.show = 'false', 2200);
+}
+
+/* ---------- controles ---------- */
+function ligarControles(){
+  const conv = document.getElementById('f-conv');
+  conv.addEventListener('input', () => {
+    // deixa o campo ficar vazio enquanto se apaga, senão um "1" teimoso gruda na frente do número novo
+    const n = soDigitos(conv.value);
+    state.convidados = n;
+    conv.value = n ? fmtInt(n) : '';
+    atualizar();
+  });
+  conv.addEventListener('blur', () => {
+    if(!state.convidados){ state.convidados = 1; conv.value = '1'; atualizar(); }
+  });
+
+  const data = document.getElementById('f-data');
+  data.addEventListener('change', () => {
+    state.data = data.value;
+    document.getElementById('hint-meses').textContent =
+      state.data ? `Faltam ${mesesRestantes()} meses.` : 'Deixe em branco para simular com 12 meses.';
+    atualizar();
+  });
+
+  const guardado = document.getElementById('f-guardado');
+  guardado.addEventListener('input', () => {
+    state.guardado = soDigitos(guardado.value);
+    guardado.value = fmtInt(state.guardado);
+    atualizar();
+  });
+
+  const mes = document.getElementById('f-mes');
+  mes.addEventListener('input', () => {
+    state.guardaMes = soDigitos(mes.value);
+    mes.value = fmtInt(state.guardaMes);
+    atualizar();
+  });
+
+  const regiao = document.getElementById('f-regiao');
+  regiao.addEventListener('change', () => {
+    state.regiao = Number(regiao.value);
+    valoresSugeridos(); sincronizarValores(); atualizar();
+    toast('Valores ajustados para a região');
+  });
+
+  document.querySelectorAll('[data-preset]').forEach(b => {
+    b.addEventListener('click', () => {
+      state.preset = Number(b.dataset.preset);
+      document.querySelectorAll('[data-preset]').forEach(o =>
+        o.setAttribute('aria-pressed', String(o === b)));
+      valoresSugeridos(); sincronizarValores(); atualizar();
+      toast('Valores sugeridos aplicados');
+    });
+  });
+
+  document.getElementById('f-reserva').addEventListener('change', e => {
+    state.reserva = e.target.checked; atualizar();
+  });
+
+  document.getElementById('btn-abrir').addEventListener('click', () => abrirTodas(true));
+  document.getElementById('btn-fechar').addEventListener('click', () => abrirTodas(false));
+
+  const soM = document.getElementById('btn-so-marcados');
+  soM.addEventListener('click', () => {
+    state.soMarcados = !state.soMarcados;
+    soM.textContent = state.soMarcados ? 'Ver todos os itens' : 'Ver só o que está marcado';
+    atualizar();
+  });
+
+  document.getElementById('btn-print').addEventListener('click', () => { abrirTodas(true); setTimeout(() => window.print(), 120); });
+
+  document.getElementById('btn-reset').addEventListener('click', () => {
+    if(!confirm('Isso apaga todos os valores que você editou e volta ao início. Continuar?')) return;
+    try{ localStorage.removeItem(CHAVE); }catch(e){}
+    location.reload();
+  });
+}
+
+function abrirTodas(v){
+  CATEGORIAS.forEach(c => {
+    state.abertas[c.id] = v;
+    const sec = document.querySelector(`[data-cat="${c.id}"]`);
+    sec.dataset.open = v ? 'true' : 'false';
+    sec.querySelector('.cat-head').setAttribute('aria-expanded', String(v));
+  });
+  salvar();
+}
+
+function sincronizarValores(){
+  todosItens().forEach(i => {
+    const row = document.querySelector(`[data-item="${i.id}"]`);
+    if(!row) return;
+    row.querySelector('input.val').value = fmtInt(state.itens[i.id].valor);
+    row.querySelector('input.chk').checked = state.itens[i.id].on;
+    row.dataset.on = state.itens[i.id].on ? 'true' : 'false';
+  });
+}
+
+function sincronizarCampos(){
+  document.getElementById('f-conv').value = fmtInt(state.convidados);
+  document.getElementById('f-data').value = state.data || '';
+  document.getElementById('f-guardado').value = fmtInt(state.guardado);
+  document.getElementById('f-mes').value = fmtInt(state.guardaMes);
+  document.getElementById('f-regiao').value = String(state.regiao);
+  document.getElementById('f-reserva').checked = state.reserva;
+  document.querySelectorAll('[data-preset]').forEach(o =>
+    o.setAttribute('aria-pressed', String(Number(o.dataset.preset) === state.preset)));
+  document.getElementById('btn-so-marcados').textContent =
+    state.soMarcados ? 'Ver todos os itens' : 'Ver só o que está marcado';
+  document.getElementById('hint-meses').textContent =
+    state.data ? `Faltam ${mesesRestantes()} meses.` : 'Deixe em branco para simular com 12 meses.';
+}
+
+/* ---------- start ---------- */
+initEstado();
+carregar();
+montarCategorias();
+sincronizarCampos();
+ligarControles();
+atualizar();
+</script>
+</body>
+</html>
