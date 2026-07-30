@@ -172,6 +172,7 @@ select.control{font-family:var(--sans); cursor:pointer}
 .tag-sinal{background:var(--brass-soft); color:var(--brass)}
 .tag-avista{background:var(--crit-soft); color:var(--crit)}
 .tag-lembrete{background:var(--surface-3); color:var(--ink-2)}
+.tag-espera{background:var(--surface-3); color:var(--ink-2); border:1px dashed var(--line-strong)}
 
 .val-wrap{position:relative}
 .val-wrap .pfx{
@@ -208,6 +209,17 @@ aside{position:sticky; top:16px; display:flex; flex-direction:column; gap:14px}
 .total-note{font-size:12.5px; color:var(--ink-2)}
 .total-note b{color:var(--brass); font-family:var(--mono)}
 
+.duo{
+  display:flex; gap:8px; margin-top:12px;
+}
+.duo span{
+  flex:1; background:var(--surface-2); border-radius:8px; padding:8px 10px;
+  font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-3); font-weight:700;
+}
+.duo b{
+  display:block; font-size:15px; font-weight:700; margin-top:3px;
+  letter-spacing:0; text-transform:none; color:var(--ink);
+}
 .split{display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:14px}
 .split div{background:var(--surface-2); border-radius:8px; padding:10px 11px}
 .split .k{font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-3); font-weight:700}
@@ -321,6 +333,31 @@ footer.legal{margin-top:34px; padding-top:18px; border-top:1px solid var(--line)
       </div>
 
       <div class="field">
+        <label for="f-presentes">Presentes que espero receber</label>
+        <input class="control" id="f-presentes" type="text" inputmode="numeric" value="0">
+        <span class="hint" id="hint-presentes">Chá de panela e lista de presentes. Abate o custo de montar a casa.</span>
+      </div>
+
+      <div class="field">
+        <label for="f-moradia">Aluguel ou financiamento</label>
+        <input class="control" id="f-moradia" type="text" inputmode="numeric" value="0">
+        <span class="hint">Por mês, depois de casados. Não entra no total — entra na conta do mês seguinte.</span>
+      </div>
+
+      <div class="field">
+        <label for="f-parcelas">Parcelar móveis e eletro em</label>
+        <select class="control" id="f-parcelas">
+          <option value="1">À vista</option>
+          <option value="6">6x</option>
+          <option value="10" selected>10x</option>
+          <option value="12">12x</option>
+          <option value="18">18x</option>
+          <option value="24">24x</option>
+        </select>
+        <span class="hint">Loja de eletro costuma fazer 10x ou 12x sem juros.</span>
+      </div>
+
+      <div class="field">
         <label for="f-regiao">Onde vai ser</label>
         <select class="control" id="f-regiao">
           <option value="0.78">Interior / cidade pequena</option>
@@ -366,6 +403,12 @@ footer.legal{margin-top:34px; padding-top:18px; border-top:1px solid var(--line)
         <p class="total-big money" id="s-total">R$ 0</p>
         <p class="total-note">Dá <b class="money" id="s-porconv">R$ 0</b> por convidado · <span id="s-qtd">0 convidados</span></p>
 
+        <div class="duo">
+          <span>Festa <b class="money" id="s-festa">R$ 0</b></span>
+          <span>Casa <b class="money" id="s-casa">R$ 0</b></span>
+        </div>
+        <p class="total-note" id="s-presentes-n" hidden></p>
+
         <div class="meter" aria-hidden="true">
           <i id="m-avista" style="background:var(--crit)"></i>
           <i id="m-parcela" style="background:var(--accent)"></i>
@@ -397,6 +440,15 @@ footer.legal{margin-top:34px; padding-top:18px; border-top:1px solid var(--line)
         <div class="plan-row"><span>Precisa guardar por mês</span><b id="p-mes">R$ 0</b></div>
         <div class="plan-row"><span>Você consegue guardar</span><b id="p-cons">R$ 0</b></div>
         <div class="status" id="p-status" data-s="ok"><b>—</b></div>
+      </div>
+
+      <div class="card">
+        <h2>E depois do casamento</h2>
+        <p class="total-note" style="margin-bottom:12px">O que continua caindo todo mês quando a festa já acabou.</p>
+        <div class="plan-row"><span>Parcela dos móveis e eletro</span><b id="d-moveis">R$ 0</b></div>
+        <div class="plan-row"><span>Aluguel ou financiamento</span><b id="d-moradia">R$ 0</b></div>
+        <div class="plan-row"><span>Total por mês</span><b id="d-total">R$ 0</b></div>
+        <div class="status" id="d-status" data-s="ok"><b>—</b></div>
       </div>
 
       <div class="card">
@@ -547,6 +599,43 @@ const CATEGORIAS = [
     dica:'Reserve com check-out tarde. Vocês vão dormir pouco e acordar destruídos.' }
 ]},
 
+{ id:'casa', nome:'Montar a casa', itens:[
+  { id:'entrada-casa', nome:'Entrada, caução ou taxas da casa nova', tipo:'fixo', pgto:'avista', on:false, base:[3000,9000,40000], prio:'agora',
+    dica:'Aluguel costuma pedir caução de 3 aluguéis. Financiamento pede entrada de 20% mais ITBI e escritura, que sozinhos dão uns 5% do imóvel.', lembrete:true },
+  { id:'geladeira', nome:'Geladeira', tipo:'fixo', pgto:'parcelado', on:true, base:[2200,3800,9500], prio:'agora',
+    dica:'Eletrodoméstico grande quase sempre sai em 10x ou 12x sem juros. Novembro e janeiro são os melhores meses de preço.' },
+  { id:'fogao', nome:'Fogão ou cooktop', tipo:'fixo', pgto:'parcelado', on:true, base:[900,1800,5500], prio:'agora' ,
+    dica:'Cooktop obriga a comprar forno separado. Fogão de 4 bocas resolve e custa metade.' },
+  { id:'lavar', nome:'Máquina de lavar', tipo:'fixo', pgto:'parcelado', on:true, base:[1800,3000,7500], prio:'agora',
+    dica:'É o eletrodoméstico que mais muda a vida a dois. Não vale economizar demais aqui.' },
+  { id:'cama', nome:'Cama e colchão', tipo:'fixo', pgto:'parcelado', on:true, base:[1500,3500,10000], prio:'agora',
+    dica:'Vocês passam um terço da vida nele. Colchão bom é o melhor investimento da lista.' },
+  { id:'guarda-roupa', nome:'Guarda-roupa', tipo:'fixo', pgto:'parcelado', on:true, base:[1200,2800,9000], prio:'agora',
+    dica:'Planejado custa 3x o modulado pronto e demora 45 dias. Se o prazo é curto, vá de pronto.' },
+  { id:'microondas', nome:'Micro-ondas', tipo:'fixo', pgto:'parcelado', on:true, base:[500,900,2200], prio:'agora' ,
+    dica:'Item clássico de chá de panela. Espere ganhar antes de comprar.' },
+  { id:'enxoval', nome:'Enxoval de cama, mesa e banho', tipo:'fixo', pgto:'avista', on:true, base:[600,1500,4500], prio:'agora',
+    dica:'Dois jogos de cama por cama, quatro jogos de toalha. O chá de panela costuma cobrir quase tudo isso.' },
+  { id:'utensilios', nome:'Panelas, louças, talheres e utensílios', tipo:'fixo', pgto:'avista', on:true, base:[700,1600,5000], prio:'agora',
+    dica:'A outra metade do que o chá de panela cobre. Monte a lista antes e peça o que falta de verdade.' },
+  { id:'instalacoes', nome:'Mudança, gás e instalações', tipo:'fixo', pgto:'avista', on:true, base:[400,900,2500], prio:'agora',
+    dica:'Frete, botijão, instalação de máquina e ar, suporte de TV, chaveiro. Miudeza que soma mais do que parece.', lembrete:true },
+  { id:'sofa', nome:'Sofá', tipo:'fixo', pgto:'parcelado', on:false, base:[1500,3500,12000], prio:'depois',
+    dica:'Dá pra começar com o sofá que um dos dois já tem e trocar no ano seguinte.' },
+  { id:'mesa-jantar', nome:'Mesa de jantar e cadeiras', tipo:'fixo', pgto:'parcelado', on:false, base:[900,2200,7500], prio:'depois',
+    dica:'Casal recém-casado janta no sofá. Sem julgamento.' },
+  { id:'tv', nome:'Televisão', tipo:'fixo', pgto:'parcelado', on:false, base:[1500,3000,9000], prio:'depois',
+    dica:'Preço despenca na Black Friday e na véspera de Copa. Vale esperar.' },
+  { id:'ar', nome:'Ar-condicionado', tipo:'fixo', pgto:'parcelado', on:false, base:[2000,3500,8000], prio:'depois',
+    dica:'Lembre de somar a instalação, que costuma custar R$ 600 a R$ 1.200 e não vem no anúncio.', lembrete:true },
+  { id:'lava-louca', nome:'Lava-louças ou secadora', tipo:'fixo', pgto:'parcelado', on:false, base:[2000,4000,9000], prio:'depois',
+    dica:'Conforto puro. Deixe para quando o orçamento respirar.' },
+  { id:'decor-casa', nome:'Cortinas, tapetes e luminárias', tipo:'fixo', pgto:'avista', on:false, base:[800,2000,6500], prio:'depois',
+    dica:'A casa pode ir ficando bonita aos poucos. Isso não tem prazo.' },
+  { id:'reforma', nome:'Pintura ou pequena reforma', tipo:'fixo', pgto:'parcelado', on:false, base:[1500,5000,22000], prio:'depois',
+    dica:'Se for fazer, faça antes de mudar a mobília. Depois vira transtorno.' }
+]},
+
 { id:'extras', nome:'Antes e depois', itens:[
   { id:'lua-mel', nome:'Lua de mel', tipo:'fixo', pgto:'parcelado', on:false, base:[4000,13000,45000],
     dica:'Marque aqui se a lua de mel entra no mesmo bolso. Muita gente separa em outro planejamento.' },
@@ -572,6 +661,7 @@ const TIPO_UNIT = { fixo:'valor total', convidado:'por convidado', convite:'por 
 const CHAVE = 'orcamento-casamento-v1';
 const state = {
   convidados:120, data:'', guardado:0, guardaMes:1500,
+  presentes:0, moradiaMes:0, parcelasCasa:10,
   regiao:1, preset:1, reserva:true, soMarcados:false,
   itens:{}, abertas:{}
 };
@@ -612,8 +702,13 @@ function mesesRestantes(){
 
 /* ---------- cálculo ---------- */
 function calcular(){
-  let total = 0, avista = 0, parcelavel = 0, marginal = 0;
-  const porCat = {}, ligados = [];
+  // festa e casa são somados juntos no fim, mas precisam andar separados:
+  // a reserva de imprevistos só faz sentido na festa, e só a casa vira parcela
+  // que continua caindo na fatura depois do casamento.
+  let festa = 0, casa = 0, marginal = 0;
+  let avistaFesta = 0, parcelaFesta = 0, avistaCasa = 0, parcelaCasa = 0;
+  let casaDepois = 0; // itens marcados como "pode esperar"
+  const porCat = {};
 
   CATEGORIAS.forEach(c => porCat[c.id] = { nome:c.nome, valor:0 });
 
@@ -621,22 +716,43 @@ function calcular(){
     const st = state.itens[i.id];
     if(!st || !st.on) return;
     const sub = st.valor * quantidade(i);
-    total += sub;
+    const ehCasa = i.cat === 'casa';
     porCat[i.cat].valor += sub;
-    ligados.push({ ...i, unit:st.valor, sub });
 
-    if(i.pgto === 'avista') avista += sub;
-    else if(i.pgto === 'sinal'){ avista += sub*SINAL_PCT; parcelavel += sub*(1-SINAL_PCT); }
-    else parcelavel += sub;
+    if(ehCasa){
+      casa += sub;
+      if(i.prio === 'depois') casaDepois += sub;
+      if(i.pgto === 'avista') avistaCasa += sub;
+      else if(i.pgto === 'sinal'){ avistaCasa += sub*SINAL_PCT; parcelaCasa += sub*(1-SINAL_PCT); }
+      else parcelaCasa += sub;
+    } else {
+      festa += sub;
+      if(i.pgto === 'avista') avistaFesta += sub;
+      else if(i.pgto === 'sinal'){ avistaFesta += sub*SINAL_PCT; parcelaFesta += sub*(1-SINAL_PCT); }
+      else parcelaFesta += sub;
+    }
 
     if(i.tipo === 'convidado') marginal += st.valor;
     if(i.tipo === 'convite') marginal += st.valor/2;
     if(i.tipo === 'garcom') marginal += st.valor/12;
   });
 
-  const reserva = state.reserva ? total*0.10 : 0;
-  const totalGeral = total + reserva;
-  avista += reserva; // imprevisto sempre sai do bolso na hora
+  const reserva = state.reserva ? festa*0.10 : 0;
+  const totalFesta = festa + reserva;
+  avistaFesta += reserva; // imprevisto sempre sai do bolso na hora
+
+  // presentes abatem o custo da casa proporcionalmente entre à vista e parcelado
+  const presentes = Math.min(state.presentes, casa);
+  const fator = casa > 0 ? Math.max(0, 1 - presentes/casa) : 1;
+  const totalCasa = casa - presentes;
+  avistaCasa *= fator; parcelaCasa *= fator;
+
+  // se escolheram pagar os móveis à vista, eles deixam de ser dívida parcelada
+  if(state.parcelasCasa <= 1){ avistaCasa += parcelaCasa; parcelaCasa = 0; }
+
+  const totalGeral = totalFesta + totalCasa;
+  const avista = avistaFesta + avistaCasa;
+  const parcelavel = parcelaFesta + parcelaCasa;
 
   const meses = mesesRestantes();
   const falta = Math.max(0, totalGeral - state.guardado);
@@ -644,8 +760,15 @@ function calcular(){
   const capacidade = state.guardado + state.guardaMes*meses;
   const diferenca = capacidade - totalGeral;
 
-  return { total, reserva, totalGeral, avista, parcelavel, marginal, porCat, ligados,
-           meses, falta, porMes, capacidade, diferenca };
+  // o mês seguinte ao casamento: parcela dos móveis + moradia
+  const parcelaMoveis = state.parcelasCasa > 1 ? parcelaCasa/state.parcelasCasa : 0;
+  const mensalDepois = parcelaMoveis + state.moradiaMes;
+  const sobraDepois = state.guardaMes - mensalDepois;
+
+  return { festa, casa, reserva, totalFesta, totalCasa, totalGeral, presentes, casaDepois,
+           avista, parcelavel, avistaCasa, parcelaCasa, marginal, porCat,
+           meses, falta, porMes, capacidade, diferenca,
+           parcelaMoveis, mensalDepois, sobraDepois };
 }
 
 /* ---------- montagem da tela ---------- */
@@ -701,6 +824,7 @@ function montarLinha(item){
       <label for="chk-${item.id}" style="cursor:pointer">${item.nome}</label>
       <span class="tag ${pg.cls}">${pg.txt}</span>
       ${item.lembrete ? '<span class="tag tag-lembrete">muita gente esquece</span>' : ''}
+      ${item.prio === 'depois' ? '<span class="tag tag-espera">pode esperar</span>' : ''}
     </div>
     <p class="item-hint">${item.dica}</p>
     ${item.tipo !== 'fixo' ? '<p class="qty" data-qty></p>' : ''}`;
@@ -757,6 +881,14 @@ function atualizar(){
   document.getElementById('s-total').textContent = brl(r.totalGeral);
   document.getElementById('s-porconv').textContent = brl(r.totalGeral / Math.max(1,state.convidados));
   document.getElementById('s-qtd').textContent = `${fmtInt(state.convidados)} convidados`;
+  document.getElementById('hint-presentes').textContent = state.convidados
+    ? `Chá de panela e lista de presentes. Com ${fmtInt(state.convidados)} convidados, algo entre ${brl(state.convidados*60)} e ${brl(state.convidados*150)}.`
+    : 'Chá de panela e lista de presentes. Abate o custo de montar a casa.';
+  document.getElementById('s-festa').textContent = brl(r.totalFesta);
+  document.getElementById('s-casa').textContent = brl(r.totalCasa);
+  const pn = document.getElementById('s-presentes-n');
+  pn.hidden = r.presentes <= 0;
+  pn.innerHTML = `Já descontados <b class="money">${brl(r.presentes)}</b> de presentes na conta da casa.`;
   document.getElementById('s-avista').textContent = brl(r.avista);
   document.getElementById('s-parcela').textContent = brl(r.parcelavel);
   document.getElementById('s-parcela-n').textContent =
@@ -787,6 +919,27 @@ function atualizar(){
       (cortePorConv > 0 && cortePorConv < state.convidados ? ` Cortar ${cortePorConv} convidados já resolveria.` : ' Considere adiar a data ou cortar itens.');
   }
 
+  // o mês seguinte ao casamento
+  document.getElementById('d-moveis').textContent = brl(r.parcelaMoveis) +
+    (state.parcelasCasa > 1 && r.parcelaMoveis > 0 ? ` × ${state.parcelasCasa}` : '');
+  document.getElementById('d-moradia').textContent = brl(state.moradiaMes);
+  document.getElementById('d-total').textContent = brl(r.mensalDepois);
+
+  const dbox = document.getElementById('d-status');
+  if(r.mensalDepois === 0){
+    dbox.dataset.s = 'ok';
+    dbox.innerHTML = `<b>Nada informado ainda</b>Preencha o aluguel ou financiamento lá em cima e marque os móveis para ver como fica o orçamento de vocês já casados.`;
+  } else if(r.sobraDepois >= state.guardaMes*0.3){
+    dbox.dataset.s = 'ok';
+    dbox.innerHTML = `<b>Sobra ${brl(r.sobraDepois)} por mês</b>Depois de casados, com moradia e parcelas pagas, ainda sobra esse tanto do que vocês guardam hoje.`;
+  } else if(r.sobraDepois >= 0){
+    dbox.dataset.s = 'warn';
+    dbox.innerHTML = `<b>Sobra só ${brl(r.sobraDepois)} por mês</b>Os compromissos comem quase tudo o que sobra hoje. Parcele os móveis em mais vezes ou deixe os itens "pode esperar" para o ano que vem.`;
+  } else {
+    dbox.dataset.s = 'crit';
+    dbox.innerHTML = `<b>Faltam ${brl(Math.abs(r.sobraDepois))} por mês</b>Casados, vocês teriam ${brl(r.mensalDepois)} de compromisso mensal e hoje sobram ${brl(state.guardaMes)}. Esse é o aperto que aparece depois da festa — vale resolver agora, no papel.`;
+  }
+
   desenharBarras(r);
   desenharDicas(r);
   salvar();
@@ -794,7 +947,10 @@ function atualizar(){
 
 function desenharBarras(r){
   const alvo = document.getElementById('s-bars');
-  const lista = CATEGORIAS.map(c => ({ nome:c.nome, valor:r.porCat[c.id].valor }))
+  // a casa entra líquida (já sem os presentes), senão o gráfico não fecha com o total
+  const lista = CATEGORIAS.map(c => ({
+      nome: c.id === 'casa' && r.presentes > 0 ? 'Montar a casa (após presentes)' : c.nome,
+      valor: c.id === 'casa' ? r.totalCasa : r.porCat[c.id].valor }))
     .concat(r.reserva ? [{ nome:'Reserva para imprevistos', valor:r.reserva }] : [])
     .filter(x => x.valor > 0).sort((a,b) => b.valor - a.valor);
   const max = lista.length ? lista[0].valor : 1;
@@ -868,7 +1024,28 @@ function desenharDicas(r){
     dicas.push({ k:'grana', mk:'%', txt:
       `Pergunte o preço do espaço em <b>sexta-feira ou domingo</b>. O desconto costuma ser de 20% a 30% — aqui seriam até <span class="money">${brl(state.itens['espaco'].valor*0.25)}</span>.` });
   }
-  // 10. ordem de contratação
+  // 10. casa: adiar o que pode esperar
+  if(r.casaDepois > 0){
+    dicas.push({ k:'grana', mk:'✓', txt:
+      `Os itens marcados <b>"pode esperar"</b> somam <span class="money">${brl(r.casaDepois)}</span>. Sofá, TV e mesa de jantar podem entrar no ano seguinte sem ninguém passar aperto — ninguém casa com a casa pronta.` });
+  }
+  // 11. chá de panela ainda não contabilizado
+  if(r.casa > 0 && state.presentes === 0){
+    const sugestao = Math.round(state.convidados*90/100)*100;
+    dicas.push({ k:'grana', mk:'♦', txt:
+      `Você não contou os <b>presentes</b>. Chá de panela e lista de presentes costumam render de R$ 60 a R$ 150 por convidado — com ${fmtInt(state.convidados)} convidados, algo perto de <span class="money">${brl(sugestao)}</span>. Isso cobre boa parte do enxoval, das panelas e dos eletros pequenos.` });
+  }
+  // 12. casa pesando mais que a festa
+  if(r.totalCasa > r.totalFesta && r.totalFesta > 0){
+    dicas.push({ k:'alerta', mk:'!', txt:
+      `Montar a casa (<span class="money">${brl(r.totalCasa)}</span>) está custando mais que a festa (<span class="money">${brl(r.totalFesta)}</span>). Se precisar escolher onde apertar, aperte na festa: ela dura um dia, a geladeira dura dez anos.` });
+  }
+  // 13. o remédio para "vou casar século que vem"
+  if(r.diferenca < 0 && r.meses >= 6){
+    dicas.push({ k:'dica', mk:'→', txt:
+      `<b>Saída que muita gente usa:</b> casar no civil agora, morar junto e fazer a festa um ou dois anos depois. Vocês param de pagar dois aluguéis, montam a casa sem pressa e a festa deixa de ser o gargalo da vida a dois.` });
+  }
+  // 14. ordem de contratação
   dicas.push({ k:'dica', mk:'→', txt:
     `<b>Ordem para fechar:</b> data e espaço → buffet → foto e vídeo → decoração → resto. Os três primeiros definem tudo e são os que esgotam agenda primeiro.` });
 
@@ -896,10 +1073,11 @@ function carregar(){
     if(!raw) return false;
     const s = JSON.parse(raw);
     Object.assign(state, s);
-    // garante que itens novos apareçam mesmo em orçamento salvo antes
+    // garante que itens e categorias novos apareçam mesmo em orçamento salvo antes
     todosItens().forEach(i => {
       if(!state.itens[i.id]) state.itens[i.id] = { on:i.on, valor:Math.round(i.base[state.preset]*state.regiao) };
     });
+    CATEGORIAS.forEach(c => { if(!(c.id in state.abertas)) state.abertas[c.id] = true; });
     return true;
   }catch(e){ return false; }
 }
@@ -944,6 +1122,24 @@ function ligarControles(){
     state.guardaMes = soDigitos(mes.value);
     mes.value = fmtInt(state.guardaMes);
     atualizar();
+  });
+
+  const presentes = document.getElementById('f-presentes');
+  presentes.addEventListener('input', () => {
+    state.presentes = soDigitos(presentes.value);
+    presentes.value = state.presentes ? fmtInt(state.presentes) : '';
+    atualizar();
+  });
+
+  const moradia = document.getElementById('f-moradia');
+  moradia.addEventListener('input', () => {
+    state.moradiaMes = soDigitos(moradia.value);
+    moradia.value = state.moradiaMes ? fmtInt(state.moradiaMes) : '';
+    atualizar();
+  });
+
+  document.getElementById('f-parcelas').addEventListener('change', e => {
+    state.parcelasCasa = Number(e.target.value); atualizar();
   });
 
   const regiao = document.getElementById('f-regiao');
@@ -1011,6 +1207,9 @@ function sincronizarCampos(){
   document.getElementById('f-data').value = state.data || '';
   document.getElementById('f-guardado').value = fmtInt(state.guardado);
   document.getElementById('f-mes').value = fmtInt(state.guardaMes);
+  document.getElementById('f-presentes').value = state.presentes ? fmtInt(state.presentes) : '';
+  document.getElementById('f-moradia').value = state.moradiaMes ? fmtInt(state.moradiaMes) : '';
+  document.getElementById('f-parcelas').value = String(state.parcelasCasa);
   document.getElementById('f-regiao').value = String(state.regiao);
   document.getElementById('f-reserva').checked = state.reserva;
   document.querySelectorAll('[data-preset]').forEach(o =>
