@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 190">
+          <circle cx="180" cy="78" r="56" fill="none" stroke="#F7F7F5" stroke-width="2"/>
+          <circle cx="180" cy="78" r="49" fill="none" stroke="#F7F7F5" stroke-width="0.8"/>
+          <path d="M180 16 l5 8 h-10 z" fill="#E43146"/>
+          <text x="180" y="94" text-anchor="middle" font-family="Georgia, serif" font-size="44" letter-spacing="3" fill="#F7F7F5">JM</text>
+          <text x="184" y="163" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="13" letter-spacing="7" fill="#F7F7F5">JAQUES MOTORSPORT</text>
+          <line x1="100" y1="176" x2="260" y2="176" stroke="#E43146" stroke-width="1.6"/>
+        </svg>

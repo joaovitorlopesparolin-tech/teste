@@ -11,6 +11,17 @@ const App = {
   views: {},        // registradas por cada arquivo views-*.js
   cache: {},        // cache leve de coleções por página
 
+  /* Selo da marca (monograma JM) para fundos escuros. */
+  logoSeal(size) {
+    return `<svg viewBox="0 0 80 80" width="${size}" height="${size}" aria-label="Jaques Motorsport">
+      <circle cx="40" cy="42" r="29" fill="none" stroke="#EDEDEA" stroke-width="2"/>
+      <circle cx="40" cy="42" r="25.4" fill="none" stroke="#EDEDEA" stroke-width="0.7"/>
+      <path d="M40 7 l4.5 7 h-9 z" fill="#E43146"/>
+      <text x="40" y="51" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif"
+        font-size="23" letter-spacing="1.5" fill="#EDEDEA">JM</text>
+    </svg>`;
+  },
+
   /* ---------------- API ---------------- */
   /* O token fica no localStorage quando o usuário marca "manter conectado"
      (login permanece mesmo fechando o navegador) ou no sessionStorage quando
@@ -198,9 +209,14 @@ const App = {
       <style>
         body { font: 12px/1.5 'Segoe UI', Arial, sans-serif; color: #111; margin: 24px; }
         h1 { font-size: 17px; margin: 0; } .meta { color: #555; font-size: 11px; margin: 3px 0 0; }
-        .head { border-bottom: 2.5px solid #14284a; padding-bottom: 10px; margin-bottom: 16px;
+        .head { border-bottom: 2.5px solid #0B0B0C; padding-bottom: 10px; margin-bottom: 16px;
                 display: flex; justify-content: space-between; align-items: flex-end; }
-        .brandp { font-weight: 800; font-size: 14px; color: #14284a; letter-spacing: .5px; }
+        .brandp { text-align: right; }
+        .bp-nome { font-family: Georgia, 'Times New Roman', serif; font-size: 17px;
+                   letter-spacing: 3px; color: #0B0B0C; }
+        .bp-fio { height: 2px; background: #C0182B; margin: 2px 0 3px; }
+        .bp-sub { font-size: 7.5px; letter-spacing: 4.5px; color: #555; }
+        .bp-meta { font-size: 9.5px; color: #888; margin-top: 5px; }
         table { width: 100%; border-collapse: collapse; font-size: 11.5px; margin-top: 6px; }
         th { text-align: left; background: #eef1f5; border: 1px solid #c6ccd6; padding: 6px 8px;
              font-size: 10px; text-transform: uppercase; letter-spacing: .8px; }
@@ -215,7 +231,12 @@ const App = {
       </style></head><body>
       <div class="head">
         <div><h1>${this.esc(title)}</h1><p class="meta">${this.esc(meta || '')}</p></div>
-        <div class="brandp">JAQUES MOTORSPORT<br><span style="font-weight:400;font-size:10px;color:#666">Gerado em ${new Date().toLocaleString('pt-BR')} por ${this.esc(this.user ? this.user.name : '')}</span></div>
+        <div class="brandp">
+          <div class="bp-nome">JAQUES</div>
+          <div class="bp-fio"></div>
+          <div class="bp-sub">MOTORSPORT</div>
+          <div class="bp-meta">Gerado em ${new Date().toLocaleString('pt-BR')} por ${this.esc(this.user ? this.user.name : '')}</div>
+        </div>
       </div>
       ${bodyHtml}
       <script>window.onload = () => setTimeout(() => window.print(), 150);<\/script>
@@ -256,10 +277,13 @@ const App = {
     const lastUser = localStorage.getItem('jm_lastuser') || '';
     document.getElementById('app').innerHTML = `
       <div class="login-wrap"><div class="login-card">
-        <div class="brand"><div class="logo">JM</div>
-          <div><b>Jaques Motorsport</b><small>Sistema de Gestão</small></div></div>
-        <h1>Acesso ao sistema</h1>
-        <p class="sub">Entre com o seu usuário e senha individuais.</p>
+        <div class="logotype" style="margin-bottom:22px">
+          ${this.logoSeal(84)}
+          <span class="lt-nome">JAQUES</span>
+          <div class="lt-fio"></div>
+          <span class="lt-sub">MOTORSPORT</span>
+        </div>
+        <p class="sub" style="text-align:center">Entre com o seu usuário e senha individuais.</p>
         <form id="loginform" autocomplete="on">
           <label class="field"><span>Usuário</span>
             <input name="username" required value="${this.esc(lastUser)}" ${lastUser ? '' : 'autofocus'} autocomplete="username"></label>
@@ -364,7 +388,7 @@ const App = {
     document.getElementById('app').innerHTML = `
       <div class="layout">
         <aside class="sidebar" id="sidebar">
-          <div class="brand"><div class="logo">JM</div>
+          <div class="brand"><div class="logo">${this.logoSeal(34)}</div>
             <div><b>Jaques Motorsport</b><small>Gestão · Performance</small></div></div>
           <nav class="nav">${nav}</nav>
           <hr class="sep">

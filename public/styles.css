@@ -1,24 +1,24 @@
 /* ============================================================
    Jaques Motorsport — Sistema de Gestão
-   Tema: azul bem escuro, elegante e tecnológico (baixa saturação)
+   Identidade: preto/grafite com acentos vermelhos (luxo minimalista)
    ============================================================ */
 
 :root {
-  /* Paleta principal — azuis escuros dessaturados */
-  --bg-0: #070d16;        /* fundo mais profundo */
-  --bg-1: #0b1524;        /* fundo da aplicação */
-  --bg-2: #101c2e;        /* superfícies / cards */
-  --bg-3: #16253a;        /* superfícies elevadas / hover */
-  --line: #1e3048;        /* bordas discretas */
-  --line-soft: #182840;
+  /* Paleta principal — pretos e grafites neutros */
+  --bg-0: #070708;        /* fundo mais profundo */
+  --bg-1: #0b0b0c;        /* fundo da aplicação (Preto Jaques) */
+  --bg-2: #121214;        /* superfícies / cards */
+  --bg-3: #1a1a1d;        /* superfícies elevadas / hover */
+  --line: #26262b;        /* bordas discretas */
+  --line-soft: #1e1e22;
 
-  --text-1: #dbe4ef;      /* texto principal */
-  --text-2: #8fa3ba;      /* texto secundário */
-  --text-3: #5d708e;      /* texto terciário */
+  --text-1: #ededea;      /* texto principal (Gelo) */
+  --text-2: #9a9aa1;      /* texto secundário (Aço) */
+  --text-3: #67676e;      /* texto terciário */
 
-  --accent: #5b8ec9;      /* azul de destaque, contido */
-  --accent-strong: #7fabdd;
-  --accent-dim: rgba(91, 142, 201, .12);
+  --accent: #c0182b;      /* Vermelho principal */
+  --accent-strong: #e43146; /* Vermelho vivo */
+  --accent-dim: rgba(228, 49, 70, .12);
 
   /* Cores de apoio para status (dessaturadas, sem poluição visual) */
   --ok: #4fae7c;
@@ -64,13 +64,12 @@ a { color: var(--accent-strong); text-decoration: none; }
   border-bottom: 1px solid var(--line-soft);
 }
 .brand .logo {
-  width: 38px; height: 38px; border-radius: 9px; flex: none;
-  background: linear-gradient(135deg, #14284a, #0d1a30);
-  border: 1px solid #24405f;
+  width: 40px; height: 40px; border-radius: 50%; flex: none;
+  background: #131315;
+  border: 1px solid #2a2a2f;
   display: grid; place-items: center;
-  font-weight: 800; font-size: 15px; color: var(--accent-strong);
-  letter-spacing: .5px;
 }
+.brand .logo svg { display: block; }
 .brand b { font-size: 14.5px; letter-spacing: .3px; display: block; }
 .brand small { color: var(--text-3); font-size: 10.5px; text-transform: uppercase; letter-spacing: 1.4px; }
 
@@ -84,7 +83,7 @@ a { color: var(--accent-strong); text-decoration: none; }
 .nav a:hover { background: var(--bg-3); color: var(--text-1); }
 .nav a.active {
   background: var(--accent-dim); color: var(--accent-strong);
-  border-color: rgba(91, 142, 201, .25);
+  border-color: rgba(228, 49, 70, .28);
 }
 .nav a .ico { width: 17px; text-align: center; opacity: .85; flex: none; }
 
@@ -119,8 +118,9 @@ a { color: var(--accent-strong); text-decoration: none; }
 
 .kpi { position: relative; overflow: hidden; }
 .kpi::before {
+  /* Barra neutra por padrão — o vermelho fica reservado para alertas (k-danger). */
   content: ''; position: absolute; inset: 0 auto 0 0; width: 3px;
-  background: var(--accent); opacity: .55; border-radius: 3px;
+  background: #54545c; opacity: .8; border-radius: 3px;
 }
 .kpi.k-ok::before { background: var(--ok); }
 .kpi.k-warn::before { background: var(--warn); }
@@ -140,7 +140,7 @@ th {
 }
 td { padding: 9px 12px; border-bottom: 1px solid var(--line-soft); vertical-align: middle; }
 tr:last-child td { border-bottom: none; }
-tbody tr:hover { background: rgba(91,142,201,.05); }
+tbody tr:hover { background: rgba(228,49,70,.05); }
 td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 tr.clickable { cursor: pointer; }
 .empty { padding: 26px; text-align: center; color: var(--text-3); font-size: 13px; }
@@ -165,9 +165,9 @@ tr.clickable { cursor: pointer; }
   padding: 7px 14px; font-size: 13px; font-weight: 550; cursor: pointer;
   transition: background .12s, border-color .12s;
 }
-.btn:hover { background: #1b2d46; border-color: #2a4266; }
-.btn.primary { background: #1d3b60; border-color: #2c5285; color: #cfe2f7; }
-.btn.primary:hover { background: #234874; }
+.btn:hover { background: #202024; border-color: #33333a; }
+.btn.primary { background: #8e1120; border-color: #b01c2f; color: #fbe9eb; }
+.btn.primary:hover { background: #a31527; }
 .btn.danger { background: rgba(201,107,91,.14); border-color: rgba(201,107,91,.4); color: var(--danger); }
 .btn.ghost { background: transparent; border-color: transparent; color: var(--text-2); }
 .btn.ghost:hover { color: var(--text-1); background: var(--bg-3); }
@@ -187,7 +187,7 @@ input, select, textarea {
   outline: none; transition: border-color .12s;
 }
 input:focus, select:focus, textarea:focus { border-color: var(--accent); }
-input[type=checkbox] { width: auto; }
+input[type=checkbox] { width: auto; accent-color: var(--accent); }
 textarea { min-height: 72px; resize: vertical; }
 .formgrid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0 14px; }
 .formgrid .full { grid-column: 1 / -1; }
@@ -228,9 +228,18 @@ textarea { min-height: 72px; resize: vertical; }
 .login-wrap {
   min-height: 100vh; display: grid; place-items: center;
   background:
-    radial-gradient(900px 500px at 80% -10%, rgba(43, 82, 133, .18), transparent 60%),
-    radial-gradient(700px 500px at -10% 110%, rgba(43, 82, 133, .12), transparent 60%),
+    radial-gradient(900px 500px at 80% -10%, rgba(192, 24, 43, .10), transparent 60%),
+    radial-gradient(700px 500px at -10% 110%, rgba(140, 140, 150, .06), transparent 60%),
     var(--bg-0);
+}
+.logotype { text-align: center; }
+.logotype .lt-nome {
+  display: block; font-family: Georgia, 'Times New Roman', serif;
+  font-size: 27px; letter-spacing: 6px; color: var(--text-1); margin-top: 14px;
+}
+.logotype .lt-fio { width: 112px; height: 2px; background: var(--accent); margin: 8px auto 7px; }
+.logotype .lt-sub {
+  display: block; font-size: 10px; letter-spacing: 6.5px; color: var(--text-3);
 }
 .login-card {
   width: 100%; max-width: 380px; background: var(--bg-2);
