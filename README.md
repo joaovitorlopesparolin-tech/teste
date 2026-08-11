@@ -76,4 +76,6 @@ zero: `npm run seed`.
   Stage × comando × tucho, checklist de produção, resultado de venda, projeção, DRE)
 - `lib/seed.js` — dados iniciais (perfis, catálogo com preços do modelo atual,
   produtos, componentes, fornecedores, recorrentes)
-- `public/` — SPA responsiva (tema azul-escuro) com impressão dedicada
+- `public/` — SPA responsiva com impressão dedicada. Identidade visual Jaques
+  Motorsport: preto/grafite com acentos vermelhos, selo JM como ícone e
+  wordmark serifada nos documentos (arquivos-fonte da marca em `branding/`)
