@@ -24,7 +24,8 @@ App.registerView('stock', async (view) => {
     { h: '', class: 'num', cell: i => `
       <button class="btn sm" onclick="Stock.move(${i.id}, 'entrada')">+ Entrada</button>
       <button class="btn sm" onclick="Stock.move(${i.id}, 'saida')">− Saída</button>
-      <button class="btn sm ghost" onclick="Stock.edit(${i.id})">✎</button>` }
+      <button class="btn sm ghost" onclick="Stock.edit(${i.id})">✎</button>
+      <button class="btn sm ghost" title="Excluir item" onclick="Stock.del(${i.id})">🗑</button>` }
   ];
 
   const groups = Object.keys(CATS).map(cat => {
@@ -66,6 +67,18 @@ App.registerView('stock', async (view) => {
         else await App.post('/stockItems', Object.assign(d, { qtd: 0 }));
         App.closeModal(); App.toast('Item salvo', 'ok'); App.route();
       });
+    },
+    async del(id) {
+      const i = items.find(x => x.id === id);
+      let msg = `Excluir o item "${i.nome}" do estoque?`;
+      if (i.qtd) msg += ` Atenção: ele ainda tem ${i.qtd} unidade(s) em estoque.`;
+      if (moves.some(m => m.itemId === id)) msg += ' As movimentações já registradas permanecem no histórico.';
+      if (!await App.confirm(msg)) return;
+      try {
+        await App.del('/stockItems/' + id);
+        App.toast('Item excluído do estoque', 'ok');
+        App.route();
+      } catch (e) { App.toast(e.message, 'err'); }
     },
     move(id, tipo) {
       const i = items.find(x => x.id === id);
