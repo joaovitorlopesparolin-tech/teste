@@ -171,17 +171,30 @@ previsível.
   backup desejado (ex.: `data/backups/db-2026-08-10.json`, renomeando para
   `db.json`) e inicie de novo.
 
-## Atualizar o sistema
+## Atualizar o sistema (sem perder dados)
 
-Quando houver melhorias no código:
+Os dados vivem na pasta **`data/`** e o pacote de atualização **não contém**
+uma pasta `data` — atualizar nunca toca nos seus dados.
+
+**Windows (via ZIP):**
+
+1. Pare o sistema (`windows\parar-sistema.bat` ou feche a janela).
+2. Por segurança, copie a pasta `data` para a Área de Trabalho.
+3. Extraia o ZIP novo, abra a pasta extraída (a que contém `server.js`),
+   selecione tudo (Ctrl+A), copie e **cole dentro da pasta antiga**
+   escolhendo “Substituir os arquivos no destino”.
+4. Inicie de novo (`windows\iniciar-sistema.vbs` ou o início automático).
+
+⚠️ Nunca apague a pasta antiga antes de copiar, e nunca passe a usar a pasta
+extraída do ZIP como sistema — ela não tem os seus dados.
+
+**Linux / VPS (via git):**
 
 ```bash
-cd /opt/jaques        # (ou a pasta no Windows)
-git pull              # baixa a nova versão (ou baixe o ZIP de novo)
-pm2 restart jaques    # no VPS — no Windows, feche e rode npm start
+cd /opt/jaques
+git pull
+pm2 restart jaques    # ou: systemctl restart jaques
 ```
-
-Os dados em `data/` não são tocados pela atualização.
 
 ## Checklist do primeiro dia
 
