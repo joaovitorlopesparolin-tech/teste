@@ -59,6 +59,12 @@ function authUser(req) {
   if (!sess) return null;
   const user = db.get('users', sess.userId);
   if (!user || !user.active) return null;
+  // Expiração deslizante: a sessão vale enquanto for usada (renova a cada acesso,
+  // gravado no máximo 1x/hora para não inflar o arquivo de dados).
+  const now = Date.now();
+  if (!sess.lastUsed || now - new Date(sess.lastUsed).getTime() > 3600e3) {
+    db.update('sessions', sess.id, { lastUsed: new Date(now).toISOString() });
+  }
   return user;
 }
 
@@ -272,9 +278,9 @@ route('POST', '/api/login', null, async (req, res) => {
   const user = db.all('users').find(u => u.username === String(username || '').toLowerCase().trim());
   if (!user || !checkPassword(password, user.password)) return send(res, 401, { error: 'Usuário ou senha inválidos' });
   if (!user.active) return send(res, 401, { error: 'Usuário inativo' });
-  // Expira sessões com mais de 30 dias para o arquivo de dados não crescer indefinidamente.
+  // Expira sessões sem uso há mais de 30 dias (quem usa o sistema permanece conectado).
   const cutoff = Date.now() - 30 * 24 * 3600 * 1000;
-  for (const s of db.all('sessions').filter(s => new Date(s.createdAt).getTime() < cutoff)) {
+  for (const s of db.all('sessions').filter(s => new Date(s.lastUsed || s.createdAt).getTime() < cutoff)) {
     db.remove('sessions', s.id);
   }
   const token = crypto.randomBytes(24).toString('hex');
