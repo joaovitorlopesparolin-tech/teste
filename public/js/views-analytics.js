@@ -1,0 +1,135 @@
+/* Análises (BI): gráficos com filtro de período que escopa tudo abaixo dele */
+'use strict';
+
+App.registerView('analytics', async (view) => {
+  App.setTitle('Análises', 'Indicadores visuais da operação — passe o mouse para detalhes, ⊞ para ver os dados');
+  let meses = 12;
+
+  const build = async () => {
+    const grid = document.getElementById('an-grid');
+    if (grid) grid.style.opacity = '.45'; // refetch mantém o quadro anterior esmaecido
+    const d = await App.get('/analytics?meses=' + meses);
+    const C = Charts.C;
+    const cards = [];
+    const fmt = v => 'R$ ' + App.money(v);
+
+    /* Faturamento mensal — vendas × serviços */
+    const cFat = Charts.card('Faturamento mensal', 'Vendas (data do pedido) e serviços (OS finalizadas)');
+    cards.push({ card: cFat, render: () => {
+      Charts.columns(document.getElementById(cFat.id), {
+        labels: d.faturamento.map(x => x.mes),
+        series: [
+          { name: 'Vendas de cabeçotes', color: C.blue, values: d.faturamento.map(x => x.vendas) },
+          { name: 'Serviços', color: C.orange, values: d.faturamento.map(x => x.servicos) }
+        ]
+      });
+      Charts.attachTable(cFat.id, ['Mês', 'Vendas', 'Serviços', 'Total'],
+        d.faturamento.map(x => [x.mes, fmt(x.vendas), fmt(x.servicos), fmt(x.vendas + x.servicos)]));
+    }});
+
+    /* Fluxo de caixa — entradas × saídas */
+    if (d.caixa) {
+      const c = Charts.card('Fluxo de caixa mensal', 'Dinheiro que efetivamente entrou e saiu');
+      cards.push({ card: c, render: () => {
+        Charts.columns(document.getElementById(c.id), {
+          labels: d.caixa.map(x => x.mes),
+          series: [
+            { name: 'Entradas', color: C.blue, values: d.caixa.map(x => x.entradas) },
+            { name: 'Saídas', color: C.red, values: d.caixa.map(x => x.saidas) }
+          ]
+        });
+        Charts.attachTable(c.id, ['Mês', 'Entradas', 'Saídas', 'Saldo do mês'],
+          d.caixa.map(x => [x.mes, fmt(x.entradas), fmt(x.saidas), fmt(x.entradas - x.saidas)]));
+      }});
+    }
+
+    /* Resultado mensal (restrito) */
+    if (d.resultado) {
+      const c = Charts.card('Resultado das vendas por mês', 'Valor líquido − custo real estimado (acesso restrito)');
+      cards.push({ card: c, render: () => {
+        Charts.line(document.getElementById(c.id), {
+          labels: d.resultado.map(x => x.mes),
+          series: [{ name: 'Resultado', color: C.blue, values: d.resultado.map(x => Math.round(x.resultado * 100) / 100) }]
+        });
+        Charts.attachTable(c.id, ['Mês', 'Resultado'], d.resultado.map(x => [x.mes, fmt(x.resultado)]));
+      }});
+    }
+
+    /* Projeção semanal — a receber × a pagar */
+    if (d.projecaoSemanal) {
+      const venc = d.vencidos && (d.vencidos.aReceber || d.vencidos.aPagar)
+        ? `Fora do gráfico, já vencidos: a receber R$ ${App.money(d.vencidos.aReceber)} · a pagar R$ ${App.money(d.vencidos.aPagar)}`
+        : 'Próximas 8 semanas (semana iniciando em)';
+      const c = Charts.card('Compromissos das próximas 8 semanas', venc);
+      cards.push({ card: c, render: () => {
+        Charts.columns(document.getElementById(c.id), {
+          labels: d.projecaoSemanal.map(x => x.semana),
+          series: [
+            { name: 'A receber', color: C.blue, values: d.projecaoSemanal.map(x => x.aReceber) },
+            { name: 'A pagar', color: C.red, values: d.projecaoSemanal.map(x => x.aPagar) }
+          ]
+        });
+        Charts.attachTable(c.id, ['Semana de', 'A receber', 'A pagar'],
+          d.projecaoSemanal.map(x => [x.semana, fmt(x.aReceber), fmt(x.aPagar)]));
+      }});
+    }
+
+    /* Vendas por produto — série única, rótulo direto no fim da barra */
+    if (d.produtos) {
+      const c = Charts.card('Vendas por configuração', 'Faturamento no período — unilateral × fluxo cruzado, Stage 1–3');
+      cards.push({ card: c, render: () => {
+        Charts.hbar(document.getElementById(c.id), {
+          items: d.produtos.map(p => ({ label: p.produto, value: p.valor, sub: p.qtd + ' un.' })),
+          color: Charts.C.blue
+        });
+        Charts.attachTable(c.id, ['Configuração', 'Qtd', 'Faturamento'],
+          d.produtos.map(p => [p.produto, String(p.qtd), fmt(p.valor)]));
+      }});
+
+      const c2 = Charts.card('Vendas por estado', 'Faturamento no período por UF do pedido');
+      cards.push({ card: c2, render: () => {
+        Charts.hbar(document.getElementById(c2.id), {
+          items: d.estados.map(e => ({ label: e.uf, value: e.valor, sub: e.qtd + ' cabeçote(s)' })),
+          color: Charts.C.blue
+        });
+        Charts.attachTable(c2.id, ['UF', 'Cabeçotes', 'Faturamento'],
+          d.estados.map(e => [e.uf, String(e.qtd), fmt(e.valor)]));
+      }});
+    }
+
+    /* Funil da oficina — etapas ordenadas → ramp ordinal (claro→escuro) */
+    if (d.funil) {
+      const c = Charts.card('Funil da oficina', 'Cabeçotes de clientes por etapa — situação atual');
+      cards.push({ card: c, render: () => {
+        Charts.hbar(document.getElementById(c.id), {
+          items: d.funil.map(f => ({ label: f.etapa, value: f.qtd })),
+          colors: Charts.C.ramp, count: true
+        });
+        Charts.attachTable(c.id, ['Etapa', 'Quantidade'], d.funil.map(f => [f.etapa, String(f.qtd)]));
+      }});
+    }
+
+    document.getElementById('an-grid').innerHTML = cards.map(x => x.card.html).join('');
+    document.getElementById('an-grid').style.opacity = '1';
+    cards.forEach(x => x.render());
+  };
+
+  view.innerHTML = `
+    <div class="toolbar" id="an-filters">
+      <span class="small muted" style="letter-spacing:1px">PERÍODO:</span>
+      ${[3, 6, 12].map(m => `<button class="btn sm ${m === meses ? 'primary' : ''}" data-m="${m}">${m} meses</button>`).join('')}
+      <div class="spacer"></div>
+      <span class="small muted">O período filtra todos os gráficos abaixo</span>
+    </div>
+    <div class="grid cols-2" id="an-grid"></div>`;
+
+  document.getElementById('an-filters').addEventListener('click', async e => {
+    const b = e.target.closest('[data-m]');
+    if (!b) return;
+    meses = Number(b.dataset.m);
+    document.querySelectorAll('#an-filters [data-m]').forEach(x =>
+      x.classList.toggle('primary', Number(x.dataset.m) === meses));
+    await build();
+  });
+  await build();
+});

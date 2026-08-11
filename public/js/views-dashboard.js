@@ -47,6 +47,8 @@ App.registerView('dashboard', async (view) => {
       ${kpi('Pedidos não entregues', d.pedidosNaoEntregues, { hint: `${d.pedidosAguardandoEnvio} prontos aguardando envio` })}
     </div>
 
+    <div class="grid cols-2" style="margin-top:14px" id="dash-charts"></div>
+
     <div class="grid cols-2" style="margin-top:14px">
       <div class="card">
         <h3>MINHAS PENDÊNCIAS</h3>
@@ -65,6 +67,46 @@ App.registerView('dashboard', async (view) => {
         </div>
       </div>
     </div>`;
+
+  /* Gráficos do dashboard (12 meses de faturamento + caixa/funil), com link para Análises */
+  try {
+    const a = await App.get('/analytics?meses=12');
+    const C = Charts.C;
+    const c1 = Charts.card('Faturamento — últimos 12 meses', 'Vendas e serviços · veja mais em Análises');
+    const c2 = a.caixa
+      ? Charts.card('Fluxo de caixa — últimos 6 meses', 'Entradas × saídas efetivas')
+      : Charts.card('Funil da oficina', 'Cabeçotes de clientes por etapa');
+    document.getElementById('dash-charts').innerHTML = c1.html + c2.html;
+
+    Charts.columns(document.getElementById(c1.id), {
+      labels: a.faturamento.map(x => x.mes),
+      series: [
+        { name: 'Vendas de cabeçotes', color: C.blue, values: a.faturamento.map(x => x.vendas) },
+        { name: 'Serviços', color: C.orange, values: a.faturamento.map(x => x.servicos) }
+      ], height: 220
+    });
+    Charts.attachTable(c1.id, ['Mês', 'Vendas', 'Serviços'],
+      a.faturamento.map(x => [x.mes, 'R$ ' + App.money(x.vendas), 'R$ ' + App.money(x.servicos)]));
+
+    if (a.caixa) {
+      const last6 = a.caixa.slice(-6);
+      Charts.columns(document.getElementById(c2.id), {
+        labels: last6.map(x => x.mes),
+        series: [
+          { name: 'Entradas', color: C.blue, values: last6.map(x => x.entradas) },
+          { name: 'Saídas', color: C.red, values: last6.map(x => x.saidas) }
+        ], height: 220
+      });
+      Charts.attachTable(c2.id, ['Mês', 'Entradas', 'Saídas'],
+        last6.map(x => [x.mes, 'R$ ' + App.money(x.entradas), 'R$ ' + App.money(x.saidas)]));
+    } else if (a.funil) {
+      Charts.hbar(document.getElementById(c2.id), {
+        items: a.funil.map(f => ({ label: f.etapa, value: f.qtd })),
+        colors: C.ramp, count: true
+      });
+      Charts.attachTable(c2.id, ['Etapa', 'Quantidade'], a.funil.map(f => [f.etapa, String(f.qtd)]));
+    }
+  } catch (e) { /* sem permissão de analytics — dashboard segue sem gráficos */ }
 });
 
 /* ---------------- Central de pendências ---------------- */
