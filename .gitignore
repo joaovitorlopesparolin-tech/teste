@@ -1,0 +1,4 @@
+# Banco de dados local e anexos (dados reais da empresa — não versionar)
+data/
+node_modules/
+*.log
