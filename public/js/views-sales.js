@@ -244,8 +244,7 @@ async function saleEditor(view) {
   document.getElementById('v-produto').addEventListener('change', refreshCombos);
   document.getElementById('v-comando').addEventListener('change', refreshTuchos);
   document.getElementById('v-forma').addEventListener('change', updatePayment);
-  document.getElementById('v-taxa')?.addEventListener('input', updatePayment);
-  document.addEventListener('input', e => { if (e.target.id === 'v-taxa') updatePayment(); });
+  document.getElementById('v-taxa').addEventListener('input', updatePayment);
   refreshCombos();
   renderItems();
 

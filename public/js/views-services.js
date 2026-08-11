@@ -36,7 +36,7 @@ App.registerView('entries', async (view) => {
           : '<span class="badge warn">sem documento</span>' },
       { h: 'Status', cell: e => App.badge(e.status) },
       { h: '', class: 'num', cell: e => `
-        ${e.status !== 'orcado' && e.status !== 'aprovado' && !e.quoteId ? `<button class="btn sm primary" onclick="location.hash='#/quotes/novo/${e.id}'">Orçar</button>` : ''}
+        ${App.can('quotes') && e.status !== 'orcado' && e.status !== 'aprovado' && !e.quoteId ? `<button class="btn sm primary" onclick="location.hash='#/quotes/novo/${e.id}'">Orçar</button>` : ''}
         <button class="btn sm ghost" onclick="Entries.setStatus(${e.id})">Status</button>
         <button class="btn sm ghost" onclick="Entries.trace(${e.id})">Rastrear</button>` }
     ]);
