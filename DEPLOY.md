@@ -39,17 +39,22 @@ empresa.
      Firewall → Configurações avançadas → Regras de entrada → Nova regra →
      Porta TCP 3000 → Permitir).
 
-### Iniciar junto com o Windows (recomendado)
+### Sem janela aberta + início automático (recomendado)
 
-Para não depender de alguém lembrar de iniciar o sistema:
+A pasta **`windows/`** do sistema traz atalhos prontos — não é preciso deixar
+nenhuma janela aberta:
 
-1. Abra o **Agendador de Tarefas** do Windows → **Criar Tarefa**.
-2. Aba Geral: nome `Sistema Jaques`, marque “Executar estando o usuário
-   conectado ou não”.
-3. Aba Disparadores: **Novo → Ao inicializar**.
-4. Aba Ações: **Novo → Iniciar um programa** → Programa: `node` →
-   Argumentos: `server.js` → Iniciar em: `C:\jaques-sistema`.
-5. OK. O sistema passa a subir sozinho quando o computador ligar.
+| Arquivo (dois cliques) | O que faz |
+|---|---|
+| `instalar-inicio-automatico.bat` | **Faça isto uma vez só**: o sistema passa a iniciar sozinho, invisível, sempre que o Windows ligar — e já inicia na hora |
+| `iniciar-sistema.vbs` | Inicia agora, em segundo plano (sem janela nenhuma) |
+| `parar-sistema.bat` | Para o sistema |
+| `iniciar-sistema-visivel.bat` | Inicia com a janela visível (útil para ver erros) |
+| `remover-inicio-automatico.bat` | Desfaz o início automático |
+
+Depois de rodar `instalar-inicio-automatico.bat`, o uso do dia a dia é só
+abrir o navegador em `http://localhost:3000` (ou no IP do computador, a partir
+dos outros aparelhos) — como se fosse um site.
 
 ### Passo a passo (Linux)
 

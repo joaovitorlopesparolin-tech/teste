@@ -1,0 +1,5 @@
+@echo off
+echo Parando o Sistema Jaques Motorsport...
+powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | Where-Object { $_.CommandLine -like '*server.js*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }"
+echo Sistema parado.
+pause
