@@ -273,10 +273,32 @@ function route(method, pattern, perm, handler) {
 }
 
 /* ---- sessão ---- */
+/* Proteção contra força bruta: máx. 10 senhas erradas por IP a cada 15 minutos. */
+const loginFailures = new Map();
+function bruteForceBlocked(ip) {
+  const rec = loginFailures.get(ip);
+  if (!rec) return false;
+  if (Date.now() - rec.first > 15 * 60 * 1000) { loginFailures.delete(ip); return false; }
+  return rec.count >= 10;
+}
+function noteLoginFailure(ip) {
+  const rec = loginFailures.get(ip);
+  if (rec && Date.now() - rec.first <= 15 * 60 * 1000) rec.count++;
+  else loginFailures.set(ip, { count: 1, first: Date.now() });
+}
+
 route('POST', '/api/login', null, async (req, res) => {
+  const ip = req.socket.remoteAddress || '?';
+  if (bruteForceBlocked(ip)) {
+    return send(res, 429, { error: 'Muitas tentativas de login. Aguarde 15 minutos e tente novamente.' });
+  }
   const { username, password } = await readBody(req);
   const user = db.all('users').find(u => u.username === String(username || '').toLowerCase().trim());
-  if (!user || !checkPassword(password, user.password)) return send(res, 401, { error: 'Usuário ou senha inválidos' });
+  if (!user || !checkPassword(password, user.password)) {
+    noteLoginFailure(ip);
+    return send(res, 401, { error: 'Usuário ou senha inválidos' });
+  }
+  loginFailures.delete(ip);
   if (!user.active) return send(res, 401, { error: 'Usuário inativo' });
   // Expira sessões sem uso há mais de 30 dias (quem usa o sistema permanece conectado).
   const cutoff = Date.now() - 30 * 24 * 3600 * 1000;
@@ -1225,6 +1247,32 @@ const server = http.createServer(async (req, res) => {
     send(res, 500, { error: 'Erro interno: ' + e.message });
   }
 });
+
+/* ===================================================================== */
+/* Backup automático                                                     */
+/* ===================================================================== */
+/* Uma cópia de data/db.json por dia em data/backups/, mantendo as 30    */
+/* últimas. Roda no start e é reavaliado a cada 6 horas.                 */
+
+function ensureDailyBackup() {
+  try {
+    const dataFile = path.join(__dirname, 'data', 'db.json');
+    if (!fs.existsSync(dataFile)) return;
+    const backupDir = path.join(__dirname, 'data', 'backups');
+    if (!fs.existsSync(backupDir)) fs.mkdirSync(backupDir, { recursive: true });
+    const today = new Date().toISOString().slice(0, 10);
+    const target = path.join(backupDir, `db-${today}.json`);
+    if (!fs.existsSync(target)) {
+      db.persistNow();
+      fs.copyFileSync(dataFile, target);
+      console.log('Backup diário criado:', target);
+    }
+    const old = fs.readdirSync(backupDir).filter(f => /^db-\d{4}-\d{2}-\d{2}\.json$/.test(f)).sort();
+    while (old.length > 30) fs.unlinkSync(path.join(backupDir, old.shift()));
+  } catch (e) { console.error('Falha no backup diário:', e.message); }
+}
+ensureDailyBackup();
+setInterval(ensureDailyBackup, 6 * 3600 * 1000);
 
 process.on('SIGINT', () => { db.persistNow(); process.exit(0); });
 process.on('SIGTERM', () => { db.persistNow(); process.exit(0); });
