@@ -1,0 +1,15 @@
+{
+  "name": "jaques-motorsport-gestao",
+  "version": "1.0.0",
+  "description": "Sistema de gestão interno — Jaques Motorsport (cabeçotes de alta performance)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "seed": "node -e \"require('./lib/seed').reseed()\""
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "UNLICENSED",
+  "private": true
+}
