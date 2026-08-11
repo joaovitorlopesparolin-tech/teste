@@ -11,11 +11,12 @@ realidade da empresa, com o objetivo de eliminar planilhas paralelas.
 
 Requisitos: **Node.js 18+** (sem nenhuma dependência externa).
 
-**Windows — instalação de um clique:** extraia o ZIP e dê dois cliques em
-**`INSTALAR.bat`**. Ele instala o Node.js se faltar, configura o sistema para
-rodar invisível e iniciar junto com o Windows, cria o atalho “Sistema Jaques
-Motorsport” na Área de Trabalho e já abre o navegador. Nenhuma janela precisa
-ficar aberta.
+**Windows — fácil como abrir um HTML:** o pacote distribuído (ZIP) já traz o
+Node.js embutido (`node.exe`) — nada precisa ser instalado. Extraia e dê dois
+cliques em **`ABRIR O SISTEMA.bat`**: o sistema sobe invisível e o navegador
+abre sozinho. Opcional: rodar **`INSTALAR.bat`** uma vez configura o início
+automático com o Windows e cria o atalho “Sistema Jaques Motorsport” na Área
+de Trabalho.
 
 Manualmente (qualquer sistema):
 

@@ -6,5 +6,5 @@ echo   NAO FECHE esta janela enquanto usa o sistema
 echo   Acesse: http://localhost:3000
 echo ============================================
 cd /d "%~dp0.."
-node server.js
+if exist "%~dp0..\node.exe" ("%~dp0..\node.exe" server.js) else (node server.js)
 pause
