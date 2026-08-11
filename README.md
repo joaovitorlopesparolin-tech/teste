@@ -21,7 +21,12 @@ Acesse **http://localhost:3000**.
 > (menu lateral → 🔑 Alterar senha).
 
 Os dados ficam em `data/db.json` (criado automaticamente, fora do controle de
-versão). Para recomeçar do zero: `npm run seed`.
+versão), com backup diário automático em `data/backups/`. Para recomeçar do
+zero: `npm run seed`.
+
+> **Para usar na empresa:** veja o guia completo de implantação em
+> **[DEPLOY.md](DEPLOY.md)** — computador da oficina (rede local) ou servidor
+> na nuvem com HTTPS, backup e checklist do primeiro dia.
 
 ## Módulos
 
