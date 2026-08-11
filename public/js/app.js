@@ -12,7 +12,15 @@ const App = {
   cache: {},        // cache leve de coleções por página
 
   /* ---------------- API ---------------- */
-  token() { return localStorage.getItem('jm_token') || ''; },
+  /* O token fica no localStorage quando o usuário marca "manter conectado"
+     (login permanece mesmo fechando o navegador) ou no sessionStorage quando
+     não marca (sessão termina ao fechar o navegador). */
+  token() { return localStorage.getItem('jm_token') || sessionStorage.getItem('jm_token') || ''; },
+  setToken(t, remember) {
+    localStorage.removeItem('jm_token');
+    sessionStorage.removeItem('jm_token');
+    (remember ? localStorage : sessionStorage).setItem('jm_token', t);
+  },
 
   async api(method, path, body) {
     const res = await fetch('/api' + path, {
@@ -245,15 +253,21 @@ const App = {
   },
 
   renderLogin() {
+    const lastUser = localStorage.getItem('jm_lastuser') || '';
     document.getElementById('app').innerHTML = `
       <div class="login-wrap"><div class="login-card">
         <div class="brand"><div class="logo">JM</div>
           <div><b>Jaques Motorsport</b><small>Sistema de Gestão</small></div></div>
         <h1>Acesso ao sistema</h1>
         <p class="sub">Entre com o seu usuário e senha individuais.</p>
-        <form id="loginform">
-          <label class="field"><span>Usuário</span><input name="username" required autofocus autocomplete="username"></label>
-          <label class="field"><span>Senha</span><input name="password" type="password" required autocomplete="current-password"></label>
+        <form id="loginform" autocomplete="on">
+          <label class="field"><span>Usuário</span>
+            <input name="username" required value="${this.esc(lastUser)}" ${lastUser ? '' : 'autofocus'} autocomplete="username"></label>
+          <label class="field"><span>Senha</span>
+            <input name="password" type="password" required ${lastUser ? 'autofocus' : ''} autocomplete="current-password"></label>
+          <label class="field" style="display:flex;gap:8px;align-items:center;cursor:pointer">
+            <input type="checkbox" name="remember" checked style="width:auto">
+            <span style="margin:0">Manter conectado neste computador</span></label>
           <button class="btn primary" style="width:100%;justify-content:center;margin-top:6px">Entrar</button>
         </form>
       </div></div>`;
@@ -267,7 +281,8 @@ const App = {
         });
         const data = await r.json();
         if (!r.ok) throw new Error(data.error || 'Falha no login');
-        localStorage.setItem('jm_token', data.token);
+        localStorage.setItem('jm_lastuser', String(fd.get('username') || '').trim());
+        this.setToken(data.token, e.target.elements.remember.checked);
         this.user = data.user;
         this.permissions = data.permissions;
         this.meta = await this.get('/meta');
@@ -285,6 +300,7 @@ const App = {
   async logout(callApi = true) {
     if (callApi) { try { await this.post('/logout'); } catch (e) {} }
     localStorage.removeItem('jm_token');
+    sessionStorage.removeItem('jm_token');
     location.hash = '';
     location.reload();
   },
