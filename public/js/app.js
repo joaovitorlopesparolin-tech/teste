@@ -76,7 +76,10 @@ const App = {
     conferida: ['Conferida', 'ok'], divergente: ['⚠ Divergente', 'danger'], confirmada: ['Confirmada', 'ok'],
     registrada: ['Registrada', 'info'],
     // tarefas
-    aberta: ['Aberta', 'warn'], concluida: ['Concluída', 'ok']
+    aberta: ['Aberta', 'warn'], concluida: ['Concluída', 'ok'],
+    // prioridades de pendências
+    urgente: ['Urgente', 'danger'], semana: ['Esta semana', 'warn'],
+    normal: ['Normal', ''], aguardando: ['Aguardando', 'info']
   },
   badge(status) {
     const [label, cls] = this.STATUS[status] || [status || '—', ''];

@@ -22,7 +22,7 @@ App.registerView('dashboard', async (view) => {
           </div>
           <div style="text-align:right;flex:none">
             ${t.due ? `<div class="small ${t.due < App.today() ? 'neg' : 'muted'}">${App.date(t.due)}</div>` : ''}
-            ${App.badge(t.prioridade === 'urgente' ? 'vencida' : t.prioridade)}
+            ${App.badge(t.prioridade || 'normal')}
           </div>
         </li>`).join('')
     : '<div class="empty">Nenhuma pendência para você 🎉</div>';

@@ -4,8 +4,8 @@
 /* ================= COMPRAS ================= */
 App.registerView('purchases', async (view) => {
   App.setTitle('Compras', 'Com ou sem nota fiscal — sempre no controle gerencial');
-  const [purchases, suppliers, clients, stockItems] = await Promise.all([
-    App.get('/purchases'), App.get('/suppliers'), App.get('/clients'), App.get('/stockItems')]);
+  const [purchases, suppliers, clients] = await Promise.all([
+    App.get('/purchases'), App.get('/suppliers'), App.get('/clients')]);
   purchases.sort((a, b) => b.id - a.id);
 
   const DOCS = { nf: 'NF', recibo: 'Recibo', comprovante: 'Comprovante', sem_documento: 'Sem documento', outro: 'Outro' };

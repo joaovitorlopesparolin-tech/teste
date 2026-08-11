@@ -136,20 +136,6 @@ function withOverdue(list) {
   });
 }
 
-function timeline(entity, entityId, event, user, extra) {
-  db.insert('audit', {
-    at: new Date().toISOString(),
-    userId: user ? user.id : null, userName: user ? user.name : 'sistema',
-    action: 'timeline', entity, entityId, details: event, extra: extra || null
-  });
-}
-
-function clientTimeline(clientId) {
-  return db.all('audit')
-    .filter(a => a.action === 'timeline' && a.clientId === clientId)
-    .sort((a, b) => a.at < b.at ? 1 : -1);
-}
-
 /** Gera lembretes/pendências mensais das contas recorrentes (COPEL, Sanepar, consórcio...). */
 function ensureRecurringTasks() {
   const month = domain.today().slice(0, 7);
@@ -286,6 +272,11 @@ route('POST', '/api/login', null, async (req, res) => {
   const user = db.all('users').find(u => u.username === String(username || '').toLowerCase().trim());
   if (!user || !checkPassword(password, user.password)) return send(res, 401, { error: 'Usuário ou senha inválidos' });
   if (!user.active) return send(res, 401, { error: 'Usuário inativo' });
+  // Expira sessões com mais de 30 dias para o arquivo de dados não crescer indefinidamente.
+  const cutoff = Date.now() - 30 * 24 * 3600 * 1000;
+  for (const s of db.all('sessions').filter(s => new Date(s.createdAt).getTime() < cutoff)) {
+    db.remove('sessions', s.id);
+  }
   const token = crypto.randomBytes(24).toString('hex');
   db.insert('sessions', { token, userId: user.id });
   audit(user, 'login', 'users', user.id, 'Login no sistema');
@@ -356,6 +347,9 @@ route('POST', '/api/users', 'admin', async (req, res, user) => {
 });
 route('PUT', '/api/users/:id', 'admin', async (req, res, user, params) => {
   const b = await readBody(req);
+  if (Number(params.id) === user.id && b.active === false) {
+    return bad(res, 'Você não pode desativar o seu próprio usuário');
+  }
   const patch = {};
   for (const k of ['name', 'cargo', 'roleId', 'active']) if (b[k] !== undefined) patch[k] = k === 'roleId' ? Number(b[k]) : b[k];
   if (b.password) { patch.password = hashPassword(b.password); patch.mustChangePassword = true; }
@@ -374,6 +368,11 @@ route('POST', '/api/roles', 'admin', async (req, res, user) => {
 });
 route('PUT', '/api/roles/:id', 'admin', async (req, res, user, params) => {
   const b = await readBody(req);
+  // O perfil administrador (id 1) nunca pode perder a permissão 'admin' —
+  // evita que o sistema fique sem nenhum acesso administrativo.
+  if (Number(params.id) === 1 && Array.isArray(b.permissions) && !b.permissions.includes('admin')) {
+    return bad(res, 'O perfil Administrador não pode perder a permissão de administração');
+  }
   const rec = db.update('roles', params.id, { name: b.name, permissions: b.permissions });
   if (!rec) return notFound(res);
   audit(user, 'alterou', 'roles', rec.id, `Permissões do perfil ${rec.name}`);
