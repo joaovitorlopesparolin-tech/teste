@@ -1101,6 +1101,107 @@ route('GET', '/api/dre', 'dre', async (req, res, user, params, query) => {
   ok(res, domain.dre(query.mes || domain.today().slice(0, 7)));
 });
 
+/* ---- análises / BI ---- */
+/**
+ * Agregados para os gráficos. Cada bloco só é incluído se o usuário tiver a
+ * permissão correspondente (produção não recebe caixa nem resultado, etc.).
+ */
+route('GET', '/api/analytics', 'dashboard', async (req, res, user, params, query) => {
+  const meses = Math.min(24, Math.max(3, Number(query.meses) || 12));
+  const now = new Date();
+  const months = [];
+  for (let i = meses - 1; i >= 0; i--) {
+    months.push(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1)).toISOString().slice(0, 7));
+  }
+  const NOMES = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
+  const label = m => NOMES[Number(m.slice(5, 7)) - 1] + '/' + m.slice(2, 4);
+  const inWindow = d => d && months.includes(String(d).slice(0, 7));
+
+  const sales = db.all('sales').filter(s => s.status !== 'cancelado');
+  const oss = db.all('serviceOrders').filter(o => o.status !== 'cancelado');
+  const out = { janelaMeses: meses };
+
+  // Faturamento mensal: vendas (data do pedido) + serviços (OS finalizadas no mês)
+  out.faturamento = months.map(m => ({
+    mes: label(m),
+    vendas: sales.filter(s => String(s.dataPedido || '').slice(0, 7) === m).reduce((a, s) => a + (s.valorTotal || 0), 0),
+    servicos: oss.filter(o => String(o.dataFinalizacao || '').slice(0, 7) === m).reduce((a, o) => a + (o.valorTotal || 0), 0)
+  }));
+
+  if (can(user, 'cashflow')) {
+    const flows = db.all('cashflow');
+    out.caixa = months.map(m => ({
+      mes: label(m),
+      entradas: flows.filter(f => f.tipo === 'entrada' && String(f.data || '').slice(0, 7) === m).reduce((a, f) => a + f.valor, 0),
+      saidas: flows.filter(f => f.tipo === 'saida' && String(f.data || '').slice(0, 7) === m).reduce((a, f) => a + f.valor, 0)
+    }));
+  }
+
+  if (can(user, 'projection')) {
+    const receiv = withOverdue(db.all('receivables')).filter(r => r.status === 'aberto' || r.status === 'vencida');
+    const pay = withOverdue(db.all('payables')).filter(p => p.status !== 'pago');
+    const t = domain.today();
+    out.vencidos = {
+      aReceber: receiv.filter(r => r.vencimento < t).reduce((a, r) => a + r.valor, 0),
+      aPagar: pay.filter(p => p.vencimento < t).reduce((a, p) => a + p.valor, 0)
+    };
+    out.projecaoSemanal = [];
+    let ini = t;
+    for (let w = 0; w < 8; w++) {
+      const fim = domain.addDays(ini, 6);
+      out.projecaoSemanal.push({
+        semana: ini.slice(8, 10) + '/' + ini.slice(5, 7),
+        aReceber: receiv.filter(r => r.vencimento >= ini && r.vencimento <= fim).reduce((a, r) => a + r.valor, 0),
+        aPagar: pay.filter(p => p.vencimento >= ini && p.vencimento <= fim).reduce((a, p) => a + p.valor, 0)
+      });
+      ini = domain.addDays(ini, 7);
+    }
+  }
+
+  if (can(user, 'sales')) {
+    const accP = {}, accE = {};
+    for (const s of sales.filter(s => inWindow(s.dataPedido))) {
+      for (const i of s.itens || []) {
+        const k = i.produto;
+        accP[k] = accP[k] || { produto: k.replace('Cabeçote ', ''), qtd: 0, valor: 0 };
+        accP[k].qtd += i.qtd; accP[k].valor += i.total;
+      }
+      const uf = s.estado || '—';
+      accE[uf] = accE[uf] || { uf, qtd: 0, valor: 0 };
+      accE[uf].qtd += (s.itens || []).reduce((a, i) => a + i.qtd, 0);
+      accE[uf].valor += s.valorTotal || 0;
+    }
+    out.produtos = Object.values(accP).sort((a, b) => b.valor - a.valor);
+    let estados = Object.values(accE).sort((a, b) => b.valor - a.valor);
+    if (estados.length > 8) {
+      const resto = estados.slice(7);
+      estados = estados.slice(0, 7);
+      estados.push({ uf: 'Outros', qtd: resto.reduce((a, e) => a + e.qtd, 0), valor: resto.reduce((a, e) => a + e.valor, 0) });
+    }
+    out.estados = estados;
+  }
+
+  // Funil da oficina (etapas ordenadas — contagens atuais)
+  const entries = db.all('headEntries');
+  out.funil = [
+    { etapa: 'Recebido / em análise', qtd: entries.filter(e => ['recebido', 'em_analise', 'aguardando_orcamento'].includes(e.status)).length },
+    { etapa: 'Orçado — aguardando aprovação', qtd: db.all('quotes').filter(q => q.status === 'aberto').length },
+    { etapa: 'Em serviço', qtd: oss.filter(o => ['em_analise', 'em_andamento', 'aguardando_peca'].includes(o.status)).length },
+    { etapa: 'Aguardando pagamento', qtd: oss.filter(o => o.status === 'aguardando_pagamento' || (o.status === 'finalizado' && o.pagamentoStatus === 'pendente')).length },
+    { etapa: 'Finalizado no período', qtd: oss.filter(o => inWindow(o.dataFinalizacao)).length }
+  ];
+
+  if (can(user, 'finance_sensitive')) {
+    out.resultado = months.map(m => ({
+      mes: label(m),
+      resultado: sales.filter(s => String(s.dataPedido || '').slice(0, 7) === m)
+        .reduce((a, s) => a + domain.saleResult(s).resultado, 0)
+    }));
+  }
+
+  ok(res, out);
+});
+
 /* ---- RH ---- */
 route('POST', '/api/hrPayments/:id/pay', 'hr', async (req, res, user, params) => {
   const b = await readBody(req);

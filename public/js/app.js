@@ -344,6 +344,7 @@ const App = {
   NAV: [
     ['Visão geral', [
       ['dashboard', 'Dashboard', '◧', 'dashboard'],
+      ['analytics', 'Análises', '📊', 'dashboard'],
       ['tasks', 'Minhas pendências', '☑', 'tasks']
     ]],
     ['Comercial', [
