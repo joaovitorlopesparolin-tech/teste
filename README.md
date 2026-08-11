@@ -17,6 +17,10 @@ npm start          # ou: node server.js
 
 Acesse **http://localhost:3000**.
 
+> **No Windows, sem deixar janela aberta:** dê dois cliques em
+> `windows/instalar-inicio-automatico.bat` uma única vez — o sistema passa a
+> rodar invisível e a iniciar sozinho com o computador (detalhes em DEPLOY.md).
+
 > Login inicial: `admin` / `admin123` — troque a senha no primeiro acesso
 > (menu lateral → 🔑 Alterar senha).
 
