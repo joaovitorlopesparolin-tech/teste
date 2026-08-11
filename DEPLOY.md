@@ -17,44 +17,37 @@ mesmo do escritório) e todos acessam pelo navegador, inclusive pelo celular,
 usando o Wi-Fi da empresa. Não paga nada por mês e os dados ficam dentro da
 empresa.
 
-### Passo a passo (Windows)
+### Passo a passo (Windows) — 2 passos
 
-1. **Instale o Node.js**: baixe a versão LTS em <https://nodejs.org> e instale
-   (avançar, avançar, concluir).
-2. **Baixe o sistema**: no GitHub, botão verde **Code → Download ZIP**, e
-   descompacte em uma pasta fixa, por exemplo `C:\jaques-sistema`.
-3. **Inicie**: abra a pasta, clique na barra de endereço, digite `cmd` e Enter;
-   no terminal digite:
-   ```
-   npm start
-   ```
-   Vai aparecer: `Sistema de Gestão rodando em http://localhost:3000`.
-4. **Teste no próprio computador**: abra o navegador em `http://localhost:3000`
-   — login inicial `admin` / `admin123` (troque a senha imediatamente).
-5. **Acesse dos outros computadores/celulares**: descubra o IP do computador
-   (no `cmd`, digite `ipconfig` e procure "Endereço IPv4", ex.: `192.168.0.10`).
-   Nos demais aparelhos conectados no mesmo Wi-Fi, acesse
-   `http://192.168.0.10:3000`. Salve nos favoritos / tela inicial do celular.
-   - Se não abrir, libere a porta no firewall do Windows (Painel de Controle →
-     Firewall → Configurações avançadas → Regras de entrada → Nova regra →
-     Porta TCP 3000 → Permitir).
+1. **Descompacte o sistema** em uma pasta fixa, por exemplo `C:\jaques-sistema`.
+2. **Dê dois cliques em `INSTALAR.bat`** (na raiz da pasta). Ele faz tudo:
+   - instala o Node.js sozinho se não existir (ou abre o site certo se não conseguir);
+   - configura o sistema para rodar **invisível** e **iniciar junto com o Windows**;
+   - cria o atalho **“Sistema Jaques Motorsport”** na Área de Trabalho;
+   - abre o navegador em `http://localhost:3000` — login `admin` / `admin123`
+     (troque a senha imediatamente).
 
-### Sem janela aberta + início automático (recomendado)
+Não é preciso abrir prompt de comando, nem deixar janela nenhuma aberta.
 
-A pasta **`windows/`** do sistema traz atalhos prontos — não é preciso deixar
-nenhuma janela aberta:
+**Acesse dos outros computadores/celulares**: descubra o IP do computador
+(no `cmd`, digite `ipconfig` e procure "Endereço IPv4", ex.: `192.168.0.10`).
+Nos demais aparelhos conectados no mesmo Wi-Fi, acesse
+`http://192.168.0.10:3000`. Salve nos favoritos / tela inicial do celular.
+- Se não abrir, libere a porta no firewall do Windows (Painel de Controle →
+  Firewall → Configurações avançadas → Regras de entrada → Nova regra →
+  Porta TCP 3000 → Permitir).
+
+### Atalhos avançados (pasta `windows/`)
+
+O `INSTALAR.bat` já faz tudo, mas a pasta `windows/` tem os controles avulsos:
 
 | Arquivo (dois cliques) | O que faz |
 |---|---|
-| `instalar-inicio-automatico.bat` | **Faça isto uma vez só**: o sistema passa a iniciar sozinho, invisível, sempre que o Windows ligar — e já inicia na hora |
 | `iniciar-sistema.vbs` | Inicia agora, em segundo plano (sem janela nenhuma) |
 | `parar-sistema.bat` | Para o sistema |
 | `iniciar-sistema-visivel.bat` | Inicia com a janela visível (útil para ver erros) |
+| `instalar-inicio-automatico.bat` | Só o início automático (parte do que o INSTALAR faz) |
 | `remover-inicio-automatico.bat` | Desfaz o início automático |
-
-Depois de rodar `instalar-inicio-automatico.bat`, o uso do dia a dia é só
-abrir o navegador em `http://localhost:3000` (ou no IP do computador, a partir
-dos outros aparelhos) — como se fosse um site.
 
 ### Passo a passo (Linux)
 
