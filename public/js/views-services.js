@@ -213,6 +213,7 @@ App.registerView('quotes', async (view, args) => {
         ${q.status === 'aberto' ? `
           <button class="btn sm primary" onclick="Quotes.approve(${q.id})">✓ Aprovar</button>
           <button class="btn sm danger" onclick="Quotes.reject(${q.id})">✗</button>` : ''}
+        <button class="btn sm ghost wa" onclick="Quotes.wa(${q.id})" title="Enviar orçamento no WhatsApp">✆</button>
         <button class="btn sm ghost" onclick="Quotes.printOne(${q.id})">🖨️</button>` }
     ]);
   };
@@ -220,6 +221,11 @@ App.registerView('quotes', async (view, args) => {
   document.getElementById('qf').addEventListener('change', render);
 
   window.Quotes = {
+    wa(id) {
+      const q = quotes.find(x => x.id === id);
+      const c = clients.find(x => x.id === q.clienteId);
+      App.waShare(`Orçamento nº ${q.numero} — ${(c && c.nome) || 'cliente'}`, App.waPhoneOf(c), App.waMsg.quote(q, c));
+    },
     async approve(id) {
       if (!await App.confirm('Aprovar este orçamento? Uma Ordem de Serviço será criada automaticamente com todos os dados (cliente, cabeçote, serviços e valores).')) return;
       const os = await App.post(`/quotes/${id}/approve`, {});
@@ -314,7 +320,8 @@ async function quoteEditor(view, { entryId, quoteId }) {
 
   view.innerHTML = `
     <div class="toolbar"><a class="btn sm ghost" href="#/quotes">← Voltar</a>
-      ${quote ? App.badge(quote.status) : ''}</div>
+      ${quote ? App.badge(quote.status) : ''}
+      ${quote ? '<div class="spacer"></div><button class="btn sm ghost wa" onclick="QE.wa()">✆ Enviar no WhatsApp</button>' : ''}</div>
     <div class="grid cols-2">
       <div class="card">
         <h3>DADOS DO ORÇAMENTO</h3>
@@ -368,6 +375,10 @@ async function quoteEditor(view, { entryId, quoteId }) {
   document.getElementById('q-extras')?.addEventListener('input', renderItems);
 
   window.QE = {
+    wa() {
+      const c = clients.find(x => x.id === quote.clienteId);
+      App.waShare(`Orçamento nº ${quote.numero} — ${(c && c.nome) || 'cliente'}`, App.waPhoneOf(c), App.waMsg.quote(quote, c));
+    },
     add() {
       const s = activeCatalog.find(x => x.id === Number(document.getElementById('q-cat').value));
       if (!s) return;
@@ -480,9 +491,15 @@ App.registerView('os', async (view) => {
           `<li><div class="when">${App.dateTime(h.at)} · ${App.esc(h.por)}</div><div class="what">${App.esc(h.evento)}</div></li>`).join('')}</ul>
         <div class="actions">
           ${o.pagamentoStatus === 'pendente' && App.can('receivables') ? `<button class="btn" onclick="OS.payment(${o.id})">💰 Registrar pagamento</button>` : ''}
+          <button class="btn wa" onclick="OS.wa(${o.id})" title="Avisar o cliente no WhatsApp">✆ WhatsApp</button>
           <button class="btn" onclick="OS.printOne(${o.id})">🖨️ Imprimir OS</button>
           <button class="btn primary" onclick="OS.save(${o.id})">Salvar</button>
         </div>`, { wide: true });
+    },
+    wa(id) {
+      const o = oss.find(x => x.id === id);
+      const c = clients.find(x => x.id === o.clienteId);
+      App.waShare(`OS nº ${o.numero} — ${(c && c.nome) || 'cliente'}`, App.waPhoneOf(c), App.waMsg.os(o, c));
     },
     async save(id) {
       const o = oss.find(x => x.id === id);

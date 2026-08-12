@@ -552,3 +552,7 @@ hr.sep { border: none; border-top: 1px solid var(--line-soft); margin: 14px 0; }
 @media print {
   #ai-fab, .ai-panel { display: none !important; }
 }
+
+/* Botões de WhatsApp — verde discreto sobre o tema escuro */
+.btn.wa { color: #3fce6b; }
+.btn.wa:hover { border-color: rgba(63, 206, 107, .5); background: rgba(63, 206, 107, .08); color: #55e281; }

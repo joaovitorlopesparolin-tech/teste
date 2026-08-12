@@ -177,6 +177,7 @@ App.registerView('receivables', async (view) => {
       { h: 'Status', cell: r => App.badge(r.status) },
       { h: '', class: 'num', cell: r => (r.status === 'aberto' || r.status === 'vencida') ? `
         <button class="btn sm primary" onclick="Recv.receive(${r.id})">✓ Receber</button>
+        <button class="btn sm ghost wa" onclick="Recv.wa(${r.id})" title="Cobrar no WhatsApp">✆</button>
         <button class="btn sm ghost" onclick="Recv.cancel(${r.id})">✕</button>` : '' }
     ], { emptyMsg: 'Nenhum recebível' });
   };
@@ -184,6 +185,11 @@ App.registerView('receivables', async (view) => {
   document.getElementById('rf').addEventListener('change', render);
 
   window.Recv = {
+    wa(id) {
+      const r = receivables.find(x => x.id === id);
+      const c = clients.find(x => x.id === r.clienteId);
+      App.waShare(`Cobrança — ${(c && c.nome) || 'cliente'}`, App.waPhoneOf(c), App.waMsg.charge(r, c));
+    },
     generate() {
       const m = App.form('Gerar boletos / parcelas automáticas', [
         { name: 'clienteId', label: 'Cliente', type: 'select', required: true, full: true,

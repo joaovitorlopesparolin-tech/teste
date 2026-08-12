@@ -70,6 +70,7 @@ zero: `npm run seed`.
 | **Relatórios** | Central com filtros (data, status, responsável, cliente) e **🖨️ Imprimir** / exportar; inclui **IMPRIMIR PENDÊNCIAS** (tudo que precisa ser feito) para entregar aos colaboradores |
 | **Administração** | Usuários, perfis de permissão configuráveis (Administrador, Financeiro/Administrativo, Produção + novos), catálogo de serviços, configurações e **histórico de alterações** (quem alterou o quê e quando) |
 | **Assistente de IA** | Botão ✦ em todas as telas: responde perguntas sobre os dados (contas, clientes, produção, estoque…) usando Gemini ou Claude; a chave da API fica só no servidor e **cada perfil só recebe respostas com o que já pode ver** (Produção não recebe custos/margens/salários) |
+| **Envio por WhatsApp** | Botão ✆ nos orçamentos (proposta completa com itens, total e validade), nas OS e vendas (avisos de “pronto”/“enviado”/andamento) e nas contas a receber (lembrete de cobrança); abre uma janela de revisão com a mensagem editável e vai direto para a conversa do cliente no WhatsApp |
 
 ## Princípios implementados
 
