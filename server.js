@@ -1522,13 +1522,15 @@ function serveStatic(req, res, urlPath) {
       if (!path.extname(p)) {
         return fs.readFile(path.join(PUBLIC_DIR, 'index.html'), (e2, d2) => {
           if (e2) return notFound(res);
-          res.writeHead(200, { 'Content-Type': MIME['.html'] });
+          res.writeHead(200, { 'Content-Type': MIME['.html'], 'Cache-Control': 'no-cache' });
           res.end(d2);
         });
       }
       return notFound(res);
     }
-    res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream' });
+    // no-cache: após uma atualização do sistema, o navegador sempre busca a
+    // versão nova dos arquivos (evita tela antiga presa no cache).
+    res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-cache' });
     res.end(data);
   });
 }
