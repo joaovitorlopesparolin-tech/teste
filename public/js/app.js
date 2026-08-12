@@ -378,21 +378,50 @@ const App = {
     ]]
   ],
 
+  layoutMode() { return localStorage.getItem('jm_layout') === 'top' ? 'top' : 'side'; },
+  toggleLayout() {
+    localStorage.setItem('jm_layout', this.layoutMode() === 'top' ? 'side' : 'top');
+    this.renderLayout();
+    this.route();
+  },
+
+  /* Grupos visíveis para o usuário (usados pelo menu lateral e pelo ribbon) */
+  visibleNav() {
+    return this.NAV.map(([group, items]) => [group, items.filter(([, , , perm]) => this.can(perm))])
+      .filter(([, items]) => items.length);
+  },
+
   renderLayout() {
-    const nav = this.NAV.map(([group, items]) => {
-      const visible = items.filter(([, , , perm]) => this.can(perm));
-      if (!visible.length) return '';
-      return `<div class="nav-group">${group}</div>` + visible.map(([route, label, ico]) =>
-        `<a href="#/${route}" data-route="${route}"><span class="ico">${ico}</span>${label}</a>`).join('');
-    }).join('');
+    const groups = this.visibleNav();
+    const nav = groups.map(([group, items]) =>
+      `<div class="nav-group">${group}</div>` + items.map(([route, label, ico]) =>
+        `<a href="#/${route}" data-route="${route}"><span class="ico">${ico}</span>${label}</a>`).join('')
+    ).join('');
+
+    const top = this.layoutMode() === 'top';
+    // Ribbon estilo Revit: abas = grupos; faixa = páginas do grupo ativo
+    const ribbon = `
+      <header class="ribbon" id="ribbon">
+        <div class="ribbon-tabs">
+          <div class="ribbon-brand">${this.logoSeal(24)}<b>JAQUES</b></div>
+          ${groups.map(([g], i) => `<button class="rtab" data-g="${i}">${g}</button>`).join('')}
+          <div class="spacer"></div>
+          <button class="btn ghost sm" onclick="App.toggleLayout()" title="Voltar ao menu lateral">▤ Menu lateral</button>
+          <button class="btn ghost sm" onclick="App.changePasswordDialog()" title="Alterar senha">🔑</button>
+          <button class="btn ghost sm" onclick="App.logout()" title="Sair">⏻</button>
+        </div>
+        <div class="ribbon-pages" id="ribbon-pages"></div>
+      </header>`;
 
     document.getElementById('app').innerHTML = `
-      <div class="layout">
+      <div class="layout ${top ? 'layout-top' : ''}">
+        ${top ? ribbon : ''}
         <aside class="sidebar" id="sidebar">
           <div class="brand"><div class="logo">${this.logoSeal(34)}</div>
             <div><b>Jaques Motorsport</b><small>Gestão · Performance</small></div></div>
           <nav class="nav">${nav}</nav>
           <hr class="sep">
+          <a class="btn ghost sm" style="width:100%" onclick="App.toggleLayout()">▥ Menu superior (estilo Revit)</a>
           <a class="btn ghost sm" style="width:100%" onclick="App.changePasswordDialog()">🔑 Alterar senha</a>
           <a class="btn ghost sm" style="width:100%" onclick="App.logout()">⏻ Sair</a>
         </aside>
@@ -407,6 +436,34 @@ const App = {
           <div id="view"></div>
         </main>
       </div>`;
+
+    if (top) {
+      document.querySelectorAll('.rtab').forEach((b, i) => b.addEventListener('click', () => {
+        this._ribbonG = i;
+        document.querySelectorAll('.rtab').forEach((x, j) => x.classList.toggle('active', j === i));
+        this.renderRibbonPages(i, (location.hash.replace(/^#\//, '') || 'dashboard').split('/')[0]);
+      }));
+    }
+  },
+
+  renderRibbonPages(gi, activeRoute) {
+    const el = document.getElementById('ribbon-pages');
+    if (!el) return;
+    const groups = this.visibleNav();
+    const pages = (groups[gi] || groups[0])[1];
+    el.innerHTML = pages.map(([r, label, ico]) =>
+      `<a class="rpage ${r === activeRoute ? 'active' : ''}" href="#/${r}">
+        <span class="rp-ico">${ico}</span><span class="rp-label">${label}</span></a>`).join('');
+  },
+
+  /* Mantém abas e faixa em sincronia com a página atual */
+  syncRibbon(route) {
+    const groups = this.visibleNav();
+    let gi = groups.findIndex(([, items]) => items.some(([r]) => r === route));
+    if (gi === -1) gi = this._ribbonG || 0;
+    this._ribbonG = gi;
+    document.querySelectorAll('.rtab').forEach((b, i) => b.classList.toggle('active', i === gi));
+    this.renderRibbonPages(gi, route);
   },
 
   setTitle(t, sub) {
@@ -421,6 +478,7 @@ const App = {
     const [name, ...args] = hash.split('/');
     document.querySelectorAll('.nav a').forEach(a =>
       a.classList.toggle('active', a.dataset.route === name));
+    if (this.layoutMode() === 'top') this.syncRibbon(name);
     document.getElementById('sidebar').classList.remove('open');
     const fn = this.views[name] || this.views.dashboard;
     const view = document.getElementById('view');
