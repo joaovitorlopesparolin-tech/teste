@@ -409,3 +409,146 @@ hr.sep { border: none; border-top: 1px solid var(--line-soft); margin: 14px 0; }
   .print-header .meta { font-size: 11px; color: #444; }
 }
 .print-header { display: none; }
+
+/* ==================================================================== */
+/* Assistente de IA — botão flutuante + painel de conversa               */
+/* ==================================================================== */
+
+#ai-fab {
+  position: fixed; right: 22px; bottom: 22px; z-index: 900;
+  width: 54px; height: 54px; border-radius: 50%;
+  background: var(--bg-2); color: var(--accent-strong);
+  border: 1px solid var(--line); box-shadow: 0 6px 24px rgba(0,0,0,.55);
+  font-size: 22px; cursor: pointer; line-height: 1;
+  display: flex; align-items: center; justify-content: center;
+  transition: transform .15s ease, border-color .15s ease, box-shadow .15s ease;
+}
+#ai-fab:hover { transform: translateY(-2px); border-color: var(--accent); box-shadow: 0 8px 28px rgba(192,24,43,.28); }
+#ai-fab.open { border-color: var(--accent); color: var(--text-1); }
+
+.ai-panel[hidden] { display: none; }
+.ai-panel {
+  position: fixed; right: 22px; bottom: 88px; z-index: 901;
+  width: 400px; max-width: calc(100vw - 32px);
+  height: 560px; max-height: calc(100vh - 120px);
+  display: flex; flex-direction: column;
+  background: var(--bg-1); border: 1px solid var(--line);
+  border-radius: 14px; overflow: hidden;
+  box-shadow: 0 18px 60px rgba(0,0,0,.65);
+}
+
+.ai-head {
+  display: flex; align-items: center; gap: 6px;
+  padding: 12px 14px; background: var(--bg-2);
+  border-bottom: 1px solid var(--line);
+}
+.ai-title { flex: 1; font-weight: 600; font-size: 14px; color: var(--text-1); letter-spacing: .3px; }
+.ai-title span { color: var(--text-3); font-weight: 400; font-size: 12px; }
+.ai-hbtn {
+  background: none; border: 1px solid transparent; border-radius: 8px;
+  color: var(--text-2); font-size: 13px; cursor: pointer; padding: 5px 8px;
+}
+.ai-hbtn:hover { background: var(--bg-3); color: var(--text-1); }
+
+.ai-msgs {
+  flex: 1; overflow-y: auto; padding: 16px 14px;
+  display: flex; flex-direction: column; gap: 10px;
+  scroll-behavior: smooth;
+}
+
+/* Mensagens — resposta em fonte confortável, foco em legibilidade */
+.ai-msg { max-width: 92%; border-radius: 12px; padding: 10px 13px; }
+.ai-msg.user {
+  align-self: flex-end;
+  background: var(--bg-3); color: var(--text-1);
+  border: 1px solid var(--line); border-bottom-right-radius: 4px;
+  font-size: 13.5px; white-space: pre-wrap;
+}
+.ai-msg.assistant {
+  align-self: flex-start; max-width: 100%;
+  background: var(--bg-2); color: var(--text-1);
+  border: 1px solid var(--line); border-left: 3px solid var(--accent);
+  border-bottom-left-radius: 4px;
+  font-size: 14.5px; line-height: 1.6;
+}
+.ai-msg.assistant.error { border-left-color: var(--warn); color: var(--text-2); font-size: 13px; }
+.ai-msg.assistant p { margin: 0 0 8px; }
+.ai-msg.assistant p:last-child, .ai-msg.assistant ul:last-child,
+.ai-msg.assistant ol:last-child, .ai-msg.assistant .ai-tablewrap:last-child { margin-bottom: 0; }
+.ai-msg.assistant ul, .ai-msg.assistant ol { margin: 0 0 8px; padding-left: 20px; }
+.ai-msg.assistant li { margin: 3px 0; }
+.ai-msg.assistant code {
+  font-family: var(--mono); font-size: 12.5px;
+  background: var(--bg-3); border-radius: 5px; padding: 1px 5px;
+}
+.ai-msg.assistant b { color: #fff; }
+.ai-h { font-weight: 700; color: #fff; margin: 4px 0 6px; font-size: 14px; letter-spacing: .2px; }
+
+.ai-tablewrap { overflow-x: auto; margin: 2px 0 8px; }
+.ai-tablewrap table { border-collapse: collapse; width: 100%; font-size: 13px; }
+.ai-tablewrap th {
+  text-align: left; padding: 6px 9px; background: var(--bg-3);
+  border-bottom: 1px solid var(--line); font-size: 11px;
+  text-transform: uppercase; letter-spacing: .6px; color: var(--text-2); white-space: nowrap;
+}
+.ai-tablewrap td { padding: 6px 9px; border-bottom: 1px solid var(--line-soft); }
+
+/* Digitando… */
+.ai-typing { display: flex; gap: 5px; align-items: center; padding: 14px 16px; }
+.ai-typing span {
+  width: 7px; height: 7px; border-radius: 50%; background: var(--text-3);
+  animation: ai-blink 1.2s infinite;
+}
+.ai-typing span:nth-child(2) { animation-delay: .2s; }
+.ai-typing span:nth-child(3) { animation-delay: .4s; }
+@keyframes ai-blink { 0%, 60%, 100% { opacity: .25; } 30% { opacity: 1; background: var(--accent-strong); } }
+
+/* Estados vazios / configuração */
+.ai-empty, .ai-setup { text-align: center; margin: auto 0; padding: 20px 14px; color: var(--text-2); }
+.ai-empty b, .ai-setup b { display: block; color: var(--text-1); font-size: 15px; margin-bottom: 6px; }
+.ai-empty p, .ai-setup p { font-size: 13px; margin: 0 0 14px; }
+.ai-setup-ico {
+  width: 46px; height: 46px; margin: 0 auto 12px; border-radius: 50%;
+  border: 1px solid var(--accent); color: var(--accent-strong);
+  display: flex; align-items: center; justify-content: center; font-size: 20px;
+}
+.ai-dim { color: var(--text-3); font-size: 12px; }
+.ai-chips { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+.ai-chip {
+  background: var(--bg-2); border: 1px solid var(--line); color: var(--text-1);
+  border-radius: 999px; padding: 7px 13px; font-size: 12.5px; cursor: pointer;
+  transition: border-color .12s ease, background .12s ease;
+}
+.ai-chip:hover { border-color: var(--accent); background: var(--bg-3); }
+
+/* Entrada */
+.ai-inputrow {
+  display: flex; gap: 8px; align-items: flex-end;
+  padding: 10px 12px; border-top: 1px solid var(--line); background: var(--bg-2);
+}
+.ai-inputrow textarea {
+  flex: 1; resize: none; background: var(--bg-1); color: var(--text-1);
+  border: 1px solid var(--line); border-radius: 10px;
+  padding: 9px 12px; font: 13.5px/1.45 inherit; font-family: inherit;
+  max-height: 110px; outline: none;
+}
+.ai-inputrow textarea:focus { border-color: var(--accent); }
+.ai-sendbtn {
+  width: 40px; height: 40px; border-radius: 10px; border: none; cursor: pointer;
+  background: var(--accent); color: #fff; font-size: 15px; flex: none;
+  transition: background .12s ease;
+}
+.ai-sendbtn:hover { background: var(--accent-strong); }
+
+/* Celular: painel em tela cheia */
+@media (max-width: 640px) {
+  .ai-panel {
+    right: 0; bottom: 0; width: 100vw; max-width: 100vw;
+    height: 100dvh; max-height: 100dvh; border-radius: 0; border: none;
+  }
+  #ai-fab { right: 14px; bottom: 14px; }
+}
+
+@media print {
+  #ai-fab, .ai-panel { display: none !important; }
+}
