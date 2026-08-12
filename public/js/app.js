@@ -444,6 +444,8 @@ const App = {
         this.renderRibbonPages(i, (location.hash.replace(/^#\//, '') || 'dashboard').split('/')[0]);
       }));
     }
+
+    if (window.Assistant) Assistant.mount();
   },
 
   renderRibbonPages(gi, activeRoute) {

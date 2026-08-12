@@ -14,6 +14,7 @@ const crypto = require('crypto');
 
 const db = require('./lib/db');
 const domain = require('./lib/domain');
+const ai = require('./lib/ai');
 const { seedIfEmpty, hashPassword, checkPassword, MODULES } = require('./lib/seed');
 
 const PORT = process.env.PORT || 3000;
@@ -413,15 +414,235 @@ route('GET', '/api/audit', 'admin', async (req, res, user, params, query) => {
   ok(res, list.slice(0, Number(query.limit) || 300));
 });
 
-route('GET', '/api/settings', 'admin', async (req, res) => ok(res, db.settings));
+/* A chave da API de IA nunca sai do servidor: o GET devolve só uma máscara. */
+function settingsForClient() {
+  const s = Object.assign({}, db.settings);
+  s.aiKeyMasked = s.aiApiKey ? '••••' + String(s.aiApiKey).slice(-4) : '';
+  delete s.aiApiKey;
+  return s;
+}
+
+route('GET', '/api/settings', 'admin', async (req, res) => ok(res, settingsForClient()));
 route('PUT', '/api/settings', 'admin', async (req, res, user) => {
   const b = await readBody(req);
   const s = db.settings;
   if (b.quoteValidityDays !== undefined) s.quoteValidityDays = Number(b.quoteValidityDays) || 30;
   if (b.companyName) s.companyName = b.companyName;
+  if (b.aiProvider !== undefined) s.aiProvider = b.aiProvider === 'claude' ? 'claude' : 'gemini';
+  if (b.aiModel !== undefined) s.aiModel = String(b.aiModel || '').trim();
+  if (b.aiApiKey === null) s.aiApiKey = '';                       // remoção explícita
+  else if (typeof b.aiApiKey === 'string' && b.aiApiKey.trim()) s.aiApiKey = b.aiApiKey.trim();
   db.save();
   audit(user, 'alterou', 'settings', 1, 'Configurações do sistema');
-  ok(res, s);
+  ok(res, settingsForClient());
+});
+
+/* ---- assistente de IA ---- */
+
+/**
+ * Monta um retrato compacto dos dados para a IA responder perguntas.
+ * Cada bloco só entra se o usuário tiver permissão no módulo — o mesmo
+ * controle das telas vale para o assistente (Produção não vê financeiro).
+ */
+function assistantContext(user) {
+  const t = domain.today();
+  const month = t.slice(0, 7);
+  const money = v => Math.round((v || 0) * 100) / 100;
+  const fin = can(user, 'finance_sensitive');
+  const ctx = {
+    hoje: t,
+    empresa: db.settings.companyName,
+    usuario: { nome: user.name, cargo: user.cargo || '' }
+  };
+
+  const d = dashboard(user);
+  ctx.resumoDoMes = {
+    mes: d.mes, faturamento: money(d.faturamentoMes),
+    vendas: d.vendasMes, servicos: d.servicosMes,
+    orcamentosAguardando: d.orcamentosAguardando,
+    servicosEmAndamento: d.servicosAndamento,
+    cabecotesAguardandoProducao: d.cabecotesAguardandoProducao,
+    pedidosNaoEntregues: d.pedidosNaoEntregues,
+    bensDeClientesNaEmpresa: d.bensDeClientes
+  };
+  if (fin) {
+    ctx.resumoDoMes.lucroEstimado = money(d.lucroEstimadoMes);
+    ctx.resumoDoMes.margemPct = money(d.margemMes);
+  }
+
+  if (can(user, 'tasks')) {
+    ctx.pendenciasAbertas = db.all('tasks').filter(x => x.status === 'aberta')
+      .sort((a, b) => ((a.due || '9999') < (b.due || '9999') ? -1 : 1)).slice(0, 25)
+      .map(x => ({ titulo: x.titulo, prioridade: x.prioridade, prazo: x.due || '', responsavel: x.assigneeId ? ((db.get('users', x.assigneeId) || {}).name || '') : 'todos' }));
+  }
+
+  if (can(user, 'clients')) {
+    const clients = db.all('clients');
+    ctx.clientes = {
+      total: clients.length,
+      lista: clients.slice(0, 150).map(c => ({ nome: c.nome, cidade: c.cidade || '', estado: c.estado || '', telefone: c.telefone || '' }))
+    };
+  }
+
+  if (can(user, 'quotes')) {
+    ctx.orcamentosAbertos = db.all('quotes').filter(q => q.status === 'aberto').slice(-20)
+      .map(q => ({ numero: q.numero, cliente: (db.get('clients', q.clienteId) || {}).nome || '', modelo: q.modelo || '', valor: money(q.total), data: q.dataOrcamento }));
+  }
+
+  if (can(user, 'sales')) {
+    ctx.vendasRecentes = db.all('sales').filter(s => s.status !== 'cancelado').slice(-15)
+      .map(s => ({ numero: s.numero, cliente: (db.get('clients', s.clienteId) || {}).nome || '', valor: money(s.valorTotal), status: s.status, data: s.dataPedido,
+        itens: (s.itens || []).map(i => `${i.produto || ''} ${i.stage || ''}`.trim()).join(' + ') }));
+  }
+
+  if (can(user, 'os')) {
+    ctx.ordensDeServicoAtivas = db.all('serviceOrders')
+      .filter(o => ['em_analise', 'em_andamento', 'aguardando_peca', 'aguardando_pagamento'].includes(o.status)).slice(-20)
+      .map(o => ({ numero: o.numero, cliente: (db.get('clients', o.clienteId) || {}).nome || '', modelo: o.modelo || '', status: o.status, valor: money(o.valorTotal) }));
+  }
+
+  if (can(user, 'production')) {
+    ctx.producaoPendente = db.all('productionOrders').filter(p => p.status !== 'pronto').slice(-20)
+      .map(p => ({ pedido: p.pedidoNumero, cliente: p.clienteNome, produto: `${p.tipo || ''} ${p.stage || ''}`.trim(), comando: p.comando, tucho: p.tucho, status: p.status, previsao: p.previsaoEntrega || '' }));
+  }
+
+  if (can(user, 'stock')) {
+    const items = db.all('stockItems');
+    ctx.estoque = items.slice(0, 80).map(i => ({ item: i.nome, qtd: i.qtd || 0, minimo: i.minimo || 0, abaixoDoMinimo: (i.qtd || 0) < (i.minimo || 0) }));
+  }
+
+  if (can(user, 'payables')) {
+    const pays = withOverdue(db.all('payables')).filter(p => p.status === 'aberto' || p.status === 'vencida')
+      .sort((a, b) => (a.vencimento < b.vencimento ? -1 : 1));
+    ctx.contasAPagar = {
+      totalEmAberto: money(pays.reduce((s, p) => s + p.valor, 0)),
+      vencidas: money(pays.filter(p => p.status === 'vencida').reduce((s, p) => s + p.valor, 0)),
+      proximas: pays.slice(0, 20).map(p => ({ descricao: p.descricao, valor: money(p.valor), vencimento: p.vencimento, pagarNoDia: p.dataProgramada || '', status: p.status }))
+    };
+  }
+
+  if (can(user, 'receivables')) {
+    const recs = withOverdue(db.all('receivables')).filter(r => r.status === 'aberto' || r.status === 'vencida')
+      .sort((a, b) => (a.vencimento < b.vencimento ? -1 : 1));
+    ctx.contasAReceber = {
+      totalEmAberto: money(recs.reduce((s, r) => s + r.valor, 0)),
+      vencidas: money(recs.filter(r => r.status === 'vencida').reduce((s, r) => s + r.valor, 0)),
+      proximas: recs.slice(0, 20).map(r => ({ descricao: r.descricao, cliente: (db.get('clients', r.clienteId) || {}).nome || '', valor: money(r.valor), vencimento: r.vencimento, status: r.status }))
+    };
+  }
+
+  if (can(user, 'cashflow')) {
+    const flows = db.all('cashflow');
+    ctx.caixa = {
+      saldoAtual: money(flows.reduce((s, f) => s + (f.tipo === 'entrada' ? f.valor : -f.valor), 0)),
+      ultimosLancamentos: flows.slice(-12).map(f => ({ data: f.data, tipo: f.tipo, valor: money(f.valor), categoria: f.categoria, origem: f.origem }))
+    };
+  }
+
+  if (can(user, 'projection')) {
+    const proj = domain.projection(t);
+    ctx.projecao = proj.janelas.map(j => ({ dias: j.dias, aReceber: money(j.aReceber), aPagar: money(j.aPagar), saldoProjetado: money(j.saldoProjetado) }));
+  }
+
+  if (can(user, 'suppliers')) {
+    const exps = db.all('supplierExpenses').filter(e => String(e.data || '').slice(0, 7) === month);
+    ctx.fornecedoresGastoNoMes = db.all('suppliers').map(f => ({
+      fornecedor: f.nome,
+      gastoNoMes: money(exps.filter(e => e.fornecedorId === f.id).reduce((s, e) => s + (e.valor || 0), 0))
+    })).filter(x => x.gastoNoMes > 0);
+  }
+
+  if (can(user, 'hr')) {
+    ctx.equipe = db.all('employees').filter(e => e.ativo !== false)
+      .map(e => fin ? { nome: e.nome, cargo: e.cargo || '', salario: money(e.salario) } : { nome: e.nome, cargo: e.cargo || '' });
+  }
+
+  if (fin && can(user, 'dre')) {
+    const r = domain.dre(month);
+    ctx.dreDoMes = {
+      receitaCaixa: money(r.receita.total), custos: money(r.custos.total), lucroBruto: money(r.lucroBruto),
+      despesasOperacionais: money(r.despesasOperacionais.total), despesasFinanceiras: money(r.despesasFinanceiras.total),
+      lucroLiquido: money(r.lucroLiquido), margemLiquidaPct: money(r.margemLiquida),
+      receitaCompetencia: money(r.receitaCompetencia.total)
+    };
+  }
+
+  return ctx;
+}
+
+function assistantSystemPrompt(user) {
+  const fin = can(user, 'finance_sensitive');
+  const dias = ['domingo', 'segunda-feira', 'terça-feira', 'quarta-feira', 'quinta-feira', 'sexta-feira', 'sábado'];
+  const hoje = domain.today();
+  const diaSemana = dias[domain.parseDay(hoje).getDay()];
+  return `Você é o assistente interno do sistema de gestão da ${db.settings.companyName} — empresa de cabeçotes de alta performance (venda de cabeçotes prontos Unilateral/Crossflow Stage 1 a 3, serviços de preparação e retrabalho de cabeçotes de clientes).
+Hoje é ${diaSemana}, ${hoje.split('-').reverse().join('/')}.
+Quem pergunta: ${user.name}${user.cargo ? ' (' + user.cargo + ')' : ''}.
+
+REGRAS:
+- Responda SEMPRE em português do Brasil, direto e claro, como um colega de trabalho prestativo.
+- Use SOMENTE os dados do JSON abaixo. NUNCA invente números, clientes, datas ou valores.
+- Dinheiro no formato R$ 1.234,56 e datas no formato dd/mm/aaaa.
+- Para listas, use marcadores; para comparações com vários números, use tabela markdown simples.
+- Se os dados fornecidos não respondem à pergunta, diga isso e indique em qual tela do sistema a pessoa encontra (ex.: "veja em Financeiro → Contas a pagar").
+- Perguntas sobre como usar o sistema: explique com base nos módulos listados.
+- Nos pagamentos programados, a empresa paga às sextas-feiras: a data de pagamento é a sexta anterior ao vencimento.${fin ? '' : `
+- O perfil deste usuário NÃO tem acesso a custos, margens, salários e resultados. Se perguntarem sobre isso, explique educadamente que o perfil de acesso não permite ver dados financeiros sensíveis.`}
+
+MÓDULOS DO SISTEMA: Dashboard, Análises (gráficos), Minhas pendências, Clientes, Orçamentos, Vendas/Pedidos, Entrada de cabeçotes, Bens de clientes, Ordens de serviço, Produção, Estoque próprio, Produtos e custos, Compras (com leitura de NF-e), Fornecedores (fechamento mensal), Contas a pagar (agenda de sextas-feiras), Contas a receber (boletos parcelados), Fluxo de caixa, Projeção, DRE, RH, Relatórios (impressão), Administração.
+
+DADOS ATUAIS DO SISTEMA (JSON):
+${JSON.stringify(assistantContext(user))}`;
+}
+
+route('GET', '/api/assistant/status', 'dashboard', async (req, res, user) => {
+  ok(res, {
+    configured: !!db.settings.aiApiKey,
+    provider: db.settings.aiProvider || 'gemini',
+    canConfigure: can(user, 'admin')
+  });
+});
+
+route('POST', '/api/assistant', 'dashboard', async (req, res, user) => {
+  const b = await readBody(req);
+  const question = String(b.question || '').trim().slice(0, 2000);
+  if (!question) return bad(res, 'Escreva uma pergunta');
+  if (!db.settings.aiApiKey) {
+    return bad(res, 'O assistente ainda não foi configurado. Peça a um administrador para cadastrar a chave da API em Administração → Configurações.');
+  }
+  // Histórico curto para dar continuidade à conversa sem estourar o contexto.
+  const history = (Array.isArray(b.history) ? b.history : []).slice(-8)
+    .filter(m => m && typeof m.text === 'string' && m.text.trim())
+    .map(m => ({ role: m.role === 'assistant' ? 'assistant' : 'user', text: String(m.text).slice(0, 4000) }));
+  const messages = history.concat([{ role: 'user', text: question }]);
+  try {
+    const r = await ai.ask(
+      { provider: db.settings.aiProvider || 'gemini', key: db.settings.aiApiKey, model: db.settings.aiModel },
+      assistantSystemPrompt(user), messages
+    );
+    audit(user, 'assistente', 'assistant', null, question.slice(0, 140));
+    ok(res, { answer: r.text, model: r.model });
+  } catch (e) {
+    send(res, 502, { error: e.message });
+  }
+});
+
+/* Testa a chave (a informada no corpo ou a já salva) sem precisar salvar antes. */
+route('POST', '/api/assistant/test', 'admin', async (req, res, user) => {
+  const b = await readBody(req);
+  const cfg = {
+    provider: (b.provider || db.settings.aiProvider) === 'claude' ? 'claude' : 'gemini',
+    key: (typeof b.key === 'string' && b.key.trim()) ? b.key.trim() : db.settings.aiApiKey,
+    model: b.model !== undefined ? b.model : db.settings.aiModel
+  };
+  if (!cfg.key) return bad(res, 'Informe a chave da API (ou salve uma antes de testar)');
+  try {
+    const r = await ai.ask(cfg, 'Você é um assistente de teste. Responda em português, em uma única frase curta.',
+      [{ role: 'user', text: 'Conexão de teste do sistema Jaques Motorsport. Confirme que você está funcionando.' }]);
+    ok(res, { ok: true, provider: cfg.provider, model: r.model, answer: r.text.slice(0, 200) });
+  } catch (e) {
+    send(res, 502, { error: e.message });
+  }
 });
 
 /* ---- clientes: perfil consolidado ---- */

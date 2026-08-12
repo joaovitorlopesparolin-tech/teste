@@ -148,6 +148,7 @@ App.registerView('admin', async (view) => {
   /* ---------- configurações ---------- */
   async function renderSettings(el) {
     const s = await App.get('/settings');
+    const provider = s.aiProvider || 'gemini';
     el.innerHTML = `
       <div class="card" style="max-width:560px">
         <h3>CONFIGURAÇÕES GERAIS</h3>
@@ -155,7 +156,38 @@ App.registerView('admin', async (view) => {
         <label class="field"><span>Validade padrão dos orçamentos (dias)</span>
           <input id="cfg-validade" type="number" value="${s.quoteValidityDays}"></label>
         <button class="btn primary" onclick="Adm.saveSettings()">Salvar configurações</button>
+      </div>
+
+      <div class="card" style="max-width:560px;margin-top:16px">
+        <h3>✦ ASSISTENTE DE IA</h3>
+        <p class="small muted" style="margin-bottom:12px">O assistente (botão ✦ no canto da tela) responde perguntas
+        sobre os dados do sistema. A chave fica gravada apenas neste computador e nunca aparece para os usuários —
+        cada perfil só recebe respostas com os dados que já pode ver nas telas.</p>
+        <label class="field"><span>Provedor</span>
+          <select id="cfg-ai-provider">
+            <option value="gemini" ${provider === 'gemini' ? 'selected' : ''}>Google Gemini (tem plano gratuito)</option>
+            <option value="claude" ${provider === 'claude' ? 'selected' : ''}>Claude (Anthropic)</option>
+          </select></label>
+        <label class="field"><span>Chave da API &nbsp;${s.aiKeyMasked
+          ? `<span class="badge ok">configurada ${App.esc(s.aiKeyMasked)}</span>`
+          : '<span class="badge warn">não configurada</span>'}</span>
+          <input id="cfg-ai-key" type="password" autocomplete="off"
+            placeholder="${s.aiKeyMasked ? 'deixe em branco para manter a chave atual' : 'cole aqui a chave da API'}"></label>
+        <label class="field"><span>Modelo (opcional — deixe em branco para o padrão)</span>
+          <input id="cfg-ai-model" value="${App.esc(s.aiModel || '')}"
+            placeholder="${provider === 'claude' ? 'padrão: claude-haiku-4-5' : 'padrão: gemini-2.5-flash'}"></label>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn primary" onclick="Adm.saveAI()">Salvar assistente</button>
+          <button class="btn" onclick="Adm.testAI()">🔌 Testar conexão</button>
+        </div>
+        <div id="cfg-ai-result" class="small" style="margin-top:10px"></div>
+        <p class="small muted" style="margin-top:10px">Onde obter a chave — Gemini: <b>aistudio.google.com</b>
+        (botão “Get API key”, plano gratuito disponível) · Claude: <b>console.anthropic.com</b>.</p>
       </div>`;
+    document.getElementById('cfg-ai-provider').addEventListener('change', e => {
+      document.getElementById('cfg-ai-model').placeholder =
+        e.target.value === 'claude' ? 'padrão: claude-haiku-4-5' : 'padrão: gemini-2.5-flash';
+    });
     window.Adm = window.Adm || {};
     Adm.saveSettings = async () => {
       await App.put('/settings', {
@@ -164,6 +196,32 @@ App.registerView('admin', async (view) => {
       });
       App.toast('Configurações salvas', 'ok');
       App.meta.settings.quoteValidityDays = Number(document.getElementById('cfg-validade').value) || 30;
+    };
+    Adm.saveAI = async () => {
+      const key = document.getElementById('cfg-ai-key').value.trim();
+      await App.put('/settings', {
+        aiProvider: document.getElementById('cfg-ai-provider').value,
+        aiModel: document.getElementById('cfg-ai-model').value.trim(),
+        ...(key ? { aiApiKey: key } : {})
+      });
+      if (window.Assistant) Assistant.status = null; // relê o status na próxima abertura
+      App.toast('Assistente salvo', 'ok');
+      renderSettings(el);
+    };
+    Adm.testAI = async () => {
+      const out = document.getElementById('cfg-ai-result');
+      out.innerHTML = '<span class="muted">Testando conexão…</span>';
+      try {
+        const r = await App.post('/assistant/test', {
+          provider: document.getElementById('cfg-ai-provider').value,
+          model: document.getElementById('cfg-ai-model').value.trim(),
+          key: document.getElementById('cfg-ai-key').value.trim()
+        });
+        out.innerHTML = `<span style="color:var(--ok)">✓ Funcionando (${App.esc(r.model)})</span>
+          — <span class="muted">${App.esc(r.answer)}</span>`;
+      } catch (e) {
+        out.innerHTML = `<span style="color:var(--danger)">✗ ${App.esc(e.message)}</span>`;
+      }
     };
   }
 
