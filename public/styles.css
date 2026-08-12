@@ -320,6 +320,61 @@ hr.sep { border: none; border-top: 1px solid var(--line-soft); margin: 14px 0; }
 .chart-table table { font-size: 12.5px; }
 .chart-table { max-height: 260px; overflow-y: auto; }
 
+/* ---------- Layout "ribbon" (menu superior estilo Revit) ---------- */
+.layout.layout-top { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
+.layout-top .sidebar { display: none; }
+.layout-top .main { padding-top: 16px; }
+
+.ribbon {
+  grid-column: 1 / -1;
+  background: linear-gradient(180deg, var(--bg-0), #0a0a0b);
+  border-bottom: 1px solid var(--line);
+  position: sticky; top: 0; z-index: 50;
+}
+.ribbon-tabs {
+  display: flex; align-items: center; gap: 2px;
+  padding: 6px 14px 0; overflow-x: auto;
+}
+.ribbon-tabs .spacer { flex: 1; }
+.ribbon-brand {
+  display: flex; align-items: center; gap: 8px; margin-right: 14px; flex: none;
+}
+.ribbon-brand b {
+  font-family: Georgia, 'Times New Roman', serif; font-size: 14px;
+  letter-spacing: 3px; color: var(--text-1);
+}
+.rtab {
+  background: none; border: none; cursor: pointer; flex: none;
+  padding: 8px 14px 10px; font-size: 12px; font-weight: 600;
+  letter-spacing: .8px; text-transform: uppercase;
+  color: var(--text-2); border-bottom: 2px solid transparent;
+}
+.rtab:hover { color: var(--text-1); }
+.rtab.active { color: var(--accent-strong); border-bottom-color: var(--accent); }
+
+.ribbon-pages {
+  display: flex; gap: 4px; padding: 8px 14px; align-items: stretch;
+  background: var(--bg-2); overflow-x: auto;
+}
+.rpage {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 5px; min-width: 86px; padding: 8px 12px; border-radius: 8px;
+  color: var(--text-2); font-size: 11.5px; text-align: center; line-height: 1.2;
+  border: 1px solid transparent; flex: none;
+}
+.rpage:hover { background: var(--bg-3); color: var(--text-1); }
+.rpage.active {
+  background: var(--accent-dim); color: var(--accent-strong);
+  border-color: rgba(228, 49, 70, .28);
+}
+.rpage .rp-ico { font-size: 19px; line-height: 1; }
+
+/* Em telas pequenas o ribbon sai de cena e o menu lateral (hambúrguer) assume */
+@media (max-width: 900px) {
+  .ribbon { display: none; }
+  .layout-top .sidebar { display: block; }
+}
+
 /* ---------- Responsivo ---------- */
 .menu-toggle { display: none; }
 @media (max-width: 900px) {
