@@ -18,6 +18,13 @@ abre sozinho. Opcional: rodar **`INSTALAR.bat`** uma vez configura o início
 automático com o Windows e cria o atalho “Sistema Jaques Motorsport” na Área
 de Trabalho.
 
+**Para atualizar (sem perder nenhum dado):**
+1. dois cliques em **`PARAR O SISTEMA.bat`** (fecha o sistema que está rodando);
+2. extraia o ZIP novo **por cima** da pasta atual, substituindo os arquivos —
+   a pasta `data` (os dados da empresa) não vem no ZIP e fica intacta;
+3. dois cliques em **`ABRIR O SISTEMA.bat`**. O navegador já busca sozinho a
+   versão nova das telas.
+
 Manualmente (qualquer sistema):
 
 ```bash
@@ -62,6 +69,7 @@ zero: `npm run seed`.
 | **RH** | Colaboradores, salários/benefícios (acesso restrito), bônus de produção e assistência de pista — pagamentos alimentam o financeiro |
 | **Relatórios** | Central com filtros (data, status, responsável, cliente) e **🖨️ Imprimir** / exportar; inclui **IMPRIMIR PENDÊNCIAS** (tudo que precisa ser feito) para entregar aos colaboradores |
 | **Administração** | Usuários, perfis de permissão configuráveis (Administrador, Financeiro/Administrativo, Produção + novos), catálogo de serviços, configurações e **histórico de alterações** (quem alterou o quê e quando) |
+| **Assistente de IA** | Botão ✦ em todas as telas: responde perguntas sobre os dados (contas, clientes, produção, estoque…) usando Gemini ou Claude; a chave da API fica só no servidor e **cada perfil só recebe respostas com o que já pode ver** (Produção não recebe custos/margens/salários) |
 
 ## Princípios implementados
 
