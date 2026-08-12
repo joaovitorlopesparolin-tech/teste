@@ -244,6 +244,118 @@ const App = {
     w.document.close();
   },
 
+  /* ---------------- WhatsApp ---------------- */
+  /** Normaliza telefone brasileiro para o formato internacional do wa.me. */
+  waPhone(raw) {
+    let d = String(raw || '').replace(/\D/g, '').replace(/^0+/, '');
+    if (d.length === 10 || d.length === 11) d = '55' + d; // DDD + número → +55
+    return d.length >= 12 ? d : '';
+  },
+
+  /**
+   * Janela de revisão antes de enviar: mensagem e telefone editáveis;
+   * "Abrir WhatsApp" abre a conversa do cliente já com o texto pronto.
+   * Sem telefone, o WhatsApp abre pedindo para escolher o contato.
+   */
+  waShare(titulo, phone, text) {
+    const m = this.modal(`
+      <h2>✆ Enviar no WhatsApp</h2>
+      <p class="small muted">${this.esc(titulo)} — revise a mensagem antes de enviar (pode editar à vontade).</p>
+      <label class="field"><span>WhatsApp do cliente (com DDD)</span>
+        <input id="wa-phone" value="${this.esc(phone || '')}"
+          placeholder="ex.: (43) 99999-8888 — em branco: você escolhe o contato no WhatsApp"></label>
+      <label class="field"><span>Mensagem</span>
+        <textarea id="wa-text" rows="13" style="line-height:1.55">${this.esc(text)}</textarea></label>
+      <div class="actions">
+        <button class="btn ghost" onclick="App.closeModal()">Cancelar</button>
+        <button class="btn" id="wa-copy">⧉ Copiar texto</button>
+        <button class="btn primary" id="wa-open">✆ Abrir WhatsApp</button>
+      </div>`, { wide: true });
+    m.querySelector('#wa-copy').onclick = async () => {
+      try {
+        await navigator.clipboard.writeText(m.querySelector('#wa-text').value);
+        this.toast('Mensagem copiada — é só colar no WhatsApp', 'ok');
+      } catch (e) { this.toast('Selecione o texto e copie com Ctrl+C', 'err'); }
+    };
+    m.querySelector('#wa-open').onclick = () => {
+      const p = this.waPhone(m.querySelector('#wa-phone').value);
+      const t = encodeURIComponent(m.querySelector('#wa-text').value);
+      window.open('https://wa.me/' + (p ? p + '?text=' + t : '?text=' + t), '_blank');
+      this.closeModal();
+    };
+    return m;
+  },
+
+  /** Telefone preferido para WhatsApp de um cliente. */
+  waPhoneOf(c) { return (c && (c.whatsapp || c.telefone)) || ''; },
+
+  /* Modelos de mensagem (formatação do WhatsApp: *negrito*) */
+  waMsg: {
+    head(sufixo) { return `*${(App.meta.settings.companyName || 'Jaques Motorsport').toUpperCase()}* — ${sufixo}`; },
+    hi(c) {
+      const n = ((c && c.nome) || '').trim().split(/\s+/)[0];
+      return n ? `Olá, ${n}!` : 'Olá!';
+    },
+
+    quote(q, c) {
+      const lim = new Date((q.dataOrcamento || App.today()) + 'T12:00:00');
+      lim.setDate(lim.getDate() + (q.validadeDias || 30));
+      const L = [this.head(`Orçamento nº ${q.numero}`), ''];
+      L.push(`${this.hi(c)} Segue o orçamento do serviço no seu cabeçote${q.modelo ? ' *' + q.modelo + '*' : ''}:`, '');
+      for (const i of (q.itens || [])) {
+        L.push(`▪ ${i.qtd !== 1 ? i.qtd + '× ' : ''}${i.nome} — R$ ${App.money(i.qtd * i.valorUnit)}`);
+      }
+      if (q.custosAdicionais) L.push(`▪ Custos adicionais — R$ ${App.money(q.custosAdicionais)}`);
+      L.push('', `*TOTAL: R$ ${App.money(q.total)}*`, '');
+      L.push(`Validade: até ${lim.toLocaleDateString('pt-BR')}`);
+      if (q.previsaoEntrega) L.push(`Previsão de entrega: ${App.date(q.previsaoEntrega)}`);
+      L.push('', 'Para aprovar, é só responder esta mensagem. Qualquer dúvida, estamos à disposição! 🤝');
+      return L.join('\n');
+    },
+
+    os(o, c) {
+      const modelo = o.modelo ? ' *' + o.modelo + '*' : '';
+      let corpo;
+      if (o.envioStatus === 'enviado') {
+        corpo = `seu cabeçote${modelo} foi *enviado*! 📦${o.nfRetorno ? `\nNF de retorno: ${o.nfRetorno}` : ''}`;
+      } else if (o.status === 'finalizado' || o.envioStatus === 'pronto') {
+        corpo = `boa notícia: o serviço no seu cabeçote${modelo} foi *finalizado* e ele está pronto! ✅\n\nPodemos combinar a retirada ou o envio?`;
+      } else {
+        corpo = `passando uma atualização do serviço no seu cabeçote${modelo}: *${(App.STATUS[o.status] || [o.status])[0]}*.`
+          + (o.previsaoEntrega ? `\nPrevisão de entrega: ${App.date(o.previsaoEntrega)}` : '');
+      }
+      return [this.head(`OS nº ${o.numero}`), '', `${this.hi(c)} ${corpo}`, '', 'Qualquer dúvida, é só chamar!'].join('\n');
+    },
+
+    charge(r, c) {
+      const atraso = r.status === 'vencida';
+      const L = [this.head('Lembrete de pagamento'), ''];
+      L.push(`${this.hi(c)} ${atraso
+        ? 'Notamos que consta em aberto o pagamento abaixo:'
+        : 'Passando para lembrar do pagamento abaixo:'}`, '');
+      L.push(r.descricao || 'Pagamento');
+      L.push(`Valor: *R$ ${App.money(r.valor)}*`);
+      L.push(`Vencimento: *${App.date(r.vencimento)}*${atraso ? ' — em atraso' : ''}`);
+      if (r.parcelas > 1) L.push(`Parcela: ${r.parcela}/${r.parcelas}`);
+      L.push('', 'Se o pagamento já foi feito, por favor desconsidere esta mensagem. Obrigado! 🙏');
+      return L.join('\n');
+    },
+
+    sale(s, c) {
+      const itens = (s.itens || []).map(i => `${i.qtd}× ${i.produto}`).join(' + ');
+      let corpo;
+      if (s.status === 'enviado') {
+        corpo = `seu pedido (${itens}) foi *enviado*! 📦${s.dataEnvio ? `\nData do envio: ${App.date(s.dataEnvio)}` : ''}`;
+      } else if (s.status === 'pronto') {
+        corpo = `seu pedido (${itens}) está *pronto*! 🏁\n\nPodemos combinar o envio ou a retirada?`;
+      } else {
+        corpo = `passando uma atualização do seu pedido (${itens}): *${(App.STATUS[s.status] || [s.status])[0]}*.`
+          + (s.previsaoEntrega ? `\nPrevisão de entrega: ${App.date(s.previsaoEntrega)}` : '');
+      }
+      return [this.head(`Pedido nº ${s.numero}`), '', `${this.hi(c)} ${corpo}`, '', 'Qualquer dúvida, é só chamar!'].join('\n');
+    }
+  },
+
   /** Exporta uma lista de objetos para CSV (abre no Excel). */
   exportCsv(filename, rows, headers) {
     const cols = headers || (rows[0] ? Object.keys(rows[0]) : []);

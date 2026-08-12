@@ -113,7 +113,7 @@ async function clientProfile(view, id) {
       <a class="btn sm ghost" href="#/clients">← Voltar</a>
       <button class="btn sm" onclick="Clients2.editClient()">✎ Editar cadastro</button>
       <div class="spacer"></div>
-      ${c.whatsapp ? `<a class="btn sm" target="_blank" href="https://wa.me/55${(c.whatsapp || '').replace(/\D/g, '')}">WhatsApp</a>` : ''}
+      ${App.waPhone(App.waPhoneOf(c)) ? `<a class="btn sm wa" target="_blank" href="https://wa.me/${App.waPhone(App.waPhoneOf(c))}">✆ WhatsApp</a>` : ''}
     </div>
     <div class="grid cols-4">
       <div class="card kpi"><div class="label">Total comprado</div><div class="value money">${App.money(fin.totalComprado)}</div></div>

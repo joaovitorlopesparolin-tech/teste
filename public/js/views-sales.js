@@ -82,6 +82,7 @@ App.registerView('sales', async (view, args) => {
       { h: 'Status', cell: s => App.badge(s.status) },
       { h: '', class: 'num', cell: s => `
         <button class="btn sm ghost" onclick="Sales.status(${s.id})">Status</button>
+        <button class="btn sm ghost wa" onclick="Sales.wa(${s.id})" title="Avisar o cliente no WhatsApp">✆</button>
         ${fin ? `<button class="btn sm ghost" onclick="Sales.result(${s.id})">Resultado</button>` : ''}` }
     ]);
   };
@@ -89,6 +90,11 @@ App.registerView('sales', async (view, args) => {
   document.getElementById('sf').addEventListener('change', render);
 
   window.Sales = {
+    wa(id) {
+      const s = sales.find(x => x.id === id);
+      const c = clients.find(x => x.id === s.clienteId);
+      App.waShare(`Pedido nº ${s.numero} — ${(c && c.nome) || 'cliente'}`, App.waPhoneOf(c), App.waMsg.sale(s, c));
+    },
     status(id) {
       const s = sales.find(x => x.id === id);
       App.form(`Status do pedido nº ${s.numero}`, [
