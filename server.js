@@ -432,9 +432,47 @@ route('PUT', '/api/settings', 'admin', async (req, res, user) => {
   if (b.aiModel !== undefined) s.aiModel = String(b.aiModel || '').trim();
   if (b.aiApiKey === null) s.aiApiKey = '';                       // remoção explícita
   else if (typeof b.aiApiKey === 'string' && b.aiApiKey.trim()) s.aiApiKey = b.aiApiKey.trim();
+  let backupAgora = false;
+  if (b.backupDir !== undefined) {
+    const dir = String(b.backupDir || '').trim();
+    if (!dir) { s.backupDir = ''; s.lastCloudBackup = null; }
+    else {
+      // Valida na hora: cria a pasta (se preciso) e testa a escrita.
+      try {
+        fs.mkdirSync(dir, { recursive: true });
+        const probe = path.join(dir, '.teste-de-escrita-jaques.tmp');
+        fs.writeFileSync(probe, 'ok');
+        fs.unlinkSync(probe);
+      } catch (e) {
+        return bad(res, `Não consegui gravar nessa pasta (${e.message}). Confira o caminho — ex.: G:\\Meu Drive\\Backup Jaques Motorsport`);
+      }
+      backupAgora = dir !== s.backupDir;
+      s.backupDir = dir;
+    }
+  }
   db.save();
   audit(user, 'alterou', 'settings', 1, 'Configurações do sistema');
+  if (backupAgora) cloudBackup(true); // primeiro backup imediato — o arquivo já aparece no Drive
   ok(res, settingsForClient());
+});
+
+/* ---- backup na nuvem ---- */
+route('GET', '/api/backup/status', 'admin', async (req, res) => {
+  const localDir = path.join(__dirname, 'data', 'backups');
+  let locais = [];
+  try { locais = fs.readdirSync(localDir).filter(f => /^db-\d{4}-\d{2}-\d{2}\.json$/.test(f)).sort(); } catch (e) {}
+  ok(res, {
+    local: { arquivos: locais.length, ultimo: locais[locais.length - 1] || null },
+    cloud: { dir: db.settings.backupDir || '', last: db.settings.lastCloudBackup || null },
+    sugestoes: cloudCandidates().map(c => path.join(c, 'Backup Jaques Motorsport'))
+  });
+});
+
+route('POST', '/api/backup/now', 'admin', async (req, res, user) => {
+  ensureDailyBackup();
+  const r = cloudBackup(true);
+  audit(user, 'backup', 'settings', 1, r.ok ? `Backup manual → ${r.file}` : `Backup manual falhou: ${r.error || 'nuvem não configurada'}`);
+  ok(res, r);
 });
 
 /* ---- assistente de IA ---- */
@@ -1573,10 +1611,56 @@ const server = http.createServer(async (req, res) => {
 });
 
 /* ===================================================================== */
-/* Backup automático                                                     */
+/* Backup automático (local + pasta de nuvem sincronizada)               */
 /* ===================================================================== */
 /* Uma cópia de data/db.json por dia em data/backups/, mantendo as 30    */
-/* últimas. Roda no start e é reavaliado a cada 6 horas.                 */
+/* últimas. Se uma pasta de nuvem estiver configurada (Google Drive para */
+/* Computador, OneDrive, Dropbox…), a cópia diária também vai para lá —  */
+/* o aplicativo de sincronização sobe o arquivo para a nuvem sozinho.    */
+/* Roda no start e é reavaliado a cada 6 horas.                          */
+
+/** Pastas de nuvem que costumam existir no computador (só as que existem). */
+function cloudCandidates() {
+  const home = process.env.USERPROFILE || process.env.HOME || '';
+  const list = [];
+  if (process.env.OneDrive) list.push(process.env.OneDrive);
+  for (const n of ['OneDrive', 'Google Drive', 'Meu Drive', 'My Drive', 'Dropbox']) {
+    if (home) list.push(path.join(home, n));
+  }
+  for (const letra of ['G:', 'H:', 'I:']) {
+    for (const n of ['Meu Drive', 'My Drive']) list.push(letra + path.sep + n);
+  }
+  return [...new Set(list)].filter(p => {
+    try { return fs.statSync(p).isDirectory(); } catch (e) { return false; }
+  });
+}
+
+/** Copia o banco para a pasta de nuvem configurada (1 arquivo por dia, 60 mantidos). */
+function cloudBackup(force) {
+  const dir = db.settings.backupDir;
+  if (!dir) return { ok: false, naoConfigurado: true };
+  const dataFile = path.join(__dirname, 'data', 'db.json');
+  try {
+    if (!fs.existsSync(dataFile)) return { ok: false, error: 'ainda não há dados para copiar' };
+    fs.mkdirSync(dir, { recursive: true });
+    const today = new Date().toISOString().slice(0, 10);
+    const target = path.join(dir, `jaques-backup-${today}.json`);
+    if (!force && fs.existsSync(target)) return { ok: true, file: target, jaExistia: true };
+    db.persistNow();
+    fs.copyFileSync(dataFile, target);
+    const old = fs.readdirSync(dir).filter(f => /^jaques-backup-\d{4}-\d{2}-\d{2}\.json$/.test(f)).sort();
+    while (old.length > 60) fs.unlinkSync(path.join(dir, old.shift()));
+    db.settings.lastCloudBackup = { at: new Date().toISOString(), ok: true, file: target };
+    db.save();
+    console.log('Backup na nuvem:', target);
+    return { ok: true, file: target };
+  } catch (e) {
+    db.settings.lastCloudBackup = { at: new Date().toISOString(), ok: false, error: e.message };
+    db.save();
+    console.error('Falha no backup na nuvem:', e.message);
+    return { ok: false, error: e.message };
+  }
+}
 
 function ensureDailyBackup() {
   try {
@@ -1594,6 +1678,7 @@ function ensureDailyBackup() {
     const old = fs.readdirSync(backupDir).filter(f => /^db-\d{4}-\d{2}-\d{2}\.json$/.test(f)).sort();
     while (old.length > 30) fs.unlinkSync(path.join(backupDir, old.shift()));
   } catch (e) { console.error('Falha no backup diário:', e.message); }
+  cloudBackup(false);
 }
 ensureDailyBackup();
 setInterval(ensureDailyBackup, 6 * 3600 * 1000);
