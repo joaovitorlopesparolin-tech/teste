@@ -11,6 +11,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const os = require('os');
 
 const db = require('./lib/db');
 const domain = require('./lib/domain');
@@ -466,6 +467,20 @@ route('GET', '/api/backup/status', 'admin', async (req, res) => {
     cloud: { dir: db.settings.backupDir || '', last: db.settings.lastCloudBackup || null },
     sugestoes: cloudCandidates().map(c => path.join(c, 'Backup Jaques Motorsport'))
   });
+});
+
+/* ---- acesso pelo celular: endereços do computador na rede local ---- */
+route('GET', '/api/network', 'admin', async (req, res) => {
+  const ips = [];
+  const nets = os.networkInterfaces();
+  for (const name of Object.keys(nets)) {
+    for (const ni of nets[name] || []) {
+      if (ni.family === 'IPv4' && !ni.internal && !ni.address.startsWith('169.254.')) ips.push(ni.address);
+    }
+  }
+  // redes domésticas primeiro (192.168.x.x é o caso comum de Wi-Fi)
+  ips.sort((a, b) => (b.startsWith('192.168.') ? 1 : 0) - (a.startsWith('192.168.') ? 1 : 0));
+  ok(res, { port: PORT, ips });
 });
 
 route('POST', '/api/backup/now', 'admin', async (req, res, user) => {
