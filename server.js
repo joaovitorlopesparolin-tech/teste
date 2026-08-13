@@ -263,6 +263,13 @@ function parseNfeXml(xml) {
 /* Dashboard                                                             */
 /* ===================================================================== */
 
+/** Acesso ao bloco financeiro (faturamento, contas, caixa): perfis com
+    financeiro ou dados sensíveis. Produção fica só com o operacional —
+    os valores nem são calculados nem enviados. */
+function canFinanceiro(user) {
+  return can(user, 'cashflow') || can(user, 'finance_sensitive');
+}
+
 function dashboard(user) {
   const t = domain.today();
   const month = t.slice(0, 7);
@@ -272,27 +279,12 @@ function dashboard(user) {
   const os = db.all('serviceOrders');
   const salesMonth = sales.filter(s => inMonth(s.dataPedido));
   const osMonth = os.filter(o => inMonth(o.dataFinalizacao) && o.status !== 'cancelado');
-  const receiv = withOverdue(db.all('receivables'));
-  const pay = withOverdue(db.all('payables'));
-  const flows = db.all('cashflow');
 
-  const faturamentoVendas = salesMonth.reduce((s, v) => s + (v.valorTotal || 0), 0);
-  const faturamentoServicos = osMonth.reduce((s, o) => s + (o.valorTotal || 0), 0);
-
-  const custoVendas = salesMonth.reduce((s, v) => s + (domain.saleResult(v).custoReal || 0), 0);
-  const lucroEstimado = salesMonth.reduce((s, v) => s + domain.saleResult(v).resultado, 0) + faturamentoServicos * 0; // serviços: custo apurado via vínculos
-  const fat = faturamentoVendas + faturamentoServicos;
-
+  /* Bloco operacional — o que todo perfil com dashboard enxerga */
   const base = {
     mes: month,
-    faturamentoMes: fat,
-    vendasMes: { qtd: salesMonth.length, valor: faturamentoVendas },
-    servicosMes: { qtd: osMonth.length, valor: faturamentoServicos },
-    contasReceber: receiv.filter(r => r.status === 'aberto').reduce((s, r) => s + r.valor, 0),
-    contasPagar: pay.filter(p => p.status === 'aberto').reduce((s, p) => s + p.valor, 0),
-    vencidosReceber: receiv.filter(r => r.status === 'vencida').reduce((s, r) => s + r.valor, 0),
-    vencidosPagar: pay.filter(p => p.status === 'vencida').reduce((s, p) => s + p.valor, 0),
-    saldoCaixa: flows.reduce((s, f) => s + (f.tipo === 'entrada' ? f.valor : -f.valor), 0),
+    vendasMes: { qtd: salesMonth.length },
+    servicosMes: { qtd: osMonth.length },
     orcamentosAguardando: db.all('quotes').filter(q => q.status === 'aberto').length,
     servicosAndamento: os.filter(o => ['em_analise', 'em_andamento', 'aguardando_peca'].includes(o.status)).length,
     cabecotesAguardandoProducao: db.all('productionOrders').filter(p => p.status === 'nao_produzido').length,
@@ -302,10 +294,31 @@ function dashboard(user) {
     minhasPendencias: db.all('tasks').filter(tk => tk.status === 'aberta' && (!tk.assigneeId || tk.assigneeId === user.id))
       .sort((a, b) => (a.due || '9999') < (b.due || '9999') ? -1 : 1).slice(0, 20)
   };
-  if (can(user, 'finance_sensitive')) {
-    base.lucroEstimadoMes = lucroEstimado;
-    base.margemMes = fat > 0 ? (lucroEstimado / fat) * 100 : 0;
-    base.custoVendasMes = custoVendas;
+
+  /* Bloco financeiro — calculado apenas para quem pode ver */
+  if (canFinanceiro(user)) {
+    const receiv = withOverdue(db.all('receivables'));
+    const pay = withOverdue(db.all('payables'));
+    const flows = db.all('cashflow');
+    const faturamentoVendas = salesMonth.reduce((s, v) => s + (v.valorTotal || 0), 0);
+    const faturamentoServicos = osMonth.reduce((s, o) => s + (o.valorTotal || 0), 0);
+    const fat = faturamentoVendas + faturamentoServicos;
+    base.faturamentoMes = fat;
+    base.vendasMes.valor = faturamentoVendas;
+    base.servicosMes.valor = faturamentoServicos;
+    base.contasReceber = receiv.filter(r => r.status === 'aberto').reduce((s, r) => s + r.valor, 0);
+    base.contasPagar = pay.filter(p => p.status === 'aberto').reduce((s, p) => s + p.valor, 0);
+    base.vencidosReceber = receiv.filter(r => r.status === 'vencida').reduce((s, r) => s + r.valor, 0);
+    base.vencidosPagar = pay.filter(p => p.status === 'vencida').reduce((s, p) => s + p.valor, 0);
+    base.saldoCaixa = flows.reduce((s, f) => s + (f.tipo === 'entrada' ? f.valor : -f.valor), 0);
+
+    if (can(user, 'finance_sensitive')) {
+      const custoVendas = salesMonth.reduce((s, v) => s + (domain.saleResult(v).custoReal || 0), 0);
+      const lucroEstimado = salesMonth.reduce((s, v) => s + domain.saleResult(v).resultado, 0);
+      base.lucroEstimadoMes = lucroEstimado;
+      base.margemMes = fat > 0 ? (lucroEstimado / fat) * 100 : 0;
+      base.custoVendasMes = custoVendas;
+    }
   }
   return base;
 }
@@ -1667,12 +1680,14 @@ route('GET', '/api/analytics', 'dashboard', async (req, res, user, params, query
   const oss = db.all('serviceOrders').filter(o => o.status !== 'cancelado');
   const out = { janelaMeses: meses };
 
-  // Faturamento mensal: vendas (data do pedido) + serviços (OS finalizadas no mês)
-  out.faturamento = months.map(m => ({
-    mes: label(m),
-    vendas: sales.filter(s => String(s.dataPedido || '').slice(0, 7) === m).reduce((a, s) => a + (s.valorTotal || 0), 0),
-    servicos: oss.filter(o => String(o.dataFinalizacao || '').slice(0, 7) === m).reduce((a, o) => a + (o.valorTotal || 0), 0)
-  }));
+  // Faturamento mensal: só para quem tem acesso ao financeiro (Produção não recebe valores)
+  if (canFinanceiro(user)) {
+    out.faturamento = months.map(m => ({
+      mes: label(m),
+      vendas: sales.filter(s => String(s.dataPedido || '').slice(0, 7) === m).reduce((a, s) => a + (s.valorTotal || 0), 0),
+      servicos: oss.filter(o => String(o.dataFinalizacao || '').slice(0, 7) === m).reduce((a, o) => a + (o.valorTotal || 0), 0)
+    }));
+  }
 
   if (can(user, 'cashflow')) {
     const flows = db.all('cashflow');
@@ -1725,6 +1740,11 @@ route('GET', '/api/analytics', 'dashboard', async (req, res, user, params, query
       estados.push({ uf: 'Outros', qtd: resto.reduce((a, e) => a + e.qtd, 0), valor: resto.reduce((a, e) => a + e.valor, 0) });
     }
     out.estados = estados;
+    // Sem acesso financeiro: os gráficos ficam por quantidade — valores nem trafegam
+    if (!canFinanceiro(user)) {
+      out.produtos = out.produtos.map(p => ({ produto: p.produto, qtd: p.qtd }));
+      out.estados = out.estados.map(e => ({ uf: e.uf, qtd: e.qtd }));
+    }
   }
 
   // Funil da oficina (etapas ordenadas — contagens atuais)

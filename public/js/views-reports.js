@@ -380,4 +380,11 @@ App.registerView('reports', async (view) => {
   });
 
   syncFilterUI();
+
+  /* Veio do atalho "Imprimir pendências da produção" do dashboard */
+  if (sessionStorage.getItem('jm_rep_quick')) {
+    const modo = sessionStorage.getItem('jm_rep_quick');
+    sessionStorage.removeItem('jm_rep_quick');
+    Rep.pick('prod_pendencias', modo === 'print');
+  }
 });
