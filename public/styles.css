@@ -556,3 +556,26 @@ hr.sep { border: none; border-top: 1px solid var(--line-soft); margin: 14px 0; }
 /* Botões de WhatsApp — verde discreto sobre o tema escuro */
 .btn.wa { color: #3fce6b; }
 .btn.wa:hover { border-color: rgba(63, 206, 107, .5); background: rgba(63, 206, 107, .08); color: #55e281; }
+
+/* Visualizador 3D — tela cheia */
+.v3d-wrap {
+  position: fixed; inset: 0; z-index: 950;
+  background: var(--bg-0);
+  display: flex; flex-direction: column;
+}
+.v3d-top {
+  display: flex; align-items: center; gap: 10px;
+  padding: 12px 18px; border-bottom: 1px solid var(--line);
+  background: var(--bg-1); color: var(--text-1); font-size: 14px;
+}
+.v3d-canvas { flex: 1; position: relative; min-height: 0; }
+.v3d-canvas canvas { display: block; width: 100% !important; height: 100% !important; }
+.v3d-loading {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  color: var(--text-2); font-size: 14px; text-align: center; padding: 20px;
+}
+.v3d-hint {
+  position: absolute; bottom: 14px; left: 0; right: 0; text-align: center;
+  color: var(--text-3); font-size: 11.5px; letter-spacing: .4px; pointer-events: none;
+}
+@media print { .v3d-wrap { display: none !important; } }
