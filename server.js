@@ -479,10 +479,14 @@ route('POST', '/api/models3d/upload', 'products', async (req, res, user, params,
   if (!MODEL_EXTS.includes(ext)) {
     return bad(res, 'Formato não suportado. Exporte do CAD como STL, OBJ ou PLY (no SolidWorks: Salvar como → STL).');
   }
+  const MAX = 200 * 1024 * 1024;
+  const MSG_GRANDE = 'Arquivo grande demais (limite: 200 MB). Exporte de novo com resolução Média/Medium — fica leve e a diferença visual é imperceptível.';
+  // O navegador informa o tamanho antes de enviar: recusa na hora, com mensagem clara.
+  const declared = Number(req.headers['content-length'] || 0);
+  if (declared > MAX) return send(res, 413, { error: MSG_GRANDE });
   fs.mkdirSync(MODELS_DIR, { recursive: true });
   const fname = Date.now() + '-' + crypto.randomBytes(4).toString('hex') + '.' + ext;
   const fpath = path.join(MODELS_DIR, fname);
-  const MAX = 200 * 1024 * 1024;
   let size = 0, aborted = false;
   const ws = fs.createWriteStream(fpath);
   req.on('data', chunk => {
@@ -492,8 +496,8 @@ route('POST', '/api/models3d/upload', 'products', async (req, res, user, params,
       aborted = true;
       ws.destroy();
       fs.unlink(fpath, () => {});
-      send(res, 413, { error: 'Arquivo grande demais (limite: 200 MB). Exporte uma versão mais leve — para visualização, 10–30 MB é o ideal.' });
-      req.destroy();
+      send(res, 413, { error: MSG_GRANDE });
+      res.on('finish', () => req.destroy()); // deixa a resposta chegar antes de derrubar
       return;
     }
     ws.write(chunk);

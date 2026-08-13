@@ -70,6 +70,22 @@ App.registerView('products', async (view) => {
   document.getElementById('m3d-file').addEventListener('change', (e) => {
     const f = e.target.files[0];
     if (!f) return;
+    const mb = f.size / 1048576;
+    if (mb > 200) {
+      e.target.value = '';
+      App.modal(`
+        <h2>Arquivo grande demais (${mb.toFixed(0)} MB)</h2>
+        <p>O limite é <b>200 MB</b> — e para visualização nem precisa de tanto.</p>
+        <p style="margin-top:8px">Exporte de novo com resolução mais leve:</p>
+        <ul style="margin:8px 0 0 20px;line-height:1.7">
+          <li><b>Onshape:</b> Export → Resolution = <b>Medium</b></li>
+          <li><b>SolidWorks:</b> Salvar como STL → Opções → qualidade <b>Grossa</b> ou personalizada</li>
+        </ul>
+        <p class="small muted" style="margin-top:10px">A diferença visual é imperceptível — e o modelo ainda abre mais rápido.</p>
+        <div class="actions"><button class="btn primary" onclick="App.closeModal()">Entendi</button></div>`);
+      return;
+    }
+    if (mb > 80) App.toast(`Arquivo de ${mb.toFixed(0)} MB — o envio e a abertura do 3D podem demorar um pouco`, 'ok');
     const prog = document.getElementById('m3d-progress');
     const xhr = new XMLHttpRequest();
     xhr.open('POST', '/api/models3d/upload?nome=' + encodeURIComponent(f.name));
@@ -90,8 +106,11 @@ App.registerView('products', async (view) => {
         App.toast(msg, 'err');
       }
     };
-    xhr.onerror = () => { prog.textContent = ''; App.toast('Falha de rede no envio', 'err'); };
-    prog.textContent = 'Enviando… 0%';
+    xhr.onerror = () => {
+      prog.textContent = '';
+      App.toast('O envio caiu no meio do caminho. Confira se o sistema está aberto (ABRIR O SISTEMA.bat) e tente de novo; se o arquivo for muito grande, exporte com resolução Média.', 'err');
+    };
+    prog.textContent = `Enviando… 0% (${mb.toFixed(1)} MB)`;
     xhr.send(f);
   });
 
