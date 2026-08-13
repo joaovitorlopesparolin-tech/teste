@@ -73,7 +73,7 @@ com o sistema parado.
 | **Fluxo de caixa** | Regime de caixa (quando o dinheiro entrou/saiu), separado da DRE; alimentado automaticamente por vendas, OS, contas e RH; exportação CSV |
 | **Projeção** | A receber × a pagar × saldo projetado em 7/30/60/90 dias, 6 meses e 1 ano |
 | **DRE** | Receita (cabeçotes, peças, serviços), custos, lucro bruto, despesas operacionais e financeiras, lucro líquido e margem, por mês |
-| **RH** | Colaboradores, salários/benefícios (acesso restrito), bônus de produção e assistência de pista — pagamentos alimentam o financeiro |
+| **RH** | Mini-painel (ativos, custo fixo mensal, extras do mês, próximos pagamentos), busca + filtros por vínculo (Fixo/Oficina · Administrativo · Freelancer/Pista), salários/benefícios (acesso restrito), bônus de produção e **assistência de pista agrupada por etapa/evento** (várias pessoas de uma vez, total por corrida); telas vazias guiam o primeiro passo; pagamentos alimentam o financeiro |
 | **Relatórios** | Central com filtros (data, status, responsável, cliente) e **🖨️ Imprimir** / exportar; inclui **IMPRIMIR PENDÊNCIAS** (tudo que precisa ser feito) para entregar aos colaboradores |
 | **Administração** | Usuários, perfis de permissão configuráveis (Administrador, Financeiro/Administrativo, Produção + novos), catálogo de serviços, configurações e **histórico de alterações** (quem alterou o quê e quando) |
 | **Assistente de IA** | Botão ✦ em todas as telas: responde perguntas sobre os dados (contas, clientes, produção, estoque…) usando Gemini ou Claude; a chave da API fica só no servidor e **cada perfil só recebe respostas com o que já pode ver** (Produção não recebe custos/margens/salários) |
