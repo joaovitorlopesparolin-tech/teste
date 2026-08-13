@@ -81,6 +81,7 @@ com o sistema parado.
 | **Backup na nuvem** | Além do backup diário local, copia os dados para uma pasta sincronizada (Google Drive para Computador, OneDrive, Dropbox) com detecção automática das pastas, teste de escrita, “fazer backup agora” e status do último envio — se o computador quebrar, os dados estão na nuvem |
 | **Acesso pelo celular** | Em *Administração → Configurações*, um **QR code** abre o sistema no celular (mesmo Wi-Fi) com os mesmos dados em tempo real — QR gerado localmente, sem internet; **LIBERAR NO CELULAR.bat** destrava o firewall do Windows com um clique |
 | **Modelos 3D** | Em *Produtos e custos*: upload do escaneamento/CAD exportado como **STL/OBJ/PLY** (até 200 MB), vínculo por produto e **visualizador 3D em tela cheia** (three.js embutido, offline) — peça em alumínio sobre fundo escuro, gira com o mouse ou com o dedo no celular; ideal para mostrar ao cliente |
+| **Importar planilha de gastos** | No *Fluxo de caixa*: lê o Excel semanal da oficina (uma aba por semana, gastos à esquerda e entradas à direita), com conferência antes de gravar, **categorias sugeridas automaticamente** (componentes, salários, impostos… → alimentam a DRE) e **trava anti-duplicação** — pode reimportar o mesmo arquivo todo mês que só entra o que é novo |
 
 ## Princípios implementados
 
