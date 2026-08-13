@@ -469,6 +469,85 @@ route('GET', '/api/backup/status', 'admin', async (req, res) => {
   });
 });
 
+/* ---- modelos 3D (escaneamentos / CAD exportado como malha) ---- */
+const MODELS_DIR = path.join(__dirname, 'data', 'models');
+const MODEL_EXTS = ['stl', 'obj', 'ply'];
+
+route('POST', '/api/models3d/upload', 'products', async (req, res, user, params, query) => {
+  const nome = String(query.nome || 'modelo').slice(0, 140);
+  const ext = (nome.split('.').pop() || '').toLowerCase();
+  if (!MODEL_EXTS.includes(ext)) {
+    return bad(res, 'Formato não suportado. Exporte do CAD como STL, OBJ ou PLY (no SolidWorks: Salvar como → STL).');
+  }
+  fs.mkdirSync(MODELS_DIR, { recursive: true });
+  const fname = Date.now() + '-' + crypto.randomBytes(4).toString('hex') + '.' + ext;
+  const fpath = path.join(MODELS_DIR, fname);
+  const MAX = 200 * 1024 * 1024;
+  let size = 0, aborted = false;
+  const ws = fs.createWriteStream(fpath);
+  req.on('data', chunk => {
+    if (aborted) return;
+    size += chunk.length;
+    if (size > MAX) {
+      aborted = true;
+      ws.destroy();
+      fs.unlink(fpath, () => {});
+      send(res, 413, { error: 'Arquivo grande demais (limite: 200 MB). Exporte uma versão mais leve — para visualização, 10–30 MB é o ideal.' });
+      req.destroy();
+      return;
+    }
+    ws.write(chunk);
+  });
+  req.on('end', () => {
+    if (aborted) return;
+    ws.end(() => {
+      const rec = db.insert('models3d', {
+        nome, arquivo: fname, ext, size,
+        produtoId: query.produtoId ? Number(query.produtoId) : null,
+        criadoEm: new Date().toISOString()
+      });
+      audit(user, 'criou', 'models3d', rec.id, `Modelo 3D ${nome} (${(size / 1048576).toFixed(1)} MB)`);
+      ok(res, rec);
+    });
+  });
+  req.on('error', () => { aborted = true; ws.destroy(); fs.unlink(fpath, () => {}); });
+});
+
+route('GET', '/api/models3d', 'dashboard', async (req, res) => ok(res, db.all('models3d')));
+
+route('PUT', '/api/models3d/:id', 'products', async (req, res, user, params) => {
+  const b = await readBody(req);
+  const patch = {};
+  if (b.nome) patch.nome = String(b.nome).slice(0, 140);
+  if (b.produtoId !== undefined) patch.produtoId = b.produtoId ? Number(b.produtoId) : null;
+  const rec = db.update('models3d', params.id, patch);
+  if (!rec) return notFound(res);
+  audit(user, 'alterou', 'models3d', rec.id, rec.nome);
+  ok(res, rec);
+});
+
+route('DELETE', '/api/models3d/:id', 'products', async (req, res, user, params) => {
+  const m = db.get('models3d', params.id);
+  if (!m) return notFound(res);
+  fs.unlink(path.join(MODELS_DIR, m.arquivo), () => {});
+  db.remove('models3d', m.id);
+  audit(user, 'excluiu', 'models3d', m.id, m.nome);
+  ok(res, { ok: true });
+});
+
+route('GET', '/api/models3d/:id/file', 'dashboard', async (req, res, user, params) => {
+  const m = db.get('models3d', params.id);
+  if (!m) return notFound(res);
+  const fpath = path.join(MODELS_DIR, m.arquivo);
+  if (!fs.existsSync(fpath)) return notFound(res);
+  res.writeHead(200, {
+    'Content-Type': 'application/octet-stream',
+    'Content-Length': fs.statSync(fpath).size,
+    'Cache-Control': 'no-cache'
+  });
+  fs.createReadStream(fpath).pipe(res);
+});
+
 /* ---- acesso pelo celular: endereços do computador na rede local ---- */
 route('GET', '/api/network', 'admin', async (req, res) => {
   const ips = [];
