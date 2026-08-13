@@ -580,7 +580,7 @@ const App = {
               <button class="btn menu-toggle" onclick="document.getElementById('sidebar').classList.toggle('open')">☰</button>
               <div><h1 id="page-title"></h1><div class="sub" id="page-sub"></div></div>
             </div>
-            <div class="userchip"><b>${this.esc(this.user.name)}</b> · ${this.esc(this.user.cargo || '')}</div>
+            <div class="userchip"><b>${this.esc(this.user.name)}</b></div>
           </div>
           <div id="view"></div>
         </main>

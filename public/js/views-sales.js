@@ -14,7 +14,8 @@ App.registerView('products', async (view) => {
     { h: 'Stage', cell: p => `<span class="badge accent">Stage ${p.stage}</span>` },
     { h: 'Comandos válidos', cell: p => App.meta.stageComandos[p.stage].join(' · ') },
     { h: 'Tuchos', cell: p => p.stage === 3 ? '37 mm (300x308: 35 ou 37)' : '35 mm' },
-    { h: 'Preço de venda', class: 'num', cell: p => App.moneyHtml(p.preco) },
+    ...(App.can('cashflow') || App.can('receivables') || App.can('payables') || fin
+      ? [{ h: 'Preço de venda', class: 'num', cell: p => App.moneyHtml(p.preco) }] : []),
     ...(fin ? [{ h: 'Custo-base', class: 'num', cell: p => App.moneyHtml(p.custoBase || 0) },
     { h: 'Margem téorica', class: 'num', cell: p => {
       if (!p.preco) return '—';
@@ -158,6 +159,7 @@ App.registerView('sales', async (view, args) => {
   const [sales, clients] = await Promise.all([App.get('/sales'), App.get('/clients')]);
   sales.sort((a, b) => b.id - a.id);
   const fin = App.can('finance_sensitive');
+  const verValores = App.can('cashflow') || App.can('receivables') || App.can('payables') || fin;
   const ST = ['nao_produzido', 'preparacao', 'usinagem', 'montagem', 'pronto', 'enviado', 'entregue', 'cancelado'];
 
   view.innerHTML = `
@@ -178,8 +180,9 @@ App.registerView('sales', async (view, args) => {
       { h: 'Cliente', cell: s => `${App.esc(App.clientName(s.clienteId, clients))}<div class="small muted">${App.esc(s.cidade || '')}/${App.esc(s.estado || '')}</div>` },
       { h: 'Itens', cell: s => s.itens.map(i =>
           `${i.qtd}× ${App.esc(i.produto)}<div class="small muted">comando ${i.comando} · tucho ${i.tucho} mm</div>`).join('') },
-      { h: 'Total', class: 'num', cell: s => App.moneyHtml(s.valorTotal) },
-      { h: 'Pagamento', cell: s => `${App.esc((s.pagamento && s.pagamento.forma) || '—')}${s.pagamento && s.pagamento.parcelas > 1 ? ` ${s.pagamento.parcelas}x` : ''}` },
+      ...(verValores ? [
+        { h: 'Total', class: 'num', cell: s => App.moneyHtml(s.valorTotal) },
+        { h: 'Pagamento', cell: s => `${App.esc((s.pagamento && s.pagamento.forma) || '—')}${s.pagamento && s.pagamento.parcelas > 1 ? ` ${s.pagamento.parcelas}x` : ''}` }] : []),
       { h: 'Previsão', cell: s => App.date(s.previsaoEntrega) },
       { h: 'Status', cell: s => App.badge(s.status) },
       { h: '', class: 'num', cell: s => `
@@ -228,11 +231,11 @@ App.registerView('sales', async (view, args) => {
       const f = document.getElementById('sf').value;
       const list = sales.filter(s => !f || s.status === f);
       App.print('Pedidos' + (f ? ' — ' + (App.STATUS[f] || [f])[0] : ''),
-        `<table><tr><th>Nº</th><th>Data</th><th>Cliente</th><th>Itens</th><th class="num">Total</th><th>Previsão</th><th>Status</th></tr>
+        `<table><tr><th>Nº</th><th>Data</th><th>Cliente</th><th>Itens</th>${verValores ? '<th class="num">Total</th>' : ''}<th>Previsão</th><th>Status</th></tr>
         ${list.map(s => `<tr><td>${s.numero}</td><td>${App.date(s.dataPedido)}</td>
         <td>${App.esc(App.clientName(s.clienteId, clients))}</td>
         <td>${s.itens.map(i => `${i.qtd}× ${App.esc(i.produto)} (${i.comando}, tucho ${i.tucho})`).join('; ')}</td>
-        <td class="num">R$ ${App.money(s.valorTotal)}</td><td>${App.date(s.previsaoEntrega)}</td>
+        ${verValores ? `<td class="num">R$ ${App.money(s.valorTotal)}</td>` : ''}<td>${App.date(s.previsaoEntrega)}</td>
         <td>${(App.STATUS[s.status] || [s.status])[0]}</td></tr>`).join('')}</table>`,
         list.length + ' pedido(s)');
     }

@@ -19,11 +19,14 @@ App.registerView('reports', async (view) => {
 
   const cname = id => App.clientName(id, clients);
   const stLabel = s => (App.STATUS[s] || [s])[0];
+  // Quem pode ver valores em R$ (Produção não pode)
+  const verValores = App.can('cashflow') || App.can('receivables') || App.can('payables') || App.can('finance_sensitive');
 
   /* Cada relatório: {grupo, nome, filtros aplicáveis, rows(), cols} */
   const REPORTS = {
     /* -------- produção -------- */
     prod_pendencias: {
+      ver: () => true,
       filtros: [],
       g: 'Produção', nome: '🔥 IMPRIMIR PENDÊNCIAS — tudo que precisa ser feito',
       rows: f => [].concat(
@@ -37,6 +40,7 @@ App.registerView('reports', async (view) => {
       cols: [['tipo', 'Tipo'], ['ref', 'Referência'], ['cliente', 'Cliente'], ['detalhe', 'O que fazer'], ['status', 'Status'], ['data', 'Data', 'date']]
     },
     prod_entradas: {
+      ver: () => App.can('entries'),
       filtros: ['de', 'ate', 'status', 'cliente'],
       g: 'Produção', nome: 'Cabeçotes de clientes (entradas)', temStatus: ['recebido', 'em_analise', 'aguardando_orcamento', 'orcado', 'aprovado', 'finalizado'],
       rows: f => entries.filter(e => byDate(f, e.dataChegada) && byStatus(f, e.status) && byClient(f, e.clienteId))
@@ -44,6 +48,7 @@ App.registerView('reports', async (view) => {
       cols: [['ref', 'ID'], ['data', 'Chegada', 'date'], ['cliente', 'Cliente'], ['modelo', 'Modelo'], ['problema', 'Problema'], ['status', 'Status']]
     },
     prod_os: {
+      ver: () => App.can('os'),
       filtros: ['status', 'cliente', 'resp'],
       g: 'Produção', nome: 'Serviços (OS) — em andamento / aguardando peças / não finalizados',
       temStatus: ['em_analise', 'em_andamento', 'aguardando_peca', 'finalizado', 'aguardando_pagamento'],
@@ -52,6 +57,7 @@ App.registerView('reports', async (view) => {
       cols: [['ref', 'OS'], ['cliente', 'Cliente'], ['modelo', 'Modelo'], ['servicos', 'Serviços'], ['resp', 'Responsável'], ['previsao', 'Previsão', 'date'], ['status', 'Status']]
     },
     prod_pedidos: {
+      ver: () => App.can('sales'),
       filtros: ['de', 'ate', 'status', 'cliente'],
       g: 'Produção', nome: 'Cabeçotes vendidos — pipeline de produção/entrega',
       temStatus: ['nao_produzido', 'preparacao', 'usinagem', 'montagem', 'pronto', 'enviado', 'entregue'],
@@ -61,8 +67,40 @@ App.registerView('reports', async (view) => {
           previsao: s.previsaoEntrega, status: stLabel(s.status) })),
       cols: [['ref', 'Pedido'], ['data', 'Data', 'date'], ['cliente', 'Cliente'], ['itens', 'Itens'], ['previsao', 'Previsão', 'date'], ['status', 'Status']]
     },
+    prod_producao: {
+      ver: () => App.can('production'),
+      filtros: ['status'],
+      g: 'Produção', nome: 'Ordens de produção — o que está na bancada',
+      temStatus: ['nao_produzido', 'preparacao', 'usinagem', 'montagem', 'pronto'],
+      rows: f => pos.filter(p => byStatus(f, p.status, ['nao_produzido', 'preparacao', 'usinagem', 'montagem']))
+        .map(p => ({ ref: 'Pedido ' + p.pedidoNumero, cliente: p.clienteNome, produto: p.produto,
+          comando: p.comando, tucho: (p.tucho || '') + ' mm', previsao: p.previsaoEntrega, status: stLabel(p.status) })),
+      cols: [['ref', 'Pedido'], ['cliente', 'Cliente'], ['produto', 'Configuração'], ['comando', 'Comando'],
+        ['tucho', 'Tucho'], ['previsao', 'Previsão', 'date'], ['status', 'Status']]
+    },
+    prod_servicos: {
+      ver: () => App.can('os'),
+      filtros: [],
+      g: 'Produção', nome: 'Serviços mais executados (volume)',
+      rows: f => {
+        const acc = {};
+        for (const o of oss) {
+          if (o.status === 'cancelado') continue;
+          for (const i of o.itens || []) {
+            const k = String(i.nome || '').trim() || '—';
+            acc[k] = acc[k] || { servico: k, vezes: 0, os: 0 };
+            acc[k].vezes += Number(i.qtd) || 1;
+            acc[k].os++;
+          }
+        }
+        return Object.values(acc).sort((a, b) => b.vezes - a.vezes);
+      },
+      cols: [['servico', 'Serviço'], ['os', 'Nº de OS', 'num'], ['vezes', 'Vezes executado', 'num']],
+      totais: ['os', 'vezes']
+    },
     /* -------- vendas -------- */
     vendas_periodo: {
+      ver: () => verValores,
       filtros: ['de', 'ate', 'cliente'],
       g: 'Vendas', nome: 'Vendas por período',
       rows: f => sales.filter(s => s.status !== 'cancelado' && byDate(f, s.dataPedido) && byClient(f, s.clienteId))
@@ -72,6 +110,7 @@ App.registerView('reports', async (view) => {
       totais: ['qtd', 'valor']
     },
     vendas_produto: {
+      ver: () => verValores,
       filtros: ['de', 'ate'],
       g: 'Vendas', nome: 'Vendas por produto / Stage / unilateral × fluxo cruzado',
       rows: f => {
@@ -90,6 +129,7 @@ App.registerView('reports', async (view) => {
       totais: ['qtd', 'valor']
     },
     vendas_regiao: {
+      ver: () => verValores,
       filtros: ['de', 'ate'],
       g: 'Vendas', nome: 'Vendas por estado / cidade',
       rows: f => {
@@ -107,6 +147,7 @@ App.registerView('reports', async (view) => {
     },
     /* -------- clientes -------- */
     clientes_aberto: {
+      ver: () => App.can('receivables'),
       filtros: [],
       g: 'Clientes', nome: 'Clientes com valores em aberto',
       rows: f => {
@@ -124,6 +165,7 @@ App.registerView('reports', async (view) => {
     },
     /* -------- financeiro -------- */
     fin_pagar: {
+      ver: () => App.can('payables'),
       filtros: [],
       g: 'Financeiro', nome: 'Contas a pagar em aberto',
       rows: f => payables.filter(p => p.status !== 'pago')
@@ -132,6 +174,7 @@ App.registerView('reports', async (view) => {
       totais: ['valor']
     },
     fin_receber: {
+      ver: () => App.can('receivables'),
       filtros: [],
       g: 'Financeiro', nome: 'Contas a receber em aberto',
       rows: f => receivables.filter(r => r.status === 'aberto' || r.status === 'vencida')
@@ -141,6 +184,7 @@ App.registerView('reports', async (view) => {
     },
     /* -------- fornecedores -------- */
     forn_gastos: {
+      ver: () => App.can('suppliers'),
       filtros: ['de', 'ate'],
       g: 'Fornecedores', nome: 'Gastos por fornecedor (compras + despesas de fechamento)',
       rows: f => {
@@ -165,6 +209,7 @@ App.registerView('reports', async (view) => {
     },
     /* -------- estoque -------- */
     estoque_posicao: {
+      ver: () => App.can('stock'),
       filtros: [],
       g: 'Estoque', nome: 'Posição de estoque próprio',
       rows: f => stockItems.map(i => ({ item: i.nome, categoria: i.categoria, qtd: i.qtd, minimo: i.minimo || 0,
@@ -172,6 +217,7 @@ App.registerView('reports', async (view) => {
       cols: [['item', 'Item'], ['categoria', 'Categoria'], ['qtd', 'Qtd', 'num'], ['minimo', 'Mínimo', 'num'], ['situacao', 'Situação']]
     },
     estoque_terceiros: {
+      ver: () => App.can('assets'),
       filtros: [],
       g: 'Estoque', nome: 'Bens de clientes na empresa',
       rows: f => assets.filter(a => a.status === 'na_empresa')
@@ -190,6 +236,8 @@ App.registerView('reports', async (view) => {
   if (App.can('suppliers')) App.cache.suppliers = await App.get('/suppliers');
 
   // 🔥 Pendências fica no Acesso Rápido; o restante entra no acordeão por grupo
+  // Só entram na lista os relatórios que o perfil pode ver
+  for (const [k, r] of Object.entries(REPORTS)) if (r.ver && !r.ver()) delete REPORTS[k];
   const groups = {};
   for (const [k, r] of Object.entries(REPORTS)) {
     if (k === 'prod_pendencias') continue;
