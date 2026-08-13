@@ -597,3 +597,37 @@ hr.sep { border: none; border-top: 1px solid var(--line-soft); margin: 14px 0; }
 .nav-group .chev { display: inline-block; transition: transform .15s ease; font-size: 9px; }
 .nav-group.open .chev { transform: rotate(90deg); }
 .nav-items.closed { display: none; }
+
+/* Estados vazios acolhedores */
+.empty-state {
+  text-align: center; padding: 44px 24px;
+  border: 1px dashed var(--line); border-radius: var(--radius);
+  background: var(--bg-2); color: var(--text-2);
+}
+.empty-state .es-ico {
+  width: 58px; height: 58px; margin: 0 auto 14px; border-radius: 50%;
+  background: var(--bg-3); border: 1px solid var(--line);
+  display: flex; align-items: center; justify-content: center; font-size: 26px;
+}
+.empty-state b { display: block; color: var(--text-1); font-size: 15px; margin-bottom: 6px; }
+.empty-state p { font-size: 13px; max-width: 420px; margin: 0 auto; }
+.empty-state .es-actions { margin-top: 16px; display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+
+/* Filtros por chip (RH e afins) */
+.chipbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 4px 0 12px; }
+.chipbar .chip {
+  background: var(--bg-2); border: 1px solid var(--line); color: var(--text-2);
+  border-radius: 999px; padding: 5px 13px; font-size: 12.5px; cursor: pointer;
+}
+.chipbar .chip:hover { color: var(--text-1); border-color: #33333a; }
+.chipbar .chip.active { background: var(--accent-dim); color: var(--accent-strong); border-color: rgba(228,49,70,.35); }
+.chipbar input {
+  background: var(--bg-2); border: 1px solid var(--line); color: var(--text-1);
+  border-radius: 999px; padding: 6px 14px; font-size: 13px; min-width: 210px; outline: none;
+}
+.chipbar input:focus { border-color: var(--accent); }
+
+/* Cartões de evento (assistência de pista) */
+.evento-card { margin-bottom: 12px; }
+.evento-card .ev-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; flex-wrap: wrap; }
+.evento-card .ev-head b { font-size: 14px; }

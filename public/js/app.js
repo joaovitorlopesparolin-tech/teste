@@ -244,6 +244,19 @@ const App = {
     w.document.close();
   },
 
+  /**
+   * Estado vazio amigável: ícone suave, explicação e o próximo passo
+   * como botão — quem bate o olho sabe o que fazer.
+   */
+  emptyState(ico, titulo, texto, acoesHtml) {
+    return `<div class="empty-state">
+      <div class="es-ico">${ico}</div>
+      <b>${this.esc(titulo)}</b>
+      <p>${texto}</p>
+      ${acoesHtml ? `<div class="es-actions">${acoesHtml}</div>` : ''}
+    </div>`;
+  },
+
   /* ---------------- WhatsApp ---------------- */
   /** Normaliza telefone brasileiro para o formato internacional do wa.me. */
   waPhone(raw) {
