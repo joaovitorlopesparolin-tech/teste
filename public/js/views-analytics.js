@@ -13,19 +13,21 @@ App.registerView('analytics', async (view) => {
     const cards = [];
     const fmt = v => 'R$ ' + App.money(v);
 
-    /* Faturamento mensal — vendas × serviços */
-    const cFat = Charts.card('Faturamento mensal', 'Vendas (data do pedido) e serviços (OS finalizadas)');
-    cards.push({ card: cFat, render: () => {
-      Charts.columns(document.getElementById(cFat.id), {
-        labels: d.faturamento.map(x => x.mes),
-        series: [
-          { name: 'Vendas de cabeçotes', color: C.blue, values: d.faturamento.map(x => x.vendas) },
-          { name: 'Serviços', color: C.orange, values: d.faturamento.map(x => x.servicos) }
-        ]
-      });
-      Charts.attachTable(cFat.id, ['Mês', 'Vendas', 'Serviços', 'Total'],
-        d.faturamento.map(x => [x.mes, fmt(x.vendas), fmt(x.servicos), fmt(x.vendas + x.servicos)]));
-    }});
+    /* Faturamento mensal — vendas × serviços (só chega para quem tem financeiro) */
+    if (d.faturamento) {
+      const cFat = Charts.card('Faturamento mensal', 'Vendas (data do pedido) e serviços (OS finalizadas)');
+      cards.push({ card: cFat, render: () => {
+        Charts.columns(document.getElementById(cFat.id), {
+          labels: d.faturamento.map(x => x.mes),
+          series: [
+            { name: 'Vendas de cabeçotes', color: C.blue, values: d.faturamento.map(x => x.vendas) },
+            { name: 'Serviços', color: C.orange, values: d.faturamento.map(x => x.servicos) }
+          ]
+        });
+        Charts.attachTable(cFat.id, ['Mês', 'Vendas', 'Serviços', 'Total'],
+          d.faturamento.map(x => [x.mes, fmt(x.vendas), fmt(x.servicos), fmt(x.vendas + x.servicos)]));
+      }});
+    }
 
     /* Fluxo de caixa — entradas × saídas */
     if (d.caixa) {
@@ -74,26 +76,34 @@ App.registerView('analytics', async (view) => {
       }});
     }
 
-    /* Vendas por produto — série única, rótulo direto no fim da barra */
+    /* Vendas por produto — com financeiro mostra faturamento; sem, quantidades */
     if (d.produtos) {
-      const c = Charts.card('Vendas por configuração', 'Faturamento no período — unilateral × fluxo cruzado, Stage 1–3');
+      const comValor = d.produtos.length && d.produtos[0].valor !== undefined;
+      const c = Charts.card('Vendas por configuração', comValor
+        ? 'Faturamento no período — unilateral × fluxo cruzado, Stage 1–3'
+        : 'Quantidade vendida no período — unilateral × fluxo cruzado, Stage 1–3');
       cards.push({ card: c, render: () => {
         Charts.hbar(document.getElementById(c.id), {
-          items: d.produtos.map(p => ({ label: p.produto, value: p.valor, sub: p.qtd + ' un.' })),
-          color: Charts.C.blue
+          items: d.produtos.map(p => comValor
+            ? { label: p.produto, value: p.valor, sub: p.qtd + ' un.' }
+            : { label: p.produto, value: p.qtd }),
+          color: Charts.C.blue, count: !comValor
         });
-        Charts.attachTable(c.id, ['Configuração', 'Qtd', 'Faturamento'],
-          d.produtos.map(p => [p.produto, String(p.qtd), fmt(p.valor)]));
+        Charts.attachTable(c.id, comValor ? ['Configuração', 'Qtd', 'Faturamento'] : ['Configuração', 'Qtd'],
+          d.produtos.map(p => comValor ? [p.produto, String(p.qtd), fmt(p.valor)] : [p.produto, String(p.qtd)]));
       }});
 
-      const c2 = Charts.card('Vendas por estado', 'Faturamento no período por UF do pedido');
+      const c2 = Charts.card('Vendas por estado', comValor
+        ? 'Faturamento no período por UF do pedido' : 'Cabeçotes vendidos no período por UF do pedido');
       cards.push({ card: c2, render: () => {
         Charts.hbar(document.getElementById(c2.id), {
-          items: d.estados.map(e => ({ label: e.uf, value: e.valor, sub: e.qtd + ' cabeçote(s)' })),
-          color: Charts.C.blue
+          items: d.estados.map(e => comValor
+            ? { label: e.uf, value: e.valor, sub: e.qtd + ' cabeçote(s)' }
+            : { label: e.uf, value: e.qtd }),
+          color: Charts.C.blue, count: !comValor
         });
-        Charts.attachTable(c2.id, ['UF', 'Cabeçotes', 'Faturamento'],
-          d.estados.map(e => [e.uf, String(e.qtd), fmt(e.valor)]));
+        Charts.attachTable(c2.id, comValor ? ['UF', 'Cabeçotes', 'Faturamento'] : ['UF', 'Cabeçotes'],
+          d.estados.map(e => comValor ? [e.uf, String(e.qtd), fmt(e.valor)] : [e.uf, String(e.qtd)]));
       }});
     }
 

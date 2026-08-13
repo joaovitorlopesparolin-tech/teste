@@ -27,7 +27,21 @@ App.registerView('dashboard', async (view) => {
         </li>`).join('')
     : '<div class="empty">Nenhuma pendência para você 🎉</div>';
 
-  view.innerHTML = `
+  /* O servidor só envia o bloco financeiro para quem pode ver —
+     a presença dele define qual painel renderizar. */
+  const financeiro = d.faturamentoMes !== undefined;
+
+  const pendenciasCard = `
+      <div class="card">
+        <h3>MINHAS PENDÊNCIAS</h3>
+        <ul style="list-style:none">${tasksHtml}</ul>
+        <div style="margin-top:10px"><a class="btn sm" href="#/tasks">Ver central de pendências →</a></div>
+      </div>`;
+  const printPend = App.can('reports')
+    ? `<a class="btn" href="#/reports" onclick="sessionStorage.setItem('jm_rep_quick','print')">🖨 Imprimir pendências da produção</a>` : '';
+
+  if (financeiro) {
+    view.innerHTML = `
     <div class="grid cols-4">
       ${kpi('Faturamento do mês', d.faturamentoMes, { money: true, hint: `Vendas: R$ ${App.money(d.vendasMes.valor)} · Serviços: R$ ${App.money(d.servicosMes.valor)}` })}
       ${kpi('Vendas do mês', d.vendasMes.qtd, { hint: 'pedidos registrados' })}
@@ -50,11 +64,7 @@ App.registerView('dashboard', async (view) => {
     <div class="grid cols-2" style="margin-top:14px" id="dash-charts"></div>
 
     <div class="grid cols-2" style="margin-top:14px">
-      <div class="card">
-        <h3>MINHAS PENDÊNCIAS</h3>
-        <ul style="list-style:none">${tasksHtml}</ul>
-        <div style="margin-top:10px"><a class="btn sm" href="#/tasks">Ver central de pendências →</a></div>
-      </div>
+      ${pendenciasCard}
       <div class="card">
         <h3>ATALHOS RÁPIDOS</h3>
         <div style="display:flex;flex-direction:column;gap:8px">
@@ -63,48 +73,90 @@ App.registerView('dashboard', async (view) => {
           ${App.can('sales') ? '<a class="btn" href="#/sales">🛒 Nova venda</a>' : ''}
           ${App.can('purchases') ? '<a class="btn" href="#/purchases">📥 Lançar compra</a>' : ''}
           ${App.can('payables') ? '<a class="btn" href="#/payables">↥ Agenda de pagamentos (sextas)</a>' : ''}
-          ${App.can('reports') ? '<a class="btn" href="#/reports">🖨 Imprimir pendências da produção</a>' : ''}
+          ${printPend}
         </div>
       </div>
     </div>`;
+  } else {
+    /* ---- Painel OPERACIONAL (Produção): sem nenhum valor em R$ ---- */
+    App.setTitle('Painel da produção', 'O que está na oficina e o que precisa ser feito — ' + new Date().toLocaleDateString('pt-BR'));
+    view.innerHTML = `
+    <div class="grid cols-4">
+      ${kpi('Vendas do mês', d.vendasMes.qtd, { hint: 'pedidos registrados' })}
+      ${kpi('Serviços do mês', d.servicosMes.qtd, { hint: 'OS finalizadas' })}
+      ${kpi('Bens de clientes', d.bensDeClientes, { hint: 'na empresa agora' })}
+      ${kpi('Orçamentos aguardando', d.orcamentosAguardando, { cls: d.orcamentosAguardando ? 'k-warn' : '', hint: 'aprovação do cliente' })}
+    </div>
+    <div class="grid cols-3" style="margin-top:14px">
+      ${kpi('Serviços em andamento', d.servicosAndamento)}
+      ${kpi('Cabeçotes aguardando produção', d.cabecotesAguardandoProducao, { cls: d.cabecotesAguardandoProducao ? 'k-warn' : '' })}
+      ${kpi('Pedidos não entregues', d.pedidosNaoEntregues, { hint: `${d.pedidosAguardandoEnvio} prontos aguardando envio` })}
+    </div>
 
-  /* Gráficos do dashboard (12 meses de faturamento + caixa/funil), com link para Análises */
+    <div style="margin-top:14px" id="dash-charts"></div>
+
+    <div class="grid cols-2" style="margin-top:14px">
+      ${pendenciasCard}
+      <div class="card">
+        <h3>ATALHOS RÁPIDOS</h3>
+        <div style="display:flex;flex-direction:column;gap:8px">
+          ${App.can('entries') ? '<a class="btn" href="#/entries">⬇ Registrar entrada de cabeçote</a>' : ''}
+          ${printPend}
+        </div>
+      </div>
+    </div>`;
+  }
+
+  /* Gráficos: financeiro vê faturamento + caixa; produção vê o funil em destaque */
   try {
     const a = await App.get('/analytics?meses=12');
     const C = Charts.C;
-    const c1 = Charts.card('Faturamento — últimos 12 meses', 'Vendas e serviços · veja mais em Análises');
-    const c2 = a.caixa
-      ? Charts.card('Fluxo de caixa — últimos 6 meses', 'Entradas × saídas efetivas')
-      : Charts.card('Funil da oficina', 'Cabeçotes de clientes por etapa');
-    document.getElementById('dash-charts').innerHTML = c1.html + c2.html;
+    const box = document.getElementById('dash-charts');
 
-    Charts.columns(document.getElementById(c1.id), {
-      labels: a.faturamento.map(x => x.mes),
-      series: [
-        { name: 'Vendas de cabeçotes', color: C.blue, values: a.faturamento.map(x => x.vendas) },
-        { name: 'Serviços', color: C.orange, values: a.faturamento.map(x => x.servicos) }
-      ], height: 220
-    });
-    Charts.attachTable(c1.id, ['Mês', 'Vendas', 'Serviços'],
-      a.faturamento.map(x => [x.mes, 'R$ ' + App.money(x.vendas), 'R$ ' + App.money(x.servicos)]));
+    if (a.faturamento) {
+      const c1 = Charts.card('Faturamento — últimos 12 meses', 'Vendas e serviços · veja mais em Análises');
+      const c2 = a.caixa
+        ? Charts.card('Fluxo de caixa — últimos 6 meses', 'Entradas × saídas efetivas')
+        : Charts.card('Funil da oficina', 'Cabeçotes de clientes por etapa');
+      box.innerHTML = c1.html + c2.html;
 
-    if (a.caixa) {
-      const last6 = a.caixa.slice(-6);
-      Charts.columns(document.getElementById(c2.id), {
-        labels: last6.map(x => x.mes),
+      Charts.columns(document.getElementById(c1.id), {
+        labels: a.faturamento.map(x => x.mes),
         series: [
-          { name: 'Entradas', color: C.blue, values: last6.map(x => x.entradas) },
-          { name: 'Saídas', color: C.red, values: last6.map(x => x.saidas) }
+          { name: 'Vendas de cabeçotes', color: C.blue, values: a.faturamento.map(x => x.vendas) },
+          { name: 'Serviços', color: C.orange, values: a.faturamento.map(x => x.servicos) }
         ], height: 220
       });
-      Charts.attachTable(c2.id, ['Mês', 'Entradas', 'Saídas'],
-        last6.map(x => [x.mes, 'R$ ' + App.money(x.entradas), 'R$ ' + App.money(x.saidas)]));
+      Charts.attachTable(c1.id, ['Mês', 'Vendas', 'Serviços'],
+        a.faturamento.map(x => [x.mes, 'R$ ' + App.money(x.vendas), 'R$ ' + App.money(x.servicos)]));
+
+      if (a.caixa) {
+        const last6 = a.caixa.slice(-6);
+        Charts.columns(document.getElementById(c2.id), {
+          labels: last6.map(x => x.mes),
+          series: [
+            { name: 'Entradas', color: C.blue, values: last6.map(x => x.entradas) },
+            { name: 'Saídas', color: C.red, values: last6.map(x => x.saidas) }
+          ], height: 220
+        });
+        Charts.attachTable(c2.id, ['Mês', 'Entradas', 'Saídas'],
+          last6.map(x => [x.mes, 'R$ ' + App.money(x.entradas), 'R$ ' + App.money(x.saidas)]));
+      } else if (a.funil) {
+        Charts.hbar(document.getElementById(c2.id), {
+          items: a.funil.map(f => ({ label: f.etapa, value: f.qtd })),
+          colors: C.ramp, count: true
+        });
+        Charts.attachTable(c2.id, ['Etapa', 'Quantidade'], a.funil.map(f => [f.etapa, String(f.qtd)]));
+      }
     } else if (a.funil) {
-      Charts.hbar(document.getElementById(c2.id), {
+      // Painel da produção: funil da oficina em destaque central, largura total
+      const c = Charts.card('🏁 Funil da oficina', 'Cabeçotes de clientes por etapa — situação agora');
+      box.innerHTML = c.html;
+      Charts.hbar(document.getElementById(c.id), {
         items: a.funil.map(f => ({ label: f.etapa, value: f.qtd })),
         colors: C.ramp, count: true
       });
-      Charts.attachTable(c2.id, ['Etapa', 'Quantidade'], a.funil.map(f => [f.etapa, String(f.qtd)]));
+      Charts.attachTable(c.id, ['Etapa', 'Quantidade'], a.funil.map(f => [f.etapa, String(f.qtd)]));
     }
   } catch (e) { /* sem permissão de analytics — dashboard segue sem gráficos */ }
 });
