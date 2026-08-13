@@ -145,24 +145,68 @@ function withOverdue(list) {
   });
 }
 
-/** Gera lembretes/pendências mensais das contas recorrentes (COPEL, Sanepar, consórcio...). */
+/**
+ * Sugere um responsável: primeiro usuário ativo cujo perfil tem a permissão
+ * pedida (preferindo perfis específicos — Financeiro, Produção — antes do
+ * Administrador, que fica como último recurso).
+ */
+function suggestAssignee(perm) {
+  const roles = db.all('roles');
+  const users = db.all('users').filter(u => u.active);
+  const roleOf = u => roles.find(r => r.id === u.roleId);
+  const specific = users.find(u => {
+    const r = roleOf(u);
+    return r && r.permissions.includes(perm) && !r.permissions.includes('admin');
+  });
+  if (specific) return specific.id;
+  const admin = users.find(u => {
+    const r = roleOf(u);
+    return r && r.permissions.includes('admin');
+  });
+  return admin ? admin.id : null;
+}
+
+/**
+ * Avisos das contas recorrentes (COPEL, Sanepar, consórcio…):
+ * a pendência nasce alguns dias ANTES do vencimento (padrão 4, configurável
+ * por conta), já com dono sugerido (perfil financeiro) e link do site.
+ * A baixa é automática quando o boleto do mês é cadastrado em Contas a pagar.
+ */
 function ensureRecurringTasks() {
-  const month = domain.today().slice(0, 7);
+  const hoje = domain.today();
+  const nextM = new Date(hoje + 'T12:00:00');
+  nextM.setMonth(nextM.getMonth() + 1);
+  const meses = [hoje.slice(0, 7), nextM.toISOString().slice(0, 7)];
   for (const rec of db.all('recurring').filter(r => r.ativo)) {
-    const exists = db.all('tasks').some(t => t.recurringId === rec.id && t.refMonth === month);
-    if (!exists) {
+    const aviso = Number(rec.diasAviso) || 4;
+    for (const month of meses) {
+      const due = `${month}-${String(rec.diaVencimento || 10).padStart(2, '0')}`;
+      if (domain.addDays(due, -aviso) > hoje) continue;   // ainda é cedo para avisar
+      if (due < domain.addDays(hoje, -45)) continue;      // vencimento antigo demais
+      if (db.all('tasks').some(t => t.recurringId === rec.id && t.refMonth === month)) continue;
       db.insert('tasks', {
-        titulo: `Emitir/retirar boleto — ${rec.nome}`,
+        titulo: `Pagar/emitir boleto — ${rec.nome} (vence dia ${rec.diaVencimento || 10})`,
         descricao: rec.instrucao || '',
         prioridade: 'urgente',
-        assigneeId: null,
+        assigneeId: suggestAssignee('payables'),
         status: 'aberta',
         recurringId: rec.id,
         refMonth: month,
-        due: `${month}-${String(rec.diaVencimento || 10).padStart(2, '0')}`,
+        due,
+        link: rec.link || '',
         origem: 'conta recorrente'
       });
     }
+  }
+}
+
+/** Cadastrou o boleto do mês em Contas a pagar → a pendência se conclui sozinha. */
+function completeRecurringTask(recurringId, vencimento) {
+  if (!recurringId) return;
+  const month = String(vencimento || '').slice(0, 7);
+  for (const t of db.all('tasks').filter(t =>
+    t.recurringId === Number(recurringId) && t.status === 'aberta' && (!month || t.refMonth <= month))) {
+    db.update('tasks', t.id, { status: 'concluida', concluidaEm: domain.today(), origem: 'conta recorrente · baixa automática' });
   }
 }
 
@@ -1093,7 +1137,7 @@ route('POST', '/api/quotes/:id/approve', 'quotes', async (req, res, user, params
     valorTotal: q.total,
     status: 'em_analise',
     previsaoEntrega: b.previsaoEntrega || q.previsaoEntrega || '',
-    responsavelId: b.responsavelId || null,
+    responsavelId: b.responsavelId || suggestAssignee('production'),
     dataFinalizacao: null,
     pagamentoStatus: 'pendente',
     nfRetorno: '', envioStatus: 'na_empresa',
@@ -1244,7 +1288,7 @@ route('POST', '/api/sales', 'sales', async (req, res, user) => {
         productId: item.productId, produto: item.produto,
         tipo: item.tipo, stage: item.stage, comando: item.comando, tucho: item.tucho,
         checklist: domain.productionChecklist(item.tipo, item.stage, item.comando, item.tucho),
-        status: 'nao_produzido', responsavelId: null,
+        status: 'nao_produzido', responsavelId: suggestAssignee('production'),
         previsaoEntrega: sale.previsaoEntrega
       });
     }
@@ -1505,8 +1549,9 @@ route('POST', '/api/payables', 'payables', async (req, res, user) => {
     tipoPagamento: imediato ? 'imediato' : 'programado',
     dataProgramada: imediato ? (b.data || domain.today()) : domain.previousFriday(b.vencimento),
     status: 'aberto', documento: b.documento || '', observacoes: b.observacoes || '',
-    recurringId: b.recurringId || null
+    recurringId: b.recurringId ? Number(b.recurringId) : null
   });
+  completeRecurringTask(rec.recurringId, rec.vencimento); // dá baixa na pendência do mês
   audit(user, 'criou', 'payables', rec.id, `${rec.descricao} — R$ ${rec.valor.toFixed(2)} (venc. ${rec.vencimento}, pgto ${rec.dataProgramada})`);
   // Pagamento imediato já sai do caixa na data em que ocorreu.
   if (imediato && b.pagarAgora) {

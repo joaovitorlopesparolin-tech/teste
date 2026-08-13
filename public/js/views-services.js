@@ -444,9 +444,8 @@ App.registerView('os', async (view) => {
     const f = document.getElementById('osf').value;
     const list = oss.filter(o => !f || o.status === f);
     document.getElementById('os-table').innerHTML = App.table(list, [
-      { h: 'OS', cell: o => `<b>nº ${o.numero}</b><div class="small muted">${App.esc(o.identificacao || '')}</div>` },
-      { h: 'Cliente', cell: o => App.esc(App.clientName(o.clienteId, clients)) },
-      { h: 'Modelo', cell: o => App.esc(o.modelo || '—') },
+      { h: 'OS / Cliente', cell: o => `<b>OS ${o.numero} — ${App.esc(App.clientName(o.clienteId, clients))}</b>
+        <div class="small muted">${[o.identificacao, o.modelo].filter(Boolean).map(x => App.esc(x)).join(' · ') || '—'}</div>` },
       { h: 'Serviços', cell: o => `<span class="small">${(o.itens || []).slice(0, 3).map(i => App.esc(i.nome)).join(', ')}${o.itens.length > 3 ? '…' : ''}</span>` },
       { h: 'Valor', class: 'num', cell: o => App.moneyHtml(o.valorTotal) },
       { h: 'Previsão', cell: o => App.date(o.previsaoEntrega) },

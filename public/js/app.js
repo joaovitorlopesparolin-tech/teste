@@ -453,24 +453,23 @@ const App = {
   },
 
   /* ---------------- Layout / navegação ---------------- */
+  /* Organizado por frequência de uso: o dia a dia fica no topo, sempre à
+     mão; os módulos gerenciais ficam em grupos recolhíveis. */
   NAV: [
-    ['Visão geral', [
+    ['Dia a dia', [
       ['dashboard', 'Dashboard', '◧', 'dashboard'],
-      ['analytics', 'Análises', '📊', 'dashboard'],
-      ['tasks', 'Minhas pendências', '☑', 'tasks']
+      ['tasks', 'Minhas pendências', '☑', 'tasks'],
+      ['entries', 'Entrada de cabeçotes', '⬇', 'entries'],
+      ['os', 'Ordens de serviço', '🔧', 'os'],
+      ['sales', 'Vendas / Pedidos', '🛒', 'sales']
     ]],
     ['Comercial', [
       ['clients', 'Clientes', '👤', 'clients'],
-      ['quotes', 'Orçamentos', '📄', 'quotes'],
-      ['sales', 'Vendas / Pedidos', '🛒', 'sales']
+      ['quotes', 'Orçamentos', '📄', 'quotes']
     ]],
-    ['Oficina', [
-      ['entries', 'Entrada de cabeçotes', '⬇', 'entries'],
+    ['Oficina e materiais', [
+      ['production', 'Produção', '⚙', 'production'],
       ['assets', 'Bens de clientes', '🔒', 'assets'],
-      ['os', 'Ordens de serviço', '🔧', 'os'],
-      ['production', 'Produção', '⚙', 'production']
-    ]],
-    ['Materiais', [
       ['stock', 'Estoque próprio', '▦', 'stock'],
       ['products', 'Produtos e custos', '◈', 'products'],
       ['purchases', 'Compras', '📥', 'purchases'],
@@ -484,11 +483,31 @@ const App = {
       ['dre', 'DRE / Resultado', 'Σ', 'dre']
     ]],
     ['Gestão', [
+      ['analytics', 'Análises', '📊', 'dashboard'],
       ['hr', 'RH', '👥', 'hr'],
       ['reports', 'Relatórios', '🖨', 'reports'],
       ['admin', 'Administração', '⚙', 'admin']
     ]]
   ],
+
+  /* Grupos abertos/recolhidos no menu lateral (preferência por navegador) */
+  NAV_DEFAULT_OPEN: ['Dia a dia', 'Comercial'],
+  navState() {
+    try { return JSON.parse(localStorage.getItem('jm_nav_open') || '{}'); } catch (e) { return {}; }
+  },
+  navIsOpen(group) {
+    const s = this.navState();
+    return s[group] !== undefined ? s[group] : this.NAV_DEFAULT_OPEN.includes(group);
+  },
+  toggleNavGroup(group) {
+    const s = this.navState();
+    s[group] = !this.navIsOpen(group);
+    localStorage.setItem('jm_nav_open', JSON.stringify(s));
+    const el = document.querySelector(`.nav-items[data-g="${CSS.escape(group)}"]`);
+    const head = document.querySelector(`.nav-group[data-g="${CSS.escape(group)}"]`);
+    if (el) el.classList.toggle('closed', !s[group]);
+    if (head) head.classList.toggle('open', s[group]);
+  },
 
   layoutMode() { return localStorage.getItem('jm_layout') === 'top' ? 'top' : 'side'; },
   toggleLayout() {
@@ -505,10 +524,15 @@ const App = {
 
   renderLayout() {
     const groups = this.visibleNav();
-    const nav = groups.map(([group, items]) =>
-      `<div class="nav-group">${group}</div>` + items.map(([route, label, ico]) =>
-        `<a href="#/${route}" data-route="${route}"><span class="ico">${ico}</span>${label}</a>`).join('')
-    ).join('');
+    const nav = groups.map(([group, items]) => {
+      const open = this.navIsOpen(group);
+      return `<div class="nav-group toggle ${open ? 'open' : ''}" data-g="${this.esc(group)}"
+          onclick="App.toggleNavGroup('${this.esc(group)}')"><span class="chev">▸</span>${group}</div>
+        <div class="nav-items ${open ? '' : 'closed'}" data-g="${this.esc(group)}">` +
+        items.map(([route, label, ico]) =>
+          `<a href="#/${route}" data-route="${route}"><span class="ico">${ico}</span>${label}</a>`).join('') +
+        '</div>';
+    }).join('');
 
     const top = this.layoutMode() === 'top';
     // Ribbon estilo Revit: abas = grupos; faixa = páginas do grupo ativo
@@ -592,6 +616,13 @@ const App = {
     const [name, ...args] = hash.split('/');
     document.querySelectorAll('.nav a').forEach(a =>
       a.classList.toggle('active', a.dataset.route === name));
+    // o grupo da página atual fica sempre visível; os demais respeitam a preferência
+    document.querySelectorAll('.nav-items').forEach(el => {
+      const aberto = !!el.querySelector('a.active') || this.navIsOpen(el.dataset.g);
+      el.classList.toggle('closed', !aberto);
+      const head = document.querySelector(`.nav-group[data-g="${CSS.escape(el.dataset.g || '')}"]`);
+      if (head) head.classList.toggle('open', aberto);
+    });
     if (this.layoutMode() === 'top') this.syncRibbon(name);
     document.getElementById('sidebar').classList.remove('open');
     const fn = this.views[name] || this.views.dashboard;
