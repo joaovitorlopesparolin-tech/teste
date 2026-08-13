@@ -147,7 +147,7 @@ App.registerView('admin', async (view) => {
 
   /* ---------- configurações ---------- */
   async function renderSettings(el) {
-    const [s, bk] = await Promise.all([App.get('/settings'), App.get('/backup/status')]);
+    const [s, bk, net] = await Promise.all([App.get('/settings'), App.get('/backup/status'), App.get('/network')]);
     const provider = s.aiProvider || 'gemini';
     const lastBk = bk.cloud.last;
     const bkStatus = !bk.cloud.dir
@@ -218,6 +218,26 @@ App.registerView('admin', async (view) => {
         <p class="small muted" style="margin-top:10px"><b>Para restaurar:</b> instale o sistema em qualquer computador,
         pegue o arquivo <span class="mono">jaques-backup-….json</span> mais recente na nuvem, renomeie para
         <span class="mono">db.json</span> e coloque na pasta <span class="mono">data</span> do sistema (com ele parado).</p>
+      </div>
+
+      <div class="card" style="max-width:560px;margin-top:16px">
+        <h3>📱 ACESSO PELO CELULAR</h3>
+        ${net.ips.length ? `
+        <p class="small muted" style="margin-bottom:12px">No celular (ou em outro computador) conectado ao
+        <b>mesmo Wi-Fi</b> da oficina, aponte a câmera para o código abaixo — o sistema abre no navegador,
+        com os <b>mesmos dados, em tempo real</b>. Cada pessoa entra com o próprio usuário e senha.</p>
+        <div style="display:flex;gap:18px;align-items:center;flex-wrap:wrap">
+          <div style="border-radius:10px;overflow:hidden;flex:none">${QR.svg(`http://${net.ips[0]}:${net.port}`, 168)}</div>
+          <div style="min-width:200px">
+            <div class="small muted">Endereço do sistema nesta rede:</div>
+            <div class="mono" style="font-size:16px;margin:6px 0 10px;color:var(--text-1)">http://${App.esc(net.ips[0])}:${net.port}</div>
+            ${net.ips.length > 1 ? `<div class="small muted">Se não abrir, tente: ${net.ips.slice(1).map(ip => `<span class="mono">http://${App.esc(ip)}:${net.port}</span>`).join(' · ')}</div>` : ''}
+          </div>
+        </div>
+        <p class="small muted" style="margin-top:12px"><b>Não abriu no celular?</b> É o firewall do Windows bloqueando.
+        Na pasta do sistema, dê dois cliques em <b>LIBERAR NO CELULAR.bat</b> uma única vez (clique em “Sim” quando o
+        Windows pedir permissão) e tente de novo. Vale só para aparelhos do mesmo Wi-Fi — de fora da oficina ninguém acessa.</p>`
+        : '<p class="small muted">Não encontrei o computador conectado a uma rede. Conecte no Wi-Fi ou cabo de rede e recarregue esta tela.</p>'}
       </div>`;
     document.getElementById('cfg-ai-provider').addEventListener('change', e => {
       document.getElementById('cfg-ai-model').placeholder =
