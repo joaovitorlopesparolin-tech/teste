@@ -774,6 +774,38 @@ route('POST', '/api/backup/now', 'admin', async (req, res, user) => {
   ok(res, r);
 });
 
+/* ---- pendências: individuais por padrão ---- */
+/* Cada um recebe as SUAS pendências, as sem dono (pode assumir) e as que
+   ele mesmo delegou a outros. Só quem tem 'admin' enxerga o quadro da
+   equipe inteira. */
+route('GET', '/api/tasks', 'tasks', async (req, res, user) => {
+  let list = db.all('tasks');
+  if (!can(user, 'admin')) {
+    list = list.filter(t => !t.assigneeId || t.assigneeId === user.id || t.criadoPorId === user.id);
+  }
+  ok(res, list);
+});
+
+route('POST', '/api/tasks', 'tasks', async (req, res, user) => {
+  const b = await readBody(req);
+  if (!b.titulo || !String(b.titulo).trim()) return bad(res, 'Dê um título à pendência');
+  const rec = db.insert('tasks', {
+    titulo: String(b.titulo).slice(0, 200),
+    descricao: String(b.descricao || '').slice(0, 600),
+    prioridade: ['urgente', 'semana', 'normal', 'aguardando'].includes(b.prioridade) ? b.prioridade : 'normal',
+    assigneeId: b.assigneeId ? Number(b.assigneeId) : null,
+    due: b.due || '',
+    link: String(b.link || '').slice(0, 300),
+    origem: String(b.origem || 'manual').slice(0, 60),
+    status: 'aberta',
+    criadoPorId: user.id,
+    criadoPorNome: user.name
+  });
+  const paraQuem = rec.assigneeId ? (db.get('users', rec.assigneeId) || {}).name : null;
+  audit(user, 'criou', 'tasks', rec.id, rec.titulo + (paraQuem ? ` → atribuída a ${paraQuem}` : ''));
+  ok(res, rec);
+});
+
 /* ---- assistente de IA ---- */
 
 /**

@@ -170,22 +170,55 @@ App.registerView('tasks', async (view) => {
   const PRIO = { urgente: 'URGENTE', semana: 'ESTA SEMANA', aguardando: 'AGUARDANDO', normal: 'NORMAL' };
   const open = tasks.filter(t => t.status === 'aberta');
   const done = tasks.filter(t => t.status === 'concluida').slice(-15).reverse();
+  const isAdmin = App.can('admin');
+  const me = App.user.id;
+
+  /* Pendência é individual: a visão padrão é "Minhas". */
+  let visao = 'minhas';
+  const daVisao = t =>
+    visao === 'minhas' ? t.assigneeId === me :
+    visao === 'semdono' ? !t.assigneeId :
+    true; // 'todas' — admin: equipe inteira; demais: tudo que o servidor entrega (suas + sem dono + delegadas)
+
+  const quemAtribuiu = t => t.criadoPorId && t.criadoPorId !== t.assigneeId && t.origem !== 'conta recorrente'
+    ? `<div class="small muted">atribuída por ${App.esc(t.criadoPorNome || App.userName(t.criadoPorId))}</div>` : '';
 
   const section = (key) => {
-    const list = open.filter(t => (t.prioridade || 'normal') === key)
+    const list = open.filter(daVisao).filter(t => (t.prioridade || 'normal') === key)
       .sort((a, b) => (a.due || '9999') < (b.due || '9999') ? -1 : 1);
     if (!list.length) return '';
     return `<div class="section-title">${PRIO[key]}</div>` + App.table(list, [
-      { h: 'Tarefa', cell: t => `<b>${App.esc(t.titulo)}</b><div class="small muted">${App.esc(t.descricao || '')}</div>` },
+      { h: 'Tarefa', cell: t => `<b>${App.esc(t.titulo)}</b><div class="small muted">${App.esc(t.descricao || '')}</div>${quemAtribuiu(t)}` },
       { h: 'Responsável', cell: t => t.assigneeId ? App.esc(App.userName(t.assigneeId)) : '<span class="badge warn">sem dono</span>' },
       { h: 'Prazo', cell: t => t.due ? `<span class="${t.due < App.today() ? 'neg' : ''}">${App.date(t.due)}</span>` : '—' },
       { h: 'Origem', cell: t => `<span class="small muted">${App.esc(t.origem || 'manual')}</span>` },
       { h: '', class: 'num', cell: t => `
+        ${!t.assigneeId ? `<button class="btn sm" onclick="Tasks.assumir(${t.id})" title="Assumir esta pendência">✋ Assumir</button>` : ''}
         ${t.link ? `<a class="btn sm ghost" target="_blank" href="${App.esc(t.link)}" title="Abrir o site para emitir/pagar">🌐 Site</a>` : ''}
         ${t.recurringId && App.can('payables') ? `<button class="btn sm ghost" onclick="Tasks.boleto(${t.id})" title="Cadastrar o boleto em Contas a pagar (dá baixa nesta pendência)">💳 Cadastrar boleto</button>` : ''}
         <button class="btn sm" onclick="Tasks.complete(${t.id})">✓ Concluir</button>
         <button class="btn sm ghost" onclick="Tasks.edit(${t.id})">Editar</button>` }
     ]);
+  };
+
+  const render = () => {
+    const n = { minhas: open.filter(t => t.assigneeId === me).length, semdono: open.filter(t => !t.assigneeId).length, todas: open.length };
+    document.getElementById('tasks-body').innerHTML = `
+      <div class="chipbar">
+        <button class="chip ${visao === 'minhas' ? 'active' : ''}" data-v="minhas">👤 Minhas (${n.minhas})</button>
+        <button class="chip ${visao === 'semdono' ? 'active' : ''}" data-v="semdono">✋ Sem dono (${n.semdono})</button>
+        <button class="chip ${visao === 'todas' ? 'active' : ''}" data-v="todas">${isAdmin ? '👥 Equipe toda' : '📋 Tudo que vejo'} (${n.todas})</button>
+      </div>
+      ${section('urgente')}${section('semana')}${section('normal')}${section('aguardando')}
+      ${!open.filter(daVisao).length ? App.emptyState('☑', visao === 'minhas' ? 'Nenhuma pendência sua 🎉' : 'Nada por aqui',
+        visao === 'minhas' ? 'Quando alguém atribuir uma tarefa a você (ou você criar uma), ela aparece aqui e no seu dashboard.' : 'Nenhuma pendência nesta visão.',
+        `<button class="btn primary" onclick="Tasks.edit()">+ Nova pendência</button>`) : ''}
+      ${done.length ? `<div class="section-title muted">Concluídas recentemente</div>` + App.table(done, [
+        { h: 'Tarefa', cell: t => App.esc(t.titulo) },
+        { h: 'Responsável', cell: t => App.esc(App.userName(t.assigneeId)) },
+        { h: 'Status', cell: t => App.badge('concluida') }
+      ]) : ''}`;
+    document.querySelectorAll('#tasks-body .chip').forEach(b => b.onclick = () => { visao = b.dataset.v; render(); });
   };
 
   view.innerHTML = `
@@ -194,16 +227,16 @@ App.registerView('tasks', async (view) => {
       <div class="spacer"></div>
       <button class="btn" onclick="Tasks.print()">🖨️ Imprimir</button>
     </div>
-    ${section('urgente')}${section('semana')}${section('normal')}${section('aguardando')}
-    ${open.length === 0 ? '<div class="card"><div class="empty">Nenhuma pendência aberta</div></div>' : ''}
-    ${done.length ? `<div class="section-title muted">Concluídas recentemente</div>` + App.table(done, [
-      { h: 'Tarefa', cell: t => App.esc(t.titulo) },
-      { h: 'Responsável', cell: t => App.esc(App.userName(t.assigneeId)) },
-      { h: 'Status', cell: t => App.badge('concluida') }
-    ]) : ''}`;
+    <div id="tasks-body"></div>`;
+  render();
 
   window.Tasks = {
     _all: tasks,
+    async assumir(id) {
+      await App.put('/tasks/' + id, { assigneeId: App.user.id });
+      App.toast('Pendência assumida por você', 'ok');
+      App.route();
+    },
     async complete(id) {
       await App.put('/tasks/' + id, { status: 'concluida', concluidaEm: App.today() });
       App.toast('Pendência concluída', 'ok');
@@ -257,10 +290,11 @@ App.registerView('tasks', async (view) => {
       }
     },
     print() {
-      const rows = open.map(t => `<tr><td>${PRIO[t.prioridade || 'normal']}</td><td>${App.esc(t.titulo)}</td>
+      const list = open.filter(daVisao);
+      const rows = list.map(t => `<tr><td>${PRIO[t.prioridade || 'normal']}</td><td>${App.esc(t.titulo)}</td>
         <td>${App.esc(t.descricao || '')}</td><td>${App.esc(App.userName(t.assigneeId))}</td><td>${App.date(t.due)}</td></tr>`).join('');
       App.print('Pendências em aberto', `<table><tr><th>Prioridade</th><th>Tarefa</th><th>Descrição</th><th>Responsável</th><th>Prazo</th></tr>${rows}</table>`,
-        open.length + ' pendência(s)');
+        list.length + ' pendência(s)');
     }
   };
 });
