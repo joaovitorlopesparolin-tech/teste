@@ -631,3 +631,50 @@ hr.sep { border: none; border-top: 1px solid var(--line-soft); margin: 14px 0; }
 .evento-card { margin-bottom: 12px; }
 .evento-card .ev-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; flex-wrap: wrap; }
 .evento-card .ev-head b { font-size: 14px; }
+
+/* Central de relatórios — acesso rápido, acordeão e estados dos filtros */
+.rep-quick {
+  border-left: 3px solid var(--accent);
+  background: linear-gradient(135deg, rgba(192,24,43,.08), var(--bg-2) 55%);
+}
+.rep-quick .rq-label {
+  font-size: 10px; letter-spacing: 1.6px; color: var(--accent-strong);
+  font-weight: 700; margin-bottom: 10px;
+}
+.rep-ghead {
+  width: 100%; text-align: left; display: flex; align-items: center; gap: 8px;
+  background: none; border: none; cursor: pointer;
+  color: var(--text-2); font-size: 11px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 1.4px;
+  padding: 9px 6px; border-radius: 6px;
+}
+.rep-ghead:hover { color: var(--text-1); background: var(--bg-3); }
+.rep-ghead .chev { transition: transform .15s ease; font-size: 9px; }
+.rep-ghead.open .chev { transform: rotate(90deg); }
+.rep-ghead .rg-count {
+  margin-left: auto; background: var(--bg-3); border: 1px solid var(--line);
+  border-radius: 999px; padding: 0 8px; font-size: 10.5px; color: var(--text-3);
+}
+.rep-gitems { padding: 2px 0 6px; }
+.rep-gitems.closed { display: none; }
+.rep-item {
+  display: block; width: 100%; text-align: left;
+  background: none; border: none; border-left: 3px solid transparent;
+  color: var(--text-2); font-size: 13px; cursor: pointer;
+  padding: 7px 10px; border-radius: 0 8px 8px 0; margin: 1px 0;
+}
+.rep-item:hover { background: var(--bg-3); color: var(--text-1); }
+.rep-item.active {
+  border-left-color: var(--accent);
+  background: var(--accent-dim); color: var(--accent-strong); font-weight: 600;
+}
+
+/* filtros: aplicável × não aplicável × ativo */
+.field.dim { opacity: .38; }
+.field.filtro-on input, .field.filtro-on select { border-color: var(--accent); }
+.field.filtro-on > span::after {
+  content: ' ●'; color: var(--accent-strong); font-size: 9px; vertical-align: 2px;
+}
+.rep-after {
+  display: flex; align-items: center; gap: 8px; margin-top: 12px; flex-wrap: wrap;
+}
