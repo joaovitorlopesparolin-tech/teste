@@ -147,8 +147,16 @@ App.registerView('admin', async (view) => {
 
   /* ---------- configurações ---------- */
   async function renderSettings(el) {
-    const s = await App.get('/settings');
+    const [s, bk] = await Promise.all([App.get('/settings'), App.get('/backup/status')]);
     const provider = s.aiProvider || 'gemini';
+    const lastBk = bk.cloud.last;
+    const bkStatus = !bk.cloud.dir
+      ? '<span class="badge warn">não configurado</span> <span class="muted">— os backups ficam só neste computador</span>'
+      : lastBk
+        ? (lastBk.ok
+          ? `<span style="color:var(--ok)">✓ Último backup na nuvem: ${App.dateTime(lastBk.at)}</span><div class="muted small">${App.esc(lastBk.file)}</div>`
+          : `<span style="color:var(--danger)">✗ Última tentativa falhou (${App.dateTime(lastBk.at)}): ${App.esc(lastBk.error || '')}</span>`)
+        : '<span class="muted">configurado — o primeiro backup sai no próximo ciclo</span>';
     el.innerHTML = `
       <div class="card" style="max-width:560px">
         <h3>CONFIGURAÇÕES GERAIS</h3>
@@ -183,6 +191,33 @@ App.registerView('admin', async (view) => {
         <div id="cfg-ai-result" class="small" style="margin-top:10px"></div>
         <p class="small muted" style="margin-top:10px">Onde obter a chave — Gemini: <b>aistudio.google.com</b>
         (botão “Get API key”, plano gratuito disponível) · Claude: <b>console.anthropic.com</b>.</p>
+      </div>
+
+      <div class="card" style="max-width:560px;margin-top:16px">
+        <h3>☁ BACKUP NA NUVEM</h3>
+        <p class="small muted" style="margin-bottom:12px">Todo dia o sistema já guarda uma cópia dos dados neste
+        computador (${bk.local.arquivos} cópia(s) em <span class="mono">data/backups</span>). Aponte abaixo uma pasta
+        sincronizada — <b>Google Drive para Computador</b>, <b>OneDrive</b> ou Dropbox — e a cópia diária também vai
+        para a nuvem. Se este computador quebrar, os dados estão salvos.</p>
+        ${bk.sugestoes.length ? `
+        <div class="small muted" style="margin-bottom:4px">Pastas de nuvem encontradas neste computador — clique para usar:</div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px">
+          ${bk.sugestoes.map(p => `<button class="btn sm" onclick="Adm.useBackupDir(this.dataset.p)" data-p="${App.esc(p)}">📁 ${App.esc(p)}</button>`).join('')}
+        </div>` : `
+        <p class="small muted">Nenhuma pasta de nuvem encontrada automaticamente. Instale o
+        <b>Google Drive para Computador</b> (google.com/drive/download) ou ative o OneDrive do Windows,
+        e digite o caminho da pasta abaixo.</p>`}
+        <label class="field"><span>Pasta do backup na nuvem</span>
+          <input id="cfg-bk-dir" value="${App.esc(bk.cloud.dir)}" placeholder="ex.: G:\\Meu Drive\\Backup Jaques Motorsport"></label>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn primary" onclick="Adm.saveBackup()">Salvar backup</button>
+          <button class="btn" onclick="Adm.backupNow()">💾 Fazer backup agora</button>
+          ${bk.cloud.dir ? '<button class="btn ghost" onclick="Adm.clearBackup()">Desativar</button>' : ''}
+        </div>
+        <div class="small" style="margin-top:10px">${bkStatus}</div>
+        <p class="small muted" style="margin-top:10px"><b>Para restaurar:</b> instale o sistema em qualquer computador,
+        pegue o arquivo <span class="mono">jaques-backup-….json</span> mais recente na nuvem, renomeie para
+        <span class="mono">db.json</span> e coloque na pasta <span class="mono">data</span> do sistema (com ele parado).</p>
       </div>`;
     document.getElementById('cfg-ai-provider').addEventListener('change', e => {
       document.getElementById('cfg-ai-model').placeholder =
@@ -206,6 +241,26 @@ App.registerView('admin', async (view) => {
       });
       if (window.Assistant) Assistant.status = null; // relê o status na próxima abertura
       App.toast('Assistente salvo', 'ok');
+      renderSettings(el);
+    };
+    Adm.useBackupDir = (p) => { document.getElementById('cfg-bk-dir').value = p; };
+    Adm.saveBackup = async () => {
+      try {
+        await App.put('/settings', { backupDir: document.getElementById('cfg-bk-dir').value.trim() });
+        App.toast('Backup na nuvem configurado — primeira cópia feita agora', 'ok');
+        renderSettings(el);
+      } catch (e) { App.toast(e.message, 'err'); }
+    };
+    Adm.clearBackup = async () => {
+      if (!await App.confirm('Desativar o backup na nuvem? Os backups continuam sendo feitos neste computador.')) return;
+      await App.put('/settings', { backupDir: '' });
+      App.toast('Backup na nuvem desativado', 'ok');
+      renderSettings(el);
+    };
+    Adm.backupNow = async () => {
+      const r = await App.post('/backup/now', {});
+      if (r.ok) App.toast('Backup feito: ' + r.file, 'ok');
+      else App.toast(r.naoConfigurado ? 'Backup local feito. Configure a pasta da nuvem para copiar para o Drive.' : 'Falhou: ' + (r.error || ''), r.naoConfigurado ? 'ok' : 'err');
       renderSettings(el);
     };
     Adm.testAI = async () => {

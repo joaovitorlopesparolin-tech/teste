@@ -40,6 +40,13 @@ Os dados ficam em `data/db.json` (criado automaticamente, fora do controle de
 versão), com backup diário automático em `data/backups/`. Para recomeçar do
 zero: `npm run seed`.
 
+**Backup na nuvem (Google Drive/OneDrive):** em *Administração → Configurações →
+Backup na nuvem*, aponte uma pasta sincronizada (o sistema detecta as pastas do
+Google Drive para Computador, OneDrive e Dropbox sozinho) — a cópia diária dos
+dados também vai para lá e o aplicativo de sincronização sobe para a nuvem.
+Para restaurar: copie o `jaques-backup-….json` mais recente para `data/db.json`
+com o sistema parado.
+
 > **Para usar na empresa:** veja o guia completo de implantação em
 > **[DEPLOY.md](DEPLOY.md)** — computador da oficina (rede local) ou servidor
 > na nuvem com HTTPS, backup e checklist do primeiro dia.
@@ -71,6 +78,7 @@ zero: `npm run seed`.
 | **Administração** | Usuários, perfis de permissão configuráveis (Administrador, Financeiro/Administrativo, Produção + novos), catálogo de serviços, configurações e **histórico de alterações** (quem alterou o quê e quando) |
 | **Assistente de IA** | Botão ✦ em todas as telas: responde perguntas sobre os dados (contas, clientes, produção, estoque…) usando Gemini ou Claude; a chave da API fica só no servidor e **cada perfil só recebe respostas com o que já pode ver** (Produção não recebe custos/margens/salários) |
 | **Envio por WhatsApp** | Botão ✆ nos orçamentos (proposta completa com itens, total e validade), nas OS e vendas (avisos de “pronto”/“enviado”/andamento) e nas contas a receber (lembrete de cobrança); abre uma janela de revisão com a mensagem editável e vai direto para a conversa do cliente no WhatsApp |
+| **Backup na nuvem** | Além do backup diário local, copia os dados para uma pasta sincronizada (Google Drive para Computador, OneDrive, Dropbox) com detecção automática das pastas, teste de escrita, “fazer backup agora” e status do último envio — se o computador quebrar, os dados estão na nuvem |
 
 ## Princípios implementados
 
