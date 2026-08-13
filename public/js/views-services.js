@@ -428,6 +428,7 @@ App.registerView('os', async (view) => {
   const [oss, clients] = await Promise.all([App.get('/serviceOrders'), App.get('/clients')]);
   oss.sort((a, b) => b.id - a.id);
   const OS_ST = ['em_analise', 'em_andamento', 'aguardando_peca', 'finalizado', 'aguardando_pagamento', 'cancelado'];
+  const verValores = App.can('cashflow') || App.can('receivables') || App.can('payables') || App.can('finance_sensitive');
 
   view.innerHTML = `
     <div class="toolbar">
@@ -447,11 +448,11 @@ App.registerView('os', async (view) => {
       { h: 'OS / Cliente', cell: o => `<b>OS ${o.numero} — ${App.esc(App.clientName(o.clienteId, clients))}</b>
         <div class="small muted">${[o.identificacao, o.modelo].filter(Boolean).map(x => App.esc(x)).join(' · ') || '—'}</div>` },
       { h: 'Serviços', cell: o => `<span class="small">${(o.itens || []).slice(0, 3).map(i => App.esc(i.nome)).join(', ')}${o.itens.length > 3 ? '…' : ''}</span>` },
-      { h: 'Valor', class: 'num', cell: o => App.moneyHtml(o.valorTotal) },
+      ...(verValores ? [{ h: 'Valor', class: 'num', cell: o => App.moneyHtml(o.valorTotal) }] : []),
       { h: 'Previsão', cell: o => App.date(o.previsaoEntrega) },
       { h: 'Responsável', cell: o => App.esc(App.userName(o.responsavelId)) },
       { h: 'Status', cell: o => App.badge(o.status) },
-      { h: 'Pagto', cell: o => App.badge(o.pagamentoStatus) },
+      ...(verValores ? [{ h: 'Pagto', cell: o => App.badge(o.pagamentoStatus) }] : []),
       { h: 'Envio', cell: o => App.badge(o.envioStatus === 'na_empresa' ? 'na_empresa' : o.envioStatus) },
       { h: '', class: 'num', cell: o => `<button class="btn sm" onclick="OS.open(${o.id})">Abrir</button>` }
     ]);
@@ -482,9 +483,9 @@ App.registerView('os', async (view) => {
         ${App.table(o.itens || [], [
           { h: 'Serviço', cell: i => App.esc(i.nome) },
           { h: 'Qtd', class: 'num', cell: i => i.qtd },
-          { h: 'Total', class: 'num', cell: i => 'R$ ' + App.money(i.total) }
+          ...(verValores ? [{ h: 'Total', class: 'num', cell: i => 'R$ ' + App.money(i.total) }] : [])
         ])}
-        <p style="text-align:right;margin-top:6px">Total: <b>R$ ${App.money(o.valorTotal)}</b> · Pagamento: ${App.badge(o.pagamentoStatus)}</p>
+        ${verValores ? `<p style="text-align:right;margin-top:6px">Total: <b>R$ ${App.money(o.valorTotal)}</b> · Pagamento: ${App.badge(o.pagamentoStatus)}</p>` : ''}
         <h3 style="margin:8px 0">Histórico</h3>
         <ul class="timeline">${(o.historico || []).slice().reverse().map(h =>
           `<li><div class="when">${App.dateTime(h.at)} · ${App.esc(h.por)}</div><div class="what">${App.esc(h.evento)}</div></li>`).join('')}</ul>

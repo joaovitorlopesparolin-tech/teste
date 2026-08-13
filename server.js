@@ -94,11 +94,34 @@ function audit(user, action, entity, entityId, details) {
 
 /** Remove campos financeiros sensíveis para usuários sem a permissão finance_sensitive. */
 function sanitize(user, collection, record) {
-  if (!record || can(user, 'finance_sensitive')) return record;
+  if (!record) return record;
+  const sensivel = can(user, 'finance_sensitive');
+  if (sensivel) return record;
+  const financeiro = can(user, 'cashflow') || can(user, 'receivables') || can(user, 'payables');
   const r = Object.assign({}, record);
+
+  // Custos, margens e salários: só para 'dados financeiros sensíveis'
   if (collection === 'products') { delete r.custoBase; }
   if (collection === 'sales') { delete r.custoBaseTotal; delete r.custosAdicionais; delete r.resultado; }
   if (collection === 'employees') { delete r.salario; delete r.beneficios; }
+  if (collection === 'stockItems') { delete r.custoUnit; }
+
+  // Nenhum acesso financeiro (ex.: Produção): também não vê preços, totais
+  // nem condições de pagamento — só o conteúdo técnico/operacional.
+  if (!financeiro) {
+    const limpaItens = itens => (itens || []).map(i => {
+      const x = Object.assign({}, i);
+      delete x.valorUnit; delete x.total; delete x.preco;
+      return x;
+    });
+    if (collection === 'sales' || collection === 'serviceOrders' || collection === 'quotes') {
+      delete r.valorTotal; delete r.total; delete r.pagamento; delete r.custosAdicionais;
+      if (r.itens) r.itens = limpaItens(r.itens);
+    }
+    if (collection === 'products') { delete r.preco; }
+    if (collection === 'serviceCatalog') { delete r.preco; }
+    if (collection === 'stockItems') { delete r.custoUnit; }
+  }
   return r;
 }
 
@@ -1797,6 +1820,57 @@ route('GET', '/api/analytics', 'dashboard', async (req, res, user, params, query
     }));
   }
 
+  /* ---- Bloco operacional: só contagens, sem nenhum valor ----
+     É o que sustenta as Análises do perfil Produção. */
+  const op = {};
+
+  // Movimento da oficina: cabeçotes que entraram × OS finalizadas por mês
+  op.movimento = months.map(m => ({
+    mes: label(m),
+    entradas: entries.filter(e => String(e.dataChegada || '').slice(0, 7) === m).length,
+    finalizadas: oss.filter(o => String(o.dataFinalizacao || '').slice(0, 7) === m).length
+  }));
+
+  // Serviços mais executados (itens das OS do período) — puro volume
+  const accS = {};
+  for (const o of oss) {
+    if (!inWindow(o.dataFinalizacao) && !['em_analise', 'em_andamento', 'aguardando_peca'].includes(o.status)) continue;
+    for (const i of o.itens || []) {
+      const k = String(i.nome || '').trim() || '—';
+      accS[k] = (accS[k] || 0) + (Number(i.qtd) || 1);
+    }
+  }
+  op.servicosTop = Object.entries(accS).map(([nome, qtd]) => ({ nome, qtd }))
+    .sort((a, b) => b.qtd - a.qtd).slice(0, 10);
+
+  // Situação atual das ordens de produção
+  const pos = db.all('productionOrders');
+  const ST_PROD = [['nao_produzido', 'Não produzido'], ['preparacao', 'Preparação'],
+    ['usinagem', 'Usinagem'], ['montagem', 'Montagem'], ['pronto', 'Pronto']];
+  op.statusProducao = ST_PROD.map(([k, l]) => ({ etapa: l, qtd: pos.filter(p => p.status === k).length }));
+
+  // Cabeçotes produzidos por configuração (quantidade, sem preço)
+  const accC = {};
+  for (const s of sales.filter(s => inWindow(s.dataPedido))) {
+    for (const i of s.itens || []) {
+      const k = `${i.tipo === 'crossflow' ? 'Crossflow' : 'Unilateral'} Stage ${i.stage}`;
+      accC[k] = (accC[k] || 0) + (Number(i.qtd) || 1);
+    }
+  }
+  op.configuracoes = Object.entries(accC).map(([config, qtd]) => ({ config, qtd })).sort((a, b) => b.qtd - a.qtd);
+
+  // Assistência de pista por evento: quantas pessoas e dias por etapa (sem R$)
+  const accE2 = {};
+  for (const p of db.all('hrPayments').filter(p => p.tipo === 'pista')) {
+    const ev = p.evento || 'Sem evento';
+    accE2[ev] = accE2[ev] || { evento: ev, pessoas: 0, dias: 0, data: p.data || '' };
+    accE2[ev].pessoas++;
+    accE2[ev].dias += Number(p.dias) || 1;
+    if ((p.data || '') > accE2[ev].data) accE2[ev].data = p.data;
+  }
+  op.pista = Object.values(accE2).sort((a, b) => (a.data < b.data ? 1 : -1)).slice(0, 10);
+
+  out.operacional = op;
   ok(res, out);
 });
 

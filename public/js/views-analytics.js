@@ -76,9 +76,9 @@ App.registerView('analytics', async (view) => {
       }});
     }
 
-    /* Vendas por produto — com financeiro mostra faturamento; sem, quantidades */
-    if (d.produtos) {
-      const comValor = d.produtos.length && d.produtos[0].valor !== undefined;
+    /* Vendas por produto/estado — visão comercial (quem não vê valores usa o bloco operacional) */
+    if (d.produtos && d.produtos.length && d.produtos[0].valor !== undefined) {
+      const comValor = true;
       const c = Charts.card('Vendas por configuração', comValor
         ? 'Faturamento no período — unilateral × fluxo cruzado, Stage 1–3'
         : 'Quantidade vendida no período — unilateral × fluxo cruzado, Stage 1–3');
@@ -104,6 +104,69 @@ App.registerView('analytics', async (view) => {
         });
         Charts.attachTable(c2.id, comValor ? ['UF', 'Cabeçotes', 'Faturamento'] : ['UF', 'Cabeçotes'],
           d.estados.map(e => comValor ? [e.uf, String(e.qtd), fmt(e.valor)] : [e.uf, String(e.qtd)]));
+      }});
+    }
+
+    /* ---------- Operacional (sem valores) — base das Análises da Produção ---------- */
+    const op = d.operacional || {};
+
+    if (op.movimento) {
+      const c = Charts.card('Movimento da oficina', 'Cabeçotes que chegaram × serviços finalizados, por mês');
+      cards.push({ card: c, render: () => {
+        Charts.columns(document.getElementById(c.id), {
+          labels: op.movimento.map(x => x.mes),
+          series: [
+            { name: 'Cabeçotes recebidos', color: C.blue, values: op.movimento.map(x => x.entradas) },
+            { name: 'Serviços finalizados', color: C.orange, values: op.movimento.map(x => x.finalizadas) }
+          ]
+        });
+        Charts.attachTable(c.id, ['Mês', 'Recebidos', 'Finalizados'],
+          op.movimento.map(x => [x.mes, String(x.entradas), String(x.finalizadas)]));
+      }});
+    }
+
+    if (op.statusProducao && op.statusProducao.some(x => x.qtd)) {
+      const c = Charts.card('Produção agora', 'Cabeçotes vendidos por etapa de produção');
+      cards.push({ card: c, render: () => {
+        Charts.hbar(document.getElementById(c.id), {
+          items: op.statusProducao.map(x => ({ label: x.etapa, value: x.qtd })),
+          colors: C.ramp, count: true
+        });
+        Charts.attachTable(c.id, ['Etapa', 'Quantidade'], op.statusProducao.map(x => [x.etapa, String(x.qtd)]));
+      }});
+    }
+
+    if (op.servicosTop && op.servicosTop.length) {
+      const c = Charts.card('Serviços mais executados', 'Volume por tipo de serviço nas OS do período');
+      cards.push({ card: c, render: () => {
+        Charts.hbar(document.getElementById(c.id), {
+          items: op.servicosTop.map(x => ({ label: x.nome, value: x.qtd })),
+          color: C.blue, count: true
+        });
+        Charts.attachTable(c.id, ['Serviço', 'Vezes executado'], op.servicosTop.map(x => [x.nome, String(x.qtd)]));
+      }});
+    }
+
+    if (op.configuracoes && op.configuracoes.length) {
+      const c = Charts.card('Cabeçotes por configuração', 'Quantidade produzida no período — unilateral × crossflow, por Stage');
+      cards.push({ card: c, render: () => {
+        Charts.hbar(document.getElementById(c.id), {
+          items: op.configuracoes.map(x => ({ label: x.config, value: x.qtd })),
+          color: C.blue, count: true
+        });
+        Charts.attachTable(c.id, ['Configuração', 'Quantidade'], op.configuracoes.map(x => [x.config, String(x.qtd)]));
+      }});
+    }
+
+    if (op.pista && op.pista.length) {
+      const c = Charts.card('🏁 Assistência de pista', 'Pessoas por etapa/evento de corrida');
+      cards.push({ card: c, render: () => {
+        Charts.hbar(document.getElementById(c.id), {
+          items: op.pista.map(x => ({ label: x.evento, value: x.pessoas, sub: x.dias + ' dia(s)' })),
+          color: C.orange, count: true
+        });
+        Charts.attachTable(c.id, ['Evento', 'Pessoas', 'Dias'],
+          op.pista.map(x => [x.evento, String(x.pessoas), String(x.dias)]));
       }});
     }
 
