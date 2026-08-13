@@ -60,11 +60,14 @@ App.registerView('payables', async (view) => {
     ], { emptyMsg: 'Nenhum pagamento ainda' })}`;
 
   window.Pay = {
-    create() {
+    create(prefill) {
+      const p = prefill || {};
       App.form('Nova conta a pagar', [
-        { name: 'descricao', label: 'Descrição', required: true, full: true },
-        { name: 'categoria', label: 'Categoria', type: 'select', value: 'despesa_operacional',
+        { name: 'descricao', label: 'Descrição', value: p.descricao, required: true, full: true },
+        { name: 'categoria', label: 'Categoria', type: 'select', value: p.categoria || 'despesa_operacional',
           options: CATS_PAG.map(([v, l]) => ({ value: v, label: l })) },
+        { name: 'recurringId', label: 'Conta recorrente (dá baixa na pendência do mês)', type: 'select', value: p.recurringId || '',
+          options: [{ value: '', label: '— não é recorrente —' }].concat(recurring.filter(r => r.ativo).map(r => ({ value: r.id, label: r.nome }))) },
         { name: 'fornecedorId', label: 'Fornecedor (opcional)', type: 'select', value: '',
           options: [{ value: '', label: '—' }].concat(suppliers.map(s => ({ value: s.id, label: s.nome }))) },
         { name: 'valor', label: 'Valor (R$)', type: 'number', step: '0.01', required: true },
@@ -104,6 +107,8 @@ App.registerView('payables', async (view) => {
         ${App.table(recurring, [
           { h: 'Conta', cell: r => `<b>${App.esc(r.nome)}</b><div class="small muted">${App.esc(r.instrucao || '')}</div>` },
           { h: 'Vence dia', class: 'num', cell: r => r.diaVencimento },
+          { h: 'Aviso', class: 'num', cell: r => (r.diasAviso || 4) + 'd antes' },
+          { h: 'Site', cell: r => r.link ? `<a class="btn sm ghost" target="_blank" href="${App.esc(r.link)}">🌐 Abrir</a>` : '<span class="muted small">—</span>' },
           { h: 'Ativa', cell: r => r.ativo ? App.badge('ok') : App.badge('cancelada') },
           { h: '', class: 'num', cell: r => `<button class="btn sm ghost" onclick="Pay.editRecurring(${r.id})">✎</button>` }
         ])}
@@ -120,15 +125,25 @@ App.registerView('payables', async (view) => {
           { name: 'categoria', label: 'Categoria', type: 'select', value: r.categoria || 'energia',
             options: CATS_PAG.map(([v, l]) => ({ value: v, label: l })) },
           { name: 'diaVencimento', label: 'Dia do vencimento', type: 'number', value: r.diaVencimento || 10 },
+          { name: 'diasAviso', label: 'Avisar quantos dias antes', type: 'number', value: r.diasAviso || 4 },
+          { name: 'link', label: 'Site / agência virtual (link para pagar)', value: r.link || '', full: true },
           { name: 'instrucao', label: 'Instrução (ex.: emitir boleto no site)', value: r.instrucao, full: true },
           { name: 'ativo', label: 'Ativa', type: 'checkbox', value: r.ativo !== false }
         ], async d => {
           d.diaVencimento = Number(d.diaVencimento);
+          d.diasAviso = Number(d.diasAviso) || 4;
           if (id) await App.put('/recurring/' + id, d);
           else await App.post('/recurring', d);
-          App.closeModal(); App.toast('Conta recorrente salva', 'ok');
+          App.closeModal(); App.toast('Conta recorrente salva — o aviso nasce ' + d.diasAviso + ' dias antes do vencimento', 'ok');
         });
       });
+    },
+    prefillCheck() {
+      // Veio da pendência de conta recorrente ("Cadastrar boleto")
+      const raw = sessionStorage.getItem('jm_pay_prefill');
+      if (!raw) return;
+      sessionStorage.removeItem('jm_pay_prefill');
+      try { Pay.create(JSON.parse(raw)); } catch (e) {}
     },
     print() {
       App.print('Agenda de pagamentos',
@@ -139,6 +154,7 @@ App.registerView('payables', async (view) => {
         'Total em aberto: R$ ' + App.money(openTotal));
     }
   };
+  Pay.prefillCheck();
 });
 
 /* ================= CONTAS A RECEBER ================= */

@@ -125,10 +125,13 @@ App.registerView('tasks', async (view) => {
     if (!list.length) return '';
     return `<div class="section-title">${PRIO[key]}</div>` + App.table(list, [
       { h: 'Tarefa', cell: t => `<b>${App.esc(t.titulo)}</b><div class="small muted">${App.esc(t.descricao || '')}</div>` },
-      { h: 'Responsável', cell: t => t.assigneeId ? App.esc(App.userName(t.assigneeId)) : '<span class="muted">— qualquer um —</span>' },
+      { h: 'Responsável', cell: t => t.assigneeId ? App.esc(App.userName(t.assigneeId)) : '<span class="badge warn">sem dono</span>' },
       { h: 'Prazo', cell: t => t.due ? `<span class="${t.due < App.today() ? 'neg' : ''}">${App.date(t.due)}</span>` : '—' },
       { h: 'Origem', cell: t => `<span class="small muted">${App.esc(t.origem || 'manual')}</span>` },
-      { h: '', class: 'num', cell: t => `<button class="btn sm" onclick="Tasks.complete(${t.id})">✓ Concluir</button>
+      { h: '', class: 'num', cell: t => `
+        ${t.link ? `<a class="btn sm ghost" target="_blank" href="${App.esc(t.link)}" title="Abrir o site para emitir/pagar">🌐 Site</a>` : ''}
+        ${t.recurringId && App.can('payables') ? `<button class="btn sm ghost" onclick="Tasks.boleto(${t.id})" title="Cadastrar o boleto em Contas a pagar (dá baixa nesta pendência)">💳 Cadastrar boleto</button>` : ''}
+        <button class="btn sm" onclick="Tasks.complete(${t.id})">✓ Concluir</button>
         <button class="btn sm ghost" onclick="Tasks.edit(${t.id})">Editar</button>` }
     ]);
   };
@@ -154,24 +157,52 @@ App.registerView('tasks', async (view) => {
       App.toast('Pendência concluída', 'ok');
       App.route();
     },
+    boleto(id) {
+      // Pula para Contas a pagar com o cadastro já pré-preenchido;
+      // ao salvar, a baixa desta pendência é automática.
+      const t = tasks.find(x => x.id === id);
+      sessionStorage.setItem('jm_pay_prefill', JSON.stringify({
+        recurringId: t.recurringId,
+        descricao: (t.titulo || '').replace(/^Pagar\/emitir boleto — /, '').replace(/ \(vence.*$/, ''),
+        categoria: undefined
+      }));
+      location.hash = '#/payables';
+    },
     edit(id) {
       const t = id ? tasks.find(x => x.id === id) : {};
-      App.form(id ? 'Editar pendência' : 'Nova pendência', [
+      const m = App.form(id ? 'Editar pendência' : 'Nova pendência', [
         { name: 'titulo', label: 'Título', value: t.titulo, required: true, full: true },
         { name: 'descricao', label: 'Descrição', type: 'textarea', value: t.descricao, full: true },
         { name: 'prioridade', label: 'Prioridade', type: 'select', value: t.prioridade || 'normal', options: [
           { value: 'urgente', label: 'Urgente' }, { value: 'semana', label: 'Esta semana' },
           { value: 'normal', label: 'Normal' }, { value: 'aguardando', label: 'Aguardando' }] },
-        { name: 'assigneeId', label: 'Atribuir a', type: 'select', value: t.assigneeId || '', options: [
-          { value: '', label: '— qualquer um —' }].concat(users.map(u => ({ value: u.id, label: u.name }))) },
+        { name: 'assigneeId', label: 'Responsável (dono da tarefa)', type: 'select',
+          value: t.assigneeId || (id ? '' : App.user.id), options: [
+          { value: '', label: '— qualquer um (evite) —' }].concat(users.map(u => ({ value: u.id, label: u.name }))) },
         { name: 'due', label: 'Prazo', type: 'date', value: t.due },
-        { name: 'origem', label: 'Origem', value: t.origem || 'manual' }
+        { name: 'link', label: 'Link útil (site, boleto…)', value: t.link || '', full: true }
       ], async d => {
         d.assigneeId = d.assigneeId ? Number(d.assigneeId) : null;
         if (id) await App.put('/tasks/' + id, d);
-        else await App.post('/tasks', Object.assign(d, { status: 'aberta' }));
+        else await App.post('/tasks', Object.assign(d, { status: 'aberta', origem: 'manual' }));
         App.closeModal(); App.toast('Pendência salva', 'ok'); App.route();
       });
+      // Modelos de título — um clique preenche o padrão
+      if (!id) {
+        const inp = m.querySelector('[name=titulo]');
+        const chips = document.createElement('div');
+        chips.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap;margin:-4px 0 10px';
+        for (const [rotulo, prefixo] of [
+          ['💰 Cobrança', 'Cobrança — cliente '], ['🛒 Compra', 'Compra — '],
+          ['🔧 Oficina', 'Oficina — cabeçote '], ['🏦 Financeiro', 'Financeiro — '],
+          ['👤 Cliente', 'Retorno ao cliente — ']]) {
+          const b = document.createElement('button');
+          b.type = 'button'; b.className = 'btn sm ghost'; b.textContent = rotulo;
+          b.onclick = () => { inp.value = prefixo; inp.focus(); };
+          chips.appendChild(b);
+        }
+        inp.closest('.field').after(chips);
+      }
     },
     print() {
       const rows = open.map(t => `<tr><td>${PRIO[t.prioridade || 'normal']}</td><td>${App.esc(t.titulo)}</td>

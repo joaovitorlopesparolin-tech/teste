@@ -585,3 +585,15 @@ hr.sep { border: none; border-top: 1px solid var(--line-soft); margin: 14px 0; }
   color: var(--text-3); font-size: 11.5px; letter-spacing: .4px; pointer-events: none;
 }
 @media print { .v3d-wrap { display: none !important; } }
+
+/* Menu lateral recolhível por grupo */
+.nav-group.toggle {
+  cursor: pointer; user-select: none;
+  display: flex; align-items: center; gap: 6px;
+  border-radius: 6px; padding: 4px 6px; margin: 12px 0 2px;
+  transition: color .12s ease;
+}
+.nav-group.toggle:hover { color: var(--text-1); }
+.nav-group .chev { display: inline-block; transition: transform .15s ease; font-size: 9px; }
+.nav-group.open .chev { transform: rotate(90deg); }
+.nav-items.closed { display: none; }

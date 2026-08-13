@@ -56,7 +56,7 @@ com o sistema parado.
 | Área | O que faz |
 |---|---|
 | **Dashboard** | Faturamento, vendas e serviços do mês, lucro estimado e margem (restrito), contas a receber/pagar, saldo, vencidos, orçamentos aguardando, serviços em andamento, pedidos não entregues e **Minhas Pendências** |
-| **Minhas pendências** | Central de tarefas por prioridade (Urgente / Esta semana / Aguardando), atribuíveis a usuários; lembretes mensais automáticos das contas recorrentes (COPEL, Sanepar, consórcio) |
+| **Minhas pendências** | Central de tarefas por prioridade (Urgente / Esta semana / Aguardando) com **dono sugerido automaticamente** (tarefas sem dono ficam sinalizadas); modelos de título em um clique; contas recorrentes (COPEL, Sanepar, consórcio) geram aviso **alguns dias antes do vencimento** (configurável), com **link do site** para pagar e botão “Cadastrar boleto” que pré-preenche Contas a pagar — e a pendência **dá baixa sozinha** quando o boleto do mês é cadastrado |
 | **Clientes** | Cadastro completo (cidade e estado separados para relatórios por região) + perfil consolidado: compras, serviços, orçamentos, financeiro e linha do tempo |
 | **Entrada de cabeçotes** | Fluxo padrão *Entrada → Orçamento → Aprovação → OS → Produção → Finalização → Pagamento → NF de retorno → Envio*; entrada direta só como exceção marcada |
 | **Bens de clientes** | Estoque de terceiros **totalmente separado** do estoque próprio; aceita entrada sem NF de remessa (marcada como “sem documento fiscal”); devolução dá saída do estoque de terceiros, nunca do estoque próprio |
