@@ -1,13 +1,14 @@
 /* Visualizador 3D — mostra escaneamentos/CAD (STL, OBJ, PLY) em tela cheia.
    Usa a biblioteca three.js embutida em /vendor (funciona offline).
-   Aparência: peça em alumínio usinado sobre o fundo escuro da identidade,
-   com luz de recorte vermelha. Controles: arrastar gira, roda dá zoom,
+   Aparência de estúdio: metal com reflexo de ambiente, sombra suave no chão
+   e fundo escuro da identidade. Controles: arrastar gira, roda dá zoom,
    dois dedos no celular. */
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { STLLoader } from 'three/addons/loaders/STLLoader.js';
 import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
 import { PLYLoader } from 'three/addons/loaders/PLYLoader.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 
 const Viewer3D = {
   async open(model) {
@@ -44,8 +45,7 @@ const Viewer3D = {
 
       /* ---- geometria conforme o formato ---- */
       const material = new THREE.MeshStandardMaterial({
-        color: 0xb9bdc4, metalness: 0.82, roughness: 0.38,
-        flatShading: false, side: THREE.DoubleSide
+        color: 0xaeb3ba, metalness: 0.9, roughness: 0.4, side: THREE.DoubleSide
       });
       let object;
       if (model.ext === 'stl') {
@@ -61,45 +61,93 @@ const Viewer3D = {
         object = new OBJLoader().parse(text);
         object.traverse(o => { if (o.isMesh) { o.material = material; o.geometry.computeVertexNormals(); } });
       }
+      object.traverse ? object.traverse(o => { if (o.isMesh) o.castShadow = true; }) : null;
+      if (object.isMesh) object.castShadow = true;
 
-      /* ---- centraliza e enquadra ---- */
+      /* ---- centraliza: peça apoiada no "chão" (y = 0) ---- */
       const box = new THREE.Box3().setFromObject(object);
       const center = box.getCenter(new THREE.Vector3());
       const sizeV = box.getSize(new THREE.Vector3());
       const maxDim = Math.max(sizeV.x, sizeV.y, sizeV.z) || 1;
-      object.position.sub(center);
+      object.position.set(-center.x, -box.min.y, -center.z);
 
       const holder = wrap.querySelector('#v3d-canvas');
       holder.innerHTML = '';
       const scene = new THREE.Scene();
       scene.add(object);
 
-      /* ---- luzes: estúdio escuro com recorte vermelho ---- */
-      scene.add(new THREE.HemisphereLight(0xdde3ea, 0x14161a, 1.0));
-      const key = new THREE.DirectionalLight(0xffffff, 1.6);
-      key.position.set(1, 1.4, 1).multiplyScalar(maxDim);
-      scene.add(key);
-      const fill = new THREE.DirectionalLight(0x9fb4cc, 0.5);
-      fill.position.set(-1.2, 0.4, -0.8).multiplyScalar(maxDim);
-      scene.add(fill);
-      const rim = new THREE.PointLight(0xe43146, maxDim * maxDim * 0.9, maxDim * 6);
-      rim.position.set(-0.8, -0.6, 1.2).multiplyScalar(maxDim);
-      scene.add(rim);
-
-      const camera = new THREE.PerspectiveCamera(42, holder.clientWidth / holder.clientHeight, maxDim / 100, maxDim * 20);
-      camera.position.set(maxDim * 1.25, maxDim * 0.7, maxDim * 1.25);
-
-      renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+      renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
       renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
       renderer.setSize(holder.clientWidth, holder.clientHeight);
-      renderer.setClearColor(0x0b0b0c, 1);
+      renderer.setClearColor(0x000000, 0); // fundo vem do CSS (gradiente da identidade)
+      renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      renderer.toneMappingExposure = 0.82;
+      renderer.shadowMap.enabled = true;
+      renderer.shadowMap.type = THREE.PCFSoftShadowMap;
       holder.appendChild(renderer.domElement);
 
+      /* ---- iluminação de estúdio: ambiente refletivo + chave com sombra ---- */
+      const pmrem = new THREE.PMREMGenerator(renderer);
+      scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+      scene.environmentIntensity = 0.62;
+
+      const key = new THREE.DirectionalLight(0xffffff, 1.1);
+      key.position.set(maxDim * 1.2, maxDim * 2.2, maxDim * 0.8);
+      key.castShadow = true;
+      key.shadow.mapSize.set(2048, 2048);
+      key.shadow.camera.left = key.shadow.camera.bottom = -maxDim;
+      key.shadow.camera.right = key.shadow.camera.top = maxDim;
+      key.shadow.camera.near = maxDim * 0.1;
+      key.shadow.camera.far = maxDim * 6;
+      key.shadow.bias = -0.0002;
+      key.shadow.radius = 6;
+      scene.add(key);
+
+      /* ---- chão: disco com gradiente que some no fundo + sombra ---- */
+      const tex = (() => {
+        const c = document.createElement('canvas');
+        c.width = c.height = 512;
+        const g = c.getContext('2d');
+        const grad = g.createRadialGradient(256, 256, 40, 256, 256, 256);
+        grad.addColorStop(0, '#232329');
+        grad.addColorStop(0.55, '#121215');
+        grad.addColorStop(1, 'rgba(11,11,12,0)');
+        g.fillStyle = grad;
+        g.fillRect(0, 0, 512, 512);
+        const t = new THREE.CanvasTexture(c);
+        t.colorSpace = THREE.SRGBColorSpace;
+        return t;
+      })();
+      const floor = new THREE.Mesh(
+        new THREE.CircleGeometry(maxDim * 2.4, 64),
+        new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false })
+      );
+      floor.rotation.x = -Math.PI / 2;
+      floor.position.y = -maxDim * 0.001;
+      scene.add(floor);
+      const shadowCatcher = new THREE.Mesh(
+        new THREE.CircleGeometry(maxDim * 2.4, 64),
+        new THREE.ShadowMaterial({ opacity: 0.55 })
+      );
+      shadowCatcher.rotation.x = -Math.PI / 2;
+      shadowCatcher.receiveShadow = true;
+      scene.add(shadowCatcher);
+
+      /* ---- câmera enquadrada na peça ---- */
+      const camera = new THREE.PerspectiveCamera(38, holder.clientWidth / holder.clientHeight, maxDim / 100, maxDim * 30);
+      const dist = maxDim * 1.35;
+      camera.position.set(dist, maxDim * 0.62, dist * 0.85);
+      const target = new THREE.Vector3(0, sizeV.y * 0.42, 0);
+
       const controls = new OrbitControls(camera, renderer.domElement);
+      controls.target.copy(target);
       controls.enableDamping = true;
       controls.dampingFactor = 0.08;
       controls.autoRotate = true;
-      controls.autoRotateSpeed = 1.1;
+      controls.autoRotateSpeed = 0.9;
+      controls.minDistance = maxDim * 0.35;
+      controls.maxDistance = maxDim * 6;
+      controls.maxPolarAngle = Math.PI * 0.55; // não mergulha abaixo do chão
 
       const rotBtn = wrap.querySelector('#v3d-rot');
       rotBtn.onclick = () => {

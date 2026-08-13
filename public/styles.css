@@ -568,7 +568,13 @@ hr.sep { border: none; border-top: 1px solid var(--line-soft); margin: 14px 0; }
   padding: 12px 18px; border-bottom: 1px solid var(--line);
   background: var(--bg-1); color: var(--text-1); font-size: 14px;
 }
-.v3d-canvas { flex: 1; position: relative; min-height: 0; }
+.v3d-canvas {
+  flex: 1; position: relative; min-height: 0;
+  /* estúdio escuro com leve respiro no centro e calor vermelho discreto embaixo */
+  background:
+    radial-gradient(120% 90% at 50% 105%, rgba(192, 24, 43, .10), transparent 55%),
+    radial-gradient(90% 70% at 50% 38%, #17171c, #0b0b0c 78%);
+}
 .v3d-canvas canvas { display: block; width: 100% !important; height: 100% !important; }
 .v3d-loading {
   position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
