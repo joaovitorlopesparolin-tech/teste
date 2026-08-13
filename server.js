@@ -16,6 +16,7 @@ const os = require('os');
 const db = require('./lib/db');
 const domain = require('./lib/domain');
 const ai = require('./lib/ai');
+const xlsx = require('./lib/xlsx');
 const { seedIfEmpty, hashPassword, checkPassword, MODULES } = require('./lib/seed');
 
 const PORT = process.env.PORT || 3000;
@@ -467,6 +468,149 @@ route('GET', '/api/backup/status', 'admin', async (req, res) => {
     cloud: { dir: db.settings.backupDir || '', last: db.settings.lastCloudBackup || null },
     sugestoes: cloudCandidates().map(c => path.join(c, 'Backup Jaques Motorsport'))
   });
+});
+
+/* ---- importação da planilha de gastos (Excel semanal) ---- */
+/* Layout esperado (o da planilha GASTOS OFICINA): uma aba por semana;
+   à esquerda A=data B=descrição C=valor D=nota E=cartão (gastos);
+   à direita G=data H=item I=valor J=descrição (entradas).            */
+
+const CAT_SAIDA_REGRAS = [
+  [/SALARIO|SAL[AÁ]RIO|ADIANTAMENTO|FGTS|F[EÉ]RIAS|13/, 'salarios'],
+  [/IRRF|SIMPLES|IMPOSTO|DARF|\bDAS\b|TRIBUT|INSS/, 'impostos'],
+  [/COPEL|ENERGIA/, 'energia'],
+  [/SANEPAR|[AÁ]GUA/, 'agua'],
+  [/VIVO|CLARO|\bTIM\b|CELULAR|TELEFONE/, 'telefone'],
+  [/INTERNET/, 'internet'],
+  [/ALUGUEL/, 'aluguel'],
+  [/FRETE|RODONAVES|EXPRESSO|CORREIO|TRANSPORTADORA/, 'custo_direto'],
+  [/USINAGEM|\bSOLDA\b|RETIFICA|TERCEIR/, 'terceirizacao'],
+  [/FERRAMENTA|\bCNC\b|MANUTEN/, 'manutencao'],
+  [/MERCADO|LIMPEZA|ESCRITORIO|ESCRIT[OÓ]RIO|PAPELARIA|VIAGEM|GASOLINA|COMBUSTIVEL|COMBUST[IÍ]VEL|MULTA|ANIVERSARIO|HONORARIO|HONOR[AÁ]RIO|CONTAB/, 'despesa_operacional'],
+  [/\bJAU\b|RETIFOZ|RETFOZ|FERRAGENS|MANGOPAR|\bOCTA\b|SEDE|VALVULA|V[AÁ]LVULA|GUIA|JUNTA|TUCHO|COMANDO|MOLA|CASCO|PIST[AÃ]O|ANEL|RETENTOR|VEDADOR/, 'componentes']
+];
+function categoriaSaida(txt) {
+  const t = String(txt).toUpperCase();
+  for (const [re, cat] of CAT_SAIDA_REGRAS) if (re.test(t)) return cat;
+  return 'materiais';
+}
+function categoriaEntrada(txt) {
+  return /VENDA|PEDIDO/i.test(String(txt)) ? 'venda_cabecote' : 'servico';
+}
+
+function parseGastosXlsx(buf) {
+  const wb = xlsx.parse(buf);
+  if (!wb.sheets.length) throw new Error('não encontrei abas na planilha');
+  const rows = [], avisos = [];
+  const dateOk = v => {
+    const d = xlsx.asDate(v);
+    return d && d >= '2020-01-01' && d <= '2035-12-31' ? d : null;
+  };
+  for (const sh of wb.sheets) {
+    for (let r = 1; r < sh.rows.length; r++) {
+      const row = sh.rows[r] || {};
+      // gastos (bloco da esquerda)
+      const dA = dateOk(row[0]);
+      const desc = typeof row[1] === 'string' ? row[1].trim() : '';
+      if (dA && desc) {
+        if (typeof row[2] === 'number' && row[2] > 0) {
+          rows.push({
+            tipo: 'saida', data: dA, origem: desc, valor: Math.round(row[2] * 100) / 100,
+            nota: row[3] === true, cartao: row[4] === true, aba: sh.name, categoria: categoriaSaida(desc)
+          });
+        } else {
+          avisos.push(`Aba ${sh.name}: “${desc.slice(0, 40)}” sem valor numérico — ignorada`);
+        }
+      }
+      // entradas (bloco da direita) — exige item preenchido (filtra totais soltos)
+      const dG = dateOk(row[6]);
+      const item = typeof row[7] === 'string' ? row[7].trim() : '';
+      if (dG && item && typeof row[8] === 'number' && row[8] > 0) {
+        const extra = typeof row[9] === 'string' && row[9].trim() ? ' — ' + row[9].trim() : '';
+        rows.push({
+          tipo: 'entrada', data: dG, origem: item + extra, valor: Math.round(row[8] * 100) / 100,
+          aba: sh.name, categoria: categoriaEntrada(item)
+        });
+      }
+    }
+  }
+  // Chave estável por linha: reimportar o mesmo arquivo não duplica nada.
+  const seen = {};
+  for (const x of rows) {
+    const base = `xls|${x.tipo}|${x.data}|${x.valor.toFixed(2)}|${x.origem.toUpperCase().replace(/\s+/g, ' ').slice(0, 120)}`;
+    seen[base] = (seen[base] || 0) + 1;
+    x.importKey = seen[base] === 1 ? base : `${base}#${seen[base]}`;
+  }
+  return { rows, avisos };
+}
+
+route('POST', '/api/cashflow/import-xlsx', 'cashflow', async (req, res, user) => {
+  // Recebe o .xlsx e devolve a análise (nada é gravado nesta etapa).
+  const chunks = [];
+  let size = 0, aborted = false;
+  req.on('data', c => {
+    size += c.length;
+    if (size > 40 * 1024 * 1024) {
+      aborted = true;
+      send(res, 413, { error: 'Planilha grande demais (limite: 40 MB)' });
+      res.on('finish', () => req.destroy());
+      return;
+    }
+    if (!aborted) chunks.push(c);
+  });
+  req.on('end', () => {
+    if (aborted) return;
+    try {
+      const { rows, avisos } = parseGastosXlsx(Buffer.concat(chunks));
+      const existentes = new Set(db.all('cashflow').map(f => f.importKey).filter(Boolean));
+      for (const x of rows) x.jaExiste = existentes.has(x.importKey);
+      const soma = list => Math.round(list.reduce((s, x) => s + x.valor, 0) * 100) / 100;
+      const saidas = rows.filter(x => x.tipo === 'saida');
+      const entradas = rows.filter(x => x.tipo === 'entrada');
+      ok(res, {
+        rows, avisos,
+        resumo: {
+          saidas: saidas.length, entradas: entradas.length,
+          totalSaidas: soma(saidas), totalEntradas: soma(entradas),
+          novos: rows.filter(x => !x.jaExiste).length,
+          repetidos: rows.filter(x => x.jaExiste).length,
+          novosSaidas: soma(saidas.filter(x => !x.jaExiste)),
+          novosEntradas: soma(entradas.filter(x => !x.jaExiste))
+        }
+      });
+    } catch (e) {
+      bad(res, 'Não consegui ler a planilha: ' + e.message);
+    }
+  });
+  req.on('error', () => {});
+});
+
+route('POST', '/api/cashflow/import-confirm', 'cashflow', async (req, res, user) => {
+  const b = await readBody(req);
+  const rows = Array.isArray(b.rows) ? b.rows : [];
+  const existentes = new Set(db.all('cashflow').map(f => f.importKey).filter(Boolean));
+  let inseridos = 0, pulados = 0;
+  for (const x of rows) {
+    if (!x || (x.tipo !== 'entrada' && x.tipo !== 'saida')) continue;
+    const valor = Number(x.valor);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(x.data || '')) || !(valor > 0)) continue;
+    const key = String(x.importKey || '').slice(0, 200);
+    if (key && existentes.has(key)) { pulados++; continue; }
+    db.insert('cashflow', {
+      tipo: x.tipo, valor: Math.round(valor * 100) / 100, data: x.data,
+      conta: x.cartao ? 'cartão de crédito' : 'principal',
+      categoria: String(x.categoria || (x.tipo === 'saida' ? 'materiais' : 'servico')).slice(0, 40),
+      origem: String(x.origem || 'Importado').slice(0, 160),
+      documento: x.nota ? 'com NF' : '',
+      refType: 'importPlanilha', refId: null,
+      descricao: `Importado da planilha${x.aba ? ' (aba ' + String(x.aba).slice(0, 30) + ')' : ''}`,
+      importKey: key || null
+    });
+    if (key) existentes.add(key);
+    inseridos++;
+  }
+  audit(user, 'importou', 'cashflow', null, `Planilha de gastos: ${inseridos} lançamento(s) novos, ${pulados} já existiam`);
+  ok(res, { inseridos, pulados });
 });
 
 /* ---- modelos 3D (escaneamentos / CAD exportado como malha) ---- */

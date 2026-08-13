@@ -274,6 +274,9 @@ App.registerView('cashflow', async (view) => {
     </div>
     <div class="toolbar" style="margin-top:14px">
       <button class="btn" onclick="CF.manual()">+ Lançamento manual</button>
+      <label class="btn" style="cursor:pointer">📥 Importar planilha de gastos (Excel)
+        <input type="file" id="cf-import" accept=".xlsx" hidden></label>
+      <span id="cf-import-prog" class="small muted"></span>
       <div class="spacer"></div>
       <button class="btn" onclick="CF.exportCsv()">⬇ Exportar CSV/Excel</button>
     </div>
@@ -287,7 +290,75 @@ App.registerView('cashflow', async (view) => {
       { h: 'Valor', class: 'num', cell: f => `<b class="${f.tipo === 'entrada' ? 'pos' : 'neg'}">${f.tipo === 'entrada' ? '+' : '−'} R$ ${App.money(f.valor)}</b>` }
     ], { emptyMsg: 'Nenhum lançamento — os módulos de vendas, contas e compras alimentam o caixa automaticamente' })}`;
 
+  document.getElementById('cf-import').addEventListener('change', async (e) => {
+    const f = e.target.files[0];
+    if (!f) return;
+    const prog = document.getElementById('cf-import-prog');
+    prog.textContent = 'Lendo a planilha…';
+    try {
+      const r = await fetch('/api/cashflow/import-xlsx', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + App.token() },
+        body: f
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.error || 'Falha ao ler a planilha');
+      prog.textContent = '';
+      e.target.value = '';
+      CF.importPreview(data);
+    } catch (err) {
+      prog.textContent = '';
+      e.target.value = '';
+      App.toast(err.message, 'err');
+    }
+  });
+
   window.CF = {
+    importPreview(data) {
+      const rs = data.resumo;
+      const novosRows = data.rows.filter(x => !x.jaExiste);
+      const meses = {};
+      for (const x of novosRows) {
+        const m = x.data.slice(0, 7);
+        meses[m] = meses[m] || { entrada: 0, saida: 0 };
+        meses[m][x.tipo] += x.valor;
+      }
+      const mesesOrd = Object.keys(meses).sort();
+      const mesNome = m => {
+        const n = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
+        return n[Number(m.slice(5, 7)) - 1] + '/' + m.slice(2, 4);
+      };
+      const m = App.modal(`
+        <h2>📥 Importar planilha de gastos</h2>
+        <p class="small muted">Encontrei <b>${rs.saidas} gastos</b> (R$ ${App.money(rs.totalSaidas)}) e
+        <b>${rs.entradas} entradas</b> (R$ ${App.money(rs.totalEntradas)}) na planilha.</p>
+        ${rs.repetidos ? `<p class="small" style="margin-top:6px"><span class="badge info">${rs.repetidos} já estavam no sistema</span>
+          <span class="muted">— importações repetidas não duplicam nada.</span></p>` : ''}
+        <div class="card" style="margin-top:10px;background:var(--bg-1)">
+          <b>Vai entrar agora: ${rs.novos} lançamento(s)</b>
+          <div class="small muted" style="margin:4px 0 8px">Saídas novas: R$ ${App.money(rs.novosSaidas)} ·
+          Entradas novas: R$ ${App.money(rs.novosEntradas)}</div>
+          ${mesesOrd.length ? `<table style="font-size:12.5px"><tr><th>Mês</th><th class="num">Entradas</th><th class="num">Saídas</th></tr>
+            ${mesesOrd.map(k => `<tr><td>${mesNome(k)}</td>
+              <td class="num pos">R$ ${App.money(meses[k].entrada)}</td>
+              <td class="num neg">R$ ${App.money(meses[k].saida)}</td></tr>`).join('')}</table>` : ''}
+        </div>
+        ${data.avisos.length ? `<p class="small muted" style="margin-top:8px">⚠ ${data.avisos.length} linha(s) ignorada(s) por falta de valor:<br>
+          ${data.avisos.slice(0, 5).map(a => App.esc(a)).join('<br>')}${data.avisos.length > 5 ? '<br>…' : ''}</p>` : ''}
+        <p class="small muted" style="margin-top:8px">As categorias (componentes, salários, impostos…) foram sugeridas
+        automaticamente pela descrição — alimentam a DRE e podem ser ajustadas depois.</p>
+        <div class="actions">
+          <button class="btn" onclick="App.closeModal()">Cancelar</button>
+          <button class="btn primary" id="cf-imp-ok" ${rs.novos ? '' : 'disabled'}>
+            ${rs.novos ? 'Importar ' + rs.novos + ' lançamento(s)' : 'Nada novo para importar'}</button>
+        </div>`, { wide: true });
+      m.querySelector('#cf-imp-ok').onclick = async () => {
+        const r = await App.post('/cashflow/import-confirm', { rows: novosRows });
+        App.closeModal();
+        App.toast(`${r.inseridos} lançamento(s) importado(s)${r.pulados ? ' · ' + r.pulados + ' já existiam' : ''}`, 'ok');
+        App.route();
+      };
+    },
     manual() {
       App.form('Lançamento manual no caixa', [
         { name: 'tipo', label: 'Tipo', type: 'select', value: 'entrada',
