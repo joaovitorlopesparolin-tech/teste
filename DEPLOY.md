@@ -83,6 +83,49 @@ Para acessar de casa/da pista, use a Opção B.
 
 ---
 
+## Opção A+ — Duas pessoas em locais diferentes, sem expor nada (Tailscale) ⭐
+
+O cenário mais comum da empresa: uma pessoa usa o sistema todo dia no
+computador dela; a outra precisa consultar de outro lugar. **O sistema
+continua rodando só naquele computador** — o Tailscale cria uma rede
+particular criptografada entre os aparelhos autorizados, sem abrir nada
+para a internet.
+
+**Por que este caminho e não abrir a porta no roteador:** o sistema
+conversa em HTTP simples; exposto direto, usuário e senha viajariam sem
+criptografia e o endereço apareceria em varreduras automáticas. Dentro
+do Tailscale todo o tráfego já vai criptografado (WireGuard) e nenhum
+endereço público existe.
+
+### Passo a passo (uma vez, ~5 minutos)
+
+1. Escolha **qual computador guarda os dados** (o "servidor"): o que fica
+   mais tempo ligado e já tem a base correta em `data/`. Nele, rode o
+   `INSTALAR.bat` uma vez — assim o sistema sobe junto com o Windows.
+2. Crie **uma conta** em <https://tailscale.com> (pode entrar com Google).
+3. Instale o Tailscale (<https://tailscale.com/download>) **no servidor e
+   em cada aparelho** que vai acessar — entrando sempre com **a mesma
+   conta**. No celular, o app está na Play Store / App Store.
+4. No painel do Tailscale, anote o endereço do servidor (algo como
+   `100.x.y.z`). Quem estiver fora acessa **`http://100.x.y.z:3000`**.
+5. Crie no sistema um usuário para cada pessoa (Administração → Usuários)
+   com o perfil adequado — nunca compartilhem o mesmo login.
+
+**Manutenção:** para cortar o acesso de um aparelho (perda, troca de
+notebook, saída de colaborador), remova-o no painel do Tailscale — um
+clique, sem mexer no sistema.
+
+**Limite honesto:** se o computador servidor estiver desligado, ninguém
+acessa. Quando isso incomodar, migre para a Opção B (nuvem) — é o mesmo
+sistema, só muda onde roda.
+
+### Trabalho simultâneo
+
+Com um servidor único, as duas pessoas veem **a mesma base ao vivo**: as
+telas se atualizam sozinhas a cada poucos segundos quando alguém altera
+algo (sem recarregar a página). A atualização é adiada enquanto houver
+janela aberta ou campo sendo digitado, para não atrapalhar.
+
 ## Opção B — Servidor na nuvem (acesso de qualquer lugar)
 
 Um servidor virtual (VPS) básico custa de **R$ 20 a 40/mês** (Hostinger,
@@ -165,6 +208,13 @@ previsível.
   `db.json`) e inicie de novo.
 
 ## Atualizar o sistema (sem perder dados)
+
+**Windows — um clique:** dê dois cliques em **`ATUALIZAR.bat`**. Ele baixa
+a versão mais recente, fecha o sistema, substitui apenas os arquivos do
+programa (**a pasta `data` nunca é tocada**) e reabre no navegador. Se a
+internet falhar ou o download vier incompleto, ele avisa e **não altera
+nada**. Com servidor único, atualizar essa máquina atualiza todo mundo.
+
 
 Os dados vivem na pasta **`data/`** e o pacote de atualização **não contém**
 uma pasta `data` — atualizar nunca toca nos seus dados.
