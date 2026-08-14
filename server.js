@@ -797,8 +797,42 @@ route('POST', '/api/backup/now', 'admin', async (req, res, user) => {
   ok(res, r);
 });
 
-/* ---- sinal de alteração: as telas abertas se atualizam sozinhas ---- */
+/* ---- sinal de alteração: as telas abertas se atualizam sozinhas ----
+   /api/events mantém uma conexão aberta e avisa NA HORA que alguém
+   alterou algo. /api/rev fica como reserva, caso a conexão caia. */
 route('GET', '/api/rev', 'dashboard', async (req, res) => ok(res, { rev: db.rev() }));
+
+const liveClients = new Set();
+route('GET', '/api/events', 'dashboard', async (req, res) => {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'X-Accel-Buffering': 'no'
+  });
+  res.write('retry: 5000\n\n');
+  res.write(`data: {"rev":${db.rev()}}\n\n`);
+  const cli = { res };
+  liveClients.add(cli);
+  req.on('close', () => liveClients.delete(cli));
+  req.on('error', () => liveClients.delete(cli));
+});
+
+/* Vigia o contador de alterações e avisa todas as telas conectadas. */
+let lastBroadcast = db.rev();
+let keepAliveTick = 0;
+setInterval(() => {
+  if (!liveClients.size) { lastBroadcast = db.rev(); return; }
+  const r = db.rev();
+  const mudou = r !== lastBroadcast;
+  if (mudou) lastBroadcast = r;
+  keepAliveTick++;
+  const msg = mudou ? `data: {"rev":${r}}\n\n` : (keepAliveTick % 25 === 0 ? ': ping\n\n' : null);
+  if (!msg) return;
+  for (const cli of [...liveClients]) {
+    try { cli.res.write(msg); } catch (e) { liveClients.delete(cli); }
+  }
+}, 700);
 
 /* ---- pendências: individuais por padrão ---- */
 /* Cada um recebe as SUAS pendências, as sem dono (pode assumir) e as que

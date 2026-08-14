@@ -625,35 +625,76 @@ const App = {
      enquanto houver janela aberta, campo em foco ou aba em segundo plano. */
   startLiveRefresh() {
     if (this._liveTimer) return;
-    this._lastRev = null;
-    // Marca a referência já na abertura: qualquer alteração feita a partir
-    // de agora é detectada no primeiro ciclo.
-    this.get('/rev').then(r => { if (this._lastRev === null) this._lastRev = r.rev; }).catch(() => {});
-    const tick = async () => {
+    this._lastRev = null;     // o que esta tela está mostrando
+    this._serverRev = null;   // o que existe no servidor agora
+    this._streamOk = false;
+
+    this.get('/rev').then(r => {
+      if (this._lastRev === null) { this._lastRev = r.rev; this._serverRev = r.rev; }
+    }).catch(() => {});
+
+    /* Aplica a atualização quando for seguro (nunca por cima de alguém
+       trabalhando — se estiver ocupado, espera e aplica assim que liberar). */
+    const aplicar = async () => {
       if (document.hidden) return;
       const modalAberto = document.getElementById('modal-root').children.length > 0;
       const ativo = document.activeElement;
       const digitando = ativo && ['INPUT', 'TEXTAREA', 'SELECT'].includes(ativo.tagName);
       const visualizando3D = !!document.querySelector('.v3d-wrap');
-      // Em Relatórios o conteúdo é gerado sob demanda — não recarregar por baixo.
       const rota = (location.hash.replace(/^#\//, '') || 'dashboard').split('/')[0];
       if (modalAberto || digitando || visualizando3D || rota === 'reports') return;
-      try {
-        const r = await this.get('/rev');
-        if (this._lastRev === null) { this._lastRev = r.rev; return; }
-        if (r.rev !== this._lastRev) {
-          this._lastRev = r.rev;
-          const y = window.scrollY;
-          await this.route();
-          window.scrollTo(0, y); // mantém a posição de leitura
-        }
-      } catch (e) { /* sem rede/sessão — tenta de novo no próximo ciclo */ }
+      if (!this._streamOk) {
+        // Sem conexão ao vivo: pergunta ao servidor (modo reserva)
+        try { this._serverRev = (await this.get('/rev')).rev; } catch (e) { return; }
+      }
+      if (this._serverRev === null || this._lastRev === null) return;
+      if (this._serverRev === this._lastRev) return;
+      this._lastRev = this._serverRev;
+      const y = window.scrollY;
+      await this.route();
+      window.scrollTo(0, y); // mantém a posição de leitura
     };
-    this._liveTimer = setInterval(tick, 8000);
-    // Voltou para a janela/aba: confere na hora (o navegador desacelera
-    // temporizadores em abas de segundo plano).
-    window.addEventListener('focus', tick);
-    document.addEventListener('visibilitychange', () => { if (!document.hidden) tick(); });
+    this._applyLive = aplicar;
+
+    /* Conexão ao vivo: o servidor avisa no instante em que algo muda. */
+    const conectar = async () => {
+      try {
+        const res = await fetch('/api/events', { headers: { Authorization: 'Bearer ' + this.token() } });
+        if (!res.ok || !res.body) throw new Error('sem stream');
+        this._streamOk = true;
+        const reader = res.body.getReader();
+        const dec = new TextDecoder();
+        let buf = '';
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buf += dec.decode(value, { stream: true });
+          let i;
+          while ((i = buf.indexOf('\n\n')) >= 0) {
+            const bloco = buf.slice(0, i);
+            buf = buf.slice(i + 2);
+            const linha = bloco.split('\n').find(l => l.startsWith('data:'));
+            if (!linha) continue; // comentário/keep-alive
+            try {
+              const d = JSON.parse(linha.slice(5).trim());
+              if (typeof d.rev === 'number') {
+                this._serverRev = d.rev;
+                if (this._lastRev === null) this._lastRev = d.rev;
+                aplicar();
+              }
+            } catch (e) { /* mensagem inesperada — ignora */ }
+          }
+        }
+      } catch (e) { /* cai para o modo reserva */ }
+      this._streamOk = false;
+      setTimeout(conectar, 5000); // reconecta sozinho
+    };
+    conectar();
+
+    /* Rede de segurança: confere periodicamente e ao voltar para a janela. */
+    this._liveTimer = setInterval(aplicar, 6000);
+    window.addEventListener('focus', aplicar);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) aplicar(); });
   },
 
   setTitle(t, sub) {
