@@ -121,10 +121,12 @@ sistema, só muda onde roda.
 
 ### Trabalho simultâneo
 
-Com um servidor único, as duas pessoas veem **a mesma base ao vivo**: as
-telas se atualizam sozinhas a cada poucos segundos quando alguém altera
-algo (sem recarregar a página). A atualização é adiada enquanto houver
-janela aberta ou campo sendo digitado, para não atrapalhar.
+Com um servidor único, as duas pessoas veem **a mesma base ao vivo**: o
+servidor avisa as telas abertas no instante em que algo muda e elas se
+atualizam sozinhas em **menos de 1 segundo**, sem recarregar a página.
+A atualização é adiada enquanto houver janela aberta ou campo sendo
+digitado, e aplicada assim que a pessoa terminar. Se a conexão cair, o
+sistema volta sozinho a conferir de tempos em tempos e reconecta.
 
 ## Opção B — Servidor na nuvem (acesso de qualquer lugar)
 
