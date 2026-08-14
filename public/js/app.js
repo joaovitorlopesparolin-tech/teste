@@ -392,6 +392,7 @@ const App = {
         this.renderLayout();
         this.route();
         window.addEventListener('hashchange', () => this.route());
+        this.startLiveRefresh();
         return;
       } catch (e) { /* token inválido → login */ }
     }
@@ -439,6 +440,7 @@ const App = {
         location.hash = '#/dashboard';
         this.route();
         window.addEventListener('hashchange', () => this.route());
+        this.startLiveRefresh();
         if (data.user.mustChangePassword) {
           this.toast('Por segurança, altere a sua senha inicial (menu do usuário).', 'err');
         }
@@ -615,6 +617,43 @@ const App = {
     this._ribbonG = gi;
     document.querySelectorAll('.rtab').forEach((b, i) => b.classList.toggle('active', i === gi));
     this.renderRibbonPages(gi, route);
+  },
+
+  /* ---------------- Trabalho simultâneo ----------------
+     Verifica a cada 8s se alguém alterou algo no servidor e recarrega a
+     tela atual sozinha. Nunca interrompe quem está digitando: pula
+     enquanto houver janela aberta, campo em foco ou aba em segundo plano. */
+  startLiveRefresh() {
+    if (this._liveTimer) return;
+    this._lastRev = null;
+    // Marca a referência já na abertura: qualquer alteração feita a partir
+    // de agora é detectada no primeiro ciclo.
+    this.get('/rev').then(r => { if (this._lastRev === null) this._lastRev = r.rev; }).catch(() => {});
+    const tick = async () => {
+      if (document.hidden) return;
+      const modalAberto = document.getElementById('modal-root').children.length > 0;
+      const ativo = document.activeElement;
+      const digitando = ativo && ['INPUT', 'TEXTAREA', 'SELECT'].includes(ativo.tagName);
+      const visualizando3D = !!document.querySelector('.v3d-wrap');
+      // Em Relatórios o conteúdo é gerado sob demanda — não recarregar por baixo.
+      const rota = (location.hash.replace(/^#\//, '') || 'dashboard').split('/')[0];
+      if (modalAberto || digitando || visualizando3D || rota === 'reports') return;
+      try {
+        const r = await this.get('/rev');
+        if (this._lastRev === null) { this._lastRev = r.rev; return; }
+        if (r.rev !== this._lastRev) {
+          this._lastRev = r.rev;
+          const y = window.scrollY;
+          await this.route();
+          window.scrollTo(0, y); // mantém a posição de leitura
+        }
+      } catch (e) { /* sem rede/sessão — tenta de novo no próximo ciclo */ }
+    };
+    this._liveTimer = setInterval(tick, 8000);
+    // Voltou para a janela/aba: confere na hora (o navegador desacelera
+    // temporizadores em abas de segundo plano).
+    window.addEventListener('focus', tick);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) tick(); });
   },
 
   setTitle(t, sub) {

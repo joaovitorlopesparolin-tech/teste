@@ -797,6 +797,9 @@ route('POST', '/api/backup/now', 'admin', async (req, res, user) => {
   ok(res, r);
 });
 
+/* ---- sinal de alteração: as telas abertas se atualizam sozinhas ---- */
+route('GET', '/api/rev', 'dashboard', async (req, res) => ok(res, { rev: db.rev() }));
+
 /* ---- pendências: individuais por padrão ---- */
 /* Cada um recebe as SUAS pendências, as sem dono (pode assumir) e as que
    ele mesmo delegou a outros. Só quem tem 'admin' enxerga o quadro da
