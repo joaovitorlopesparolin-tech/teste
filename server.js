@@ -17,6 +17,7 @@ const db = require('./lib/db');
 const domain = require('./lib/domain');
 const ai = require('./lib/ai');
 const xlsx = require('./lib/xlsx');
+const sync = require('./lib/sync');
 const { seedIfEmpty, hashPassword, checkPassword, MODULES } = require('./lib/seed');
 
 const PORT = process.env.PORT || 3000;
@@ -426,7 +427,8 @@ route('GET', '/api/meta', 'dashboard', async (req, res, user) => {
     modules: MODULES,
     stageComandos: domain.STAGE_COMANDOS,
     dreMap: domain.DRE_MAP,
-    settings: { quoteValidityDays: db.settings.quoteValidityDays, companyName: db.settings.companyName },
+    settings: { quoteValidityDays: db.settings.quoteValidityDays, companyName: db.settings.companyName,
+      empresa: db.settings.empresa || {} },
     users: db.all('users').map(u => ({ id: u.id, name: u.name, cargo: u.cargo, active: u.active })),
     roles: db.all('roles').map(r => ({ id: r.id, name: r.name }))
   });
@@ -510,6 +512,16 @@ route('PUT', '/api/settings', 'admin', async (req, res, user) => {
   const s = db.settings;
   if (b.quoteValidityDays !== undefined) s.quoteValidityDays = Number(b.quoteValidityDays) || 30;
   if (b.companyName) s.companyName = b.companyName;
+  // Dados da empresa (remetente das etiquetas de envio) — cadastrados uma vez
+  if (b.empresa && typeof b.empresa === 'object') {
+    const e = s.empresa || (s.empresa = {});
+    for (const k of ['razaoSocial', 'endereco', 'numero', 'bairro', 'cidade', 'estado', 'complemento', 'telefone']) {
+      if (b.empresa[k] !== undefined) e[k] = String(b.empresa[k] || '').slice(0, 120);
+    }
+    // documentos guardados só com números
+    if (b.empresa.cnpj !== undefined) e.cnpj = String(b.empresa.cnpj || '').replace(/\D/g, '').slice(0, 14);
+    if (b.empresa.cep !== undefined) e.cep = String(b.empresa.cep || '').replace(/\D/g, '').slice(0, 8);
+  }
   if (b.aiProvider !== undefined) s.aiProvider = b.aiProvider === 'claude' ? 'claude' : 'gemini';
   if (b.aiModel !== undefined) s.aiModel = String(b.aiModel || '').trim();
   if (b.aiApiKey === null) s.aiApiKey = '';                       // remoção explícita
@@ -796,6 +808,40 @@ route('POST', '/api/backup/now', 'admin', async (req, res, user) => {
   audit(user, 'backup', 'settings', 1, r.ok ? `Backup manual → ${r.file}` : `Backup manual falhou: ${r.error || 'nuvem não configurada'}`);
   ok(res, r);
 });
+
+/* ---- integrações externas (preparação p/ Conta Azul) ----
+   Só leitura do estado de sincronização; nenhuma chamada externa ainda. */
+route('GET', '/api/sync/status', 'admin', async (req, res, query) => {
+  const sistema = 'contaazul';
+  const pend = sync.pendencias(sistema);
+  ok(res, {
+    sistema,
+    habilitado: false,
+    entidades: sync.ENTIDADES,
+    pendentes: Object.fromEntries(Object.entries(pend).map(([k, v]) => [k, v.length])),
+    jaSincronizados: db.all('syncRefs').filter(r => r.sistema === sistema).length,
+    observacao: 'Estrutura pronta. A integração só será ligada após conferir a documentação oficial vigente da API.'
+  });
+});
+
+/* ---- etiquetas de envio: registro de emissão (vínculo com pedido/OS) ---- */
+route('POST', '/api/labels', 'dashboard', async (req, res, user) => {
+  const b = await readBody(req);
+  const origem = b.origem === 'serviceOrders' ? 'serviceOrders' : 'sales';
+  const refId = Number(b.refId) || null;
+  const rec = db.insert('labels', {
+    origem, refId, ref: String(b.ref || '').slice(0, 60),
+    clienteId: b.clienteId ? Number(b.clienteId) : null,
+    emitidaEm: new Date().toISOString(), emitidaPor: user.name
+  });
+  // marca no próprio pedido/OS e deixa rastro na linha do tempo
+  const doc = refId ? db.get(origem, refId) : null;
+  if (doc) db.update(origem, refId, { etiquetaEmitidaEm: rec.emitidaEm });
+  audit(user, 'etiqueta', origem, refId, `Etiqueta de envio gerada — ${rec.ref}`);
+  ok(res, rec);
+});
+
+route('GET', '/api/labels', 'dashboard', async (req, res) => ok(res, db.all('labels').slice(-100)));
 
 /* ---- sinal de alteração: as telas abertas se atualizam sozinhas ----
    /api/events mantém uma conexão aberta e avisa NA HORA que alguém

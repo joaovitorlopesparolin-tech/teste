@@ -188,6 +188,7 @@ App.registerView('sales', async (view, args) => {
       { h: '', class: 'num', cell: s => `
         <button class="btn sm ghost" onclick="Sales.status(${s.id})">Status</button>
         <button class="btn sm ghost wa" onclick="Sales.wa(${s.id})" title="Avisar o cliente no WhatsApp">✆</button>
+        <button class="btn sm ghost" onclick="Sales.etiqueta(${s.id})" title="Gerar etiqueta de envio">📦</button>
         ${fin ? `<button class="btn sm ghost" onclick="Sales.result(${s.id})">Resultado</button>` : ''}` }
     ]);
   };
@@ -195,6 +196,11 @@ App.registerView('sales', async (view, args) => {
   document.getElementById('sf').addEventListener('change', render);
 
   window.Sales = {
+    etiqueta(id) {
+      const s = sales.find(x => x.id === id);
+      const c = clients.find(x => x.id === s.clienteId) || {};
+      Etiqueta.abrir('sales', s, c);
+    },
     wa(id) {
       const s = sales.find(x => x.id === id);
       const c = clients.find(x => x.id === s.clienteId);

@@ -3,6 +3,74 @@
 
 const UFS = ['AC','AL','AP','AM','BA','CE','DF','ES','GO','MA','MT','MS','MG','PA','PB','PR','PE','PI','RJ','RN','RS','RO','RR','SC','SP','SE','TO'];
 
+/* Formulário de cliente (usado na lista e no perfil): máscaras, validação
+   e busca de endereço pelo CEP em um só lugar. */
+function clientForm(titulo, c, onSubmit) {
+  const m = App.form(titulo, [
+    { name: 'nome', label: 'Nome / Razão social', value: c.nome, required: true, full: true },
+    { name: 'cpfCnpj', label: 'CPF / CNPJ', value: c.cpfCnpj, mask: 'cpfcnpj', placeholder: 'só números' },
+    { name: 'tipo', label: 'Tipo de cliente', type: 'select', value: c.tipo || 'consumidor', options: [
+      { value: 'consumidor', label: 'Consumidor final' }, { value: 'loja', label: 'Loja / Revenda' },
+      { value: 'preparadora', label: 'Preparadora / Oficina' }, { value: 'equipe', label: 'Equipe de competição' }] },
+    { name: 'telefone', label: 'Telefone', value: c.telefone },
+    { name: 'whatsapp', label: 'WhatsApp', value: c.whatsapp },
+    { name: 'email', label: 'E-mail', type: 'email', value: c.email },
+    { name: 'cep', label: 'CEP (preenche o endereço sozinho)', value: c.cep, mask: 'cep', placeholder: 'só números' },
+    { name: 'endereco', label: 'Endereço (rua/avenida)', value: c.endereco, full: true },
+    { name: 'numero', label: 'Número', value: c.numero },
+    { name: 'bairro', label: 'Bairro', value: c.bairro },
+    { name: 'cidade', label: 'Cidade', value: c.cidade, required: true },
+    { name: 'estado', label: 'Estado (UF)', type: 'select', value: c.estado || 'PR',
+      options: UFS.map(u => ({ value: u, label: u })) },
+    { name: 'complemento', label: 'Complemento / ponto de referência', value: c.complemento, full: true },
+    { name: 'observacoes', label: 'Observações', type: 'textarea', value: c.observacoes, full: true }
+  ], onSubmit, { wide: true });
+
+  /* Busca automática do endereço pelo CEP — sem internet, segue manual */
+  const cepInp = m.querySelector('[name=cep]');
+  const campo = n => m.querySelector(`[name=${n}]`);
+  let ultimoCep = App.digits(c.cep || '');
+  cepInp.addEventListener('input', async () => {
+    const d = App.digits(cepInp.value);
+    if (d.length < 8) { ultimoCep = ''; return; }   // apagou/editou: pode consultar de novo
+    if (d === ultimoCep) return;                     // evita repetir a consulta enquanto digita
+    ultimoCep = d;
+    const rotulo = cepInp.parentElement.querySelector('span');
+    rotulo.dataset.orig = rotulo.dataset.orig || rotulo.textContent;
+    rotulo.textContent = 'CEP — buscando endereço…';
+    const end = await App.lookupCep(d);
+    rotulo.textContent = rotulo.dataset.orig;
+    if (!end) { App.toast('Não consegui consultar o CEP agora — preencha o endereço manualmente', 'err'); return; }
+    const aplicar = () => {
+      if (end.endereco) campo('endereco').value = end.endereco;
+      if (end.bairro) campo('bairro').value = end.bairro;
+      if (end.cidade) campo('cidade').value = end.cidade;
+      if (end.estado) campo('estado').value = end.estado;
+      App.toast('Endereço preenchido pelo CEP — confira e ajuste se precisar', 'ok');
+    };
+
+    // Nunca sobrescreve endereço já preenchido sem confirmar. A confirmação é
+    // embutida no próprio formulário (uma janela sobre a outra fecharia o cadastro).
+    const preenchidos = ['endereco', 'bairro', 'cidade'].filter(n => campo(n).value.trim());
+    if (!preenchidos.length) return aplicar();
+
+    m.querySelectorAll('.cep-confirma').forEach(x => x.remove());
+    const aviso = document.createElement('div');
+    aviso.className = 'cep-confirma';
+    aviso.innerHTML = `
+      <div><b>CEP ${App.fmtCep(d)}:</b> ${App.esc([end.endereco, end.bairro].filter(Boolean).join(', '))}
+        — ${App.esc(end.cidade)}/${App.esc(end.estado)}</div>
+      <div style="display:flex;gap:6px;margin-top:6px">
+        <button type="button" class="btn sm primary" data-sim>Substituir endereço</button>
+        <button type="button" class="btn sm" data-nao>Manter o que já está</button>
+      </div>`;
+    cepInp.parentElement.after(aviso);
+    aviso.querySelector('[data-sim]').onclick = () => { aplicar(); aviso.remove(); };
+    aviso.querySelector('[data-nao]').onclick = () => aviso.remove();
+  });
+  return m;
+}
+
 App.registerView('clients', async (view, args) => {
   if (args[0]) return clientProfile(view, Number(args[0]));
 
@@ -11,13 +79,15 @@ App.registerView('clients', async (view, args) => {
   App.cache.clients = clients;
 
   const render = (filter) => {
-    const f = (filter || '').toLowerCase();
+    const f = (filter || '').toLowerCase().trim();
+    const fd = App.digits(f); // busca por documento ignora pontos, barras e traços
     const list = clients.filter(c =>
       !f || (c.nome || '').toLowerCase().includes(f) || (c.cidade || '').toLowerCase().includes(f) ||
-      (c.cpfCnpj || '').includes(f) || (c.estado || '').toLowerCase() === f);
+      (fd && App.digits(c.cpfCnpj).includes(fd)) || (fd && App.digits(c.cep).includes(fd)) ||
+      (c.estado || '').toLowerCase() === f);
     document.getElementById('clients-table').innerHTML = App.table(list, [
       { h: 'Nome / Razão social', cell: c => `<b>${App.esc(c.nome)}</b><div class="small muted">${App.esc(c.tipo || '')}</div>` },
-      { h: 'CPF/CNPJ', cell: c => `<span class="mono">${App.esc(c.cpfCnpj || '—')}</span>` },
+      { h: 'CPF / CNPJ', cell: c => c.cpfCnpj ? `<span class="mono">${App.esc(App.fmtCpfCnpj(c.cpfCnpj))}</span>` : '<span class="muted">—</span>' },
       { h: 'Telefone / WhatsApp', cell: c => `${App.esc(c.telefone || '—')}${c.whatsapp ? `<div class="small muted">WhatsApp: ${App.esc(c.whatsapp)}</div>` : ''}` },
       { h: 'Cidade', cell: c => App.esc(c.cidade || '—') },
       { h: 'UF', cell: c => App.esc(c.estado || '—') },
@@ -39,21 +109,7 @@ App.registerView('clients', async (view, args) => {
   window.Clients = {
     edit(id) {
       const c = id ? clients.find(x => x.id === id) : {};
-      App.form(id ? 'Editar cliente' : 'Novo cliente', [
-        { name: 'nome', label: 'Nome / Razão social', value: c.nome, required: true, full: true },
-        { name: 'cpfCnpj', label: 'CPF / CNPJ', value: c.cpfCnpj },
-        { name: 'tipo', label: 'Tipo de cliente', type: 'select', value: c.tipo || 'consumidor', options: [
-          { value: 'consumidor', label: 'Consumidor final' }, { value: 'loja', label: 'Loja / Revenda' },
-          { value: 'preparadora', label: 'Preparadora / Oficina' }, { value: 'equipe', label: 'Equipe de competição' }] },
-        { name: 'telefone', label: 'Telefone', value: c.telefone },
-        { name: 'whatsapp', label: 'WhatsApp', value: c.whatsapp },
-        { name: 'email', label: 'E-mail', type: 'email', value: c.email },
-        { name: 'endereco', label: 'Endereço', value: c.endereco, full: true },
-        { name: 'cidade', label: 'Cidade', value: c.cidade, required: true },
-        { name: 'estado', label: 'Estado (UF)', type: 'select', value: c.estado || 'PR',
-          options: UFS.map(u => ({ value: u, label: u })) },
-        { name: 'observacoes', label: 'Observações', type: 'textarea', value: c.observacoes, full: true }
-      ], async d => {
+      clientForm(id ? 'Editar cliente' : 'Novo cliente', c, async d => {
         if (id) await App.put('/clients/' + id, d);
         else await App.post('/clients', d);
         App.closeModal(); App.toast('Cliente salvo', 'ok'); App.route();
@@ -66,7 +122,7 @@ App.registerView('clients', async (view, args) => {
 async function clientProfile(view, id) {
   const p = await App.get('/clients/' + id + '/profile');
   const c = p.cliente;
-  App.setTitle(c.nome, `${c.cidade || ''}${c.estado ? ' / ' + c.estado : ''} · ${c.cpfCnpj || 'sem CPF/CNPJ'}`);
+  App.setTitle(c.nome, `${c.cidade || ''}${c.estado ? ' / ' + c.estado : ''} · ${c.cpfCnpj ? App.fmtCpfCnpj(c.cpfCnpj) : 'sem CPF/CNPJ'}`);
 
   const fin = p.financeiro;
   const tabs = {
@@ -142,20 +198,7 @@ async function clientProfile(view, id) {
 
   window.Clients2 = {
     editClient() {
-      App.form('Editar cliente', [
-        { name: 'nome', label: 'Nome / Razão social', value: c.nome, required: true, full: true },
-        { name: 'cpfCnpj', label: 'CPF / CNPJ', value: c.cpfCnpj },
-        { name: 'tipo', label: 'Tipo de cliente', type: 'select', value: c.tipo || 'consumidor', options: [
-          { value: 'consumidor', label: 'Consumidor final' }, { value: 'loja', label: 'Loja / Revenda' },
-          { value: 'preparadora', label: 'Preparadora / Oficina' }, { value: 'equipe', label: 'Equipe de competição' }] },
-        { name: 'telefone', label: 'Telefone', value: c.telefone },
-        { name: 'whatsapp', label: 'WhatsApp', value: c.whatsapp },
-        { name: 'email', label: 'E-mail', value: c.email },
-        { name: 'endereco', label: 'Endereço', value: c.endereco, full: true },
-        { name: 'cidade', label: 'Cidade', value: c.cidade, required: true },
-        { name: 'estado', label: 'Estado (UF)', type: 'select', value: c.estado, options: UFS.map(u => ({ value: u, label: u })) },
-        { name: 'observacoes', label: 'Observações', type: 'textarea', value: c.observacoes, full: true }
-      ], async d => {
+      clientForm('Editar cliente', c, async d => {
         await App.put('/clients/' + c.id, d);
         App.closeModal(); App.toast('Cliente atualizado', 'ok'); App.route();
       });

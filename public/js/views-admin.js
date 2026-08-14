@@ -167,6 +167,27 @@ App.registerView('admin', async (view) => {
       </div>
 
       <div class="card" style="max-width:560px;margin-top:16px">
+        <h3>🏢 DADOS DA EMPRESA (remetente das etiquetas)</h3>
+        <p class="small muted" style="margin-bottom:12px">Cadastrados uma vez e usados automaticamente em toda
+        etiqueta de envio gerada a partir de um pedido ou de uma OS.</p>
+        <div class="formgrid">
+          <label class="field full"><span>Razão social</span><input id="emp-razao" value="${App.esc((s.empresa || {}).razaoSocial || '')}"></label>
+          <label class="field"><span>CNPJ</span><input id="emp-cnpj" data-mask="cpfcnpj" inputmode="numeric" value="${App.esc(App.fmtCpfCnpj((s.empresa || {}).cnpj))}"></label>
+          <label class="field"><span>CEP</span><input id="emp-cep" data-mask="cep" inputmode="numeric" value="${App.esc(App.fmtCep((s.empresa || {}).cep))}"></label>
+          <label class="field full"><span>Endereço</span><input id="emp-endereco" value="${App.esc((s.empresa || {}).endereco || '')}"></label>
+          <label class="field"><span>Número</span><input id="emp-numero" value="${App.esc((s.empresa || {}).numero || '')}"></label>
+          <label class="field"><span>Bairro</span><input id="emp-bairro" value="${App.esc((s.empresa || {}).bairro || '')}"></label>
+          <label class="field"><span>Cidade</span><input id="emp-cidade" value="${App.esc((s.empresa || {}).cidade || '')}"></label>
+          <label class="field"><span>Estado (UF)</span><input id="emp-estado" maxlength="2" value="${App.esc((s.empresa || {}).estado || '')}"></label>
+          <label class="field full"><span>Telefone (opcional, sai na etiqueta)</span><input id="emp-telefone" value="${App.esc((s.empresa || {}).telefone || '')}"></label>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn primary" onclick="Adm.saveEmpresa()">Salvar dados da empresa</button>
+          <button class="btn" onclick="Adm.previewEtiqueta()">📦 Ver modelo da etiqueta</button>
+        </div>
+      </div>
+
+      <div class="card" style="max-width:560px;margin-top:16px">
         <h3>✦ ASSISTENTE DE IA</h3>
         <p class="small muted" style="margin-bottom:12px">O assistente (botão ✦ no canto da tela) responde perguntas
         sobre os dados do sistema. A chave fica gravada apenas neste computador e nunca aparece para os usuários —
@@ -263,6 +284,45 @@ App.registerView('admin', async (view) => {
       App.toast('Assistente salvo', 'ok');
       renderSettings(el);
     };
+    /* máscara nos campos da empresa */
+    el.querySelectorAll('[data-mask]').forEach(inp => {
+      inp.addEventListener('input', () => {
+        inp.value = inp.dataset.mask === 'cep' ? App.maskCep(inp.value) : App.maskCpfCnpj(inp.value);
+      });
+    });
+    /* CEP da empresa preenche o endereço */
+    const cepEmp = document.getElementById('emp-cep');
+    cepEmp.addEventListener('change', async () => {
+      const end = await App.lookupCep(cepEmp.value);
+      if (!end) return;
+      const vazio = id => !document.getElementById(id).value.trim();
+      if (vazio('emp-endereco') && end.endereco) document.getElementById('emp-endereco').value = end.endereco;
+      if (vazio('emp-bairro') && end.bairro) document.getElementById('emp-bairro').value = end.bairro;
+      if (vazio('emp-cidade') && end.cidade) document.getElementById('emp-cidade').value = end.cidade;
+      if (vazio('emp-estado') && end.estado) document.getElementById('emp-estado').value = end.estado;
+    });
+
+    Adm.saveEmpresa = async () => {
+      const v = id => document.getElementById(id).value.trim();
+      if (v('emp-cnpj') && !App.validCpfCnpj(v('emp-cnpj'))) return App.toast('CNPJ inválido — confira os números', 'err');
+      if (v('emp-cep') && !App.validCep(v('emp-cep'))) return App.toast('CEP inválido — informe os 8 números', 'err');
+      const empresa = {
+        razaoSocial: v('emp-razao'), cnpj: App.digits(v('emp-cnpj')), cep: App.digits(v('emp-cep')),
+        endereco: v('emp-endereco'), numero: v('emp-numero'), bairro: v('emp-bairro'),
+        cidade: v('emp-cidade'), estado: v('emp-estado').toUpperCase(), telefone: v('emp-telefone')
+      };
+      await App.put('/settings', { empresa });
+      App.meta.settings.empresa = empresa; // etiquetas já saem com os dados novos
+      App.toast('Dados da empresa salvos — já valem para as próximas etiquetas', 'ok');
+    };
+
+    Adm.previewEtiqueta = () => {
+      Etiqueta.abrir('sales',
+        { id: 0, numero: '000', itens: [{ qtd: 1, produto: 'Cabeçote (exemplo)' }] },
+        { nome: 'NOME DO CLIENTE (exemplo)', cpfCnpj: '12345678901', endereco: 'Rua Exemplo', numero: '100',
+          bairro: 'Centro', cidade: 'Cascavel', estado: 'PR', cep: '85800000' });
+    };
+
     Adm.useBackupDir = (p) => { document.getElementById('cfg-bk-dir').value = p; };
     Adm.saveBackup = async () => {
       try {

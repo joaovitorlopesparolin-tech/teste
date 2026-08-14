@@ -47,6 +47,9 @@ dados também vai para lá e o aplicativo de sincronização sobe para a nuvem.
 Para restaurar: copie o `jaques-backup-….json` mais recente para `data/db.json`
 com o sistema parado.
 
+> **Integrações:** a preparação para uma futura sincronização com a Conta Azul
+> (sem duplicar registros) está descrita em **[INTEGRACOES.md](INTEGRACOES.md)**.
+
 > **Para usar na empresa:** veja o guia completo de implantação em
 > **[DEPLOY.md](DEPLOY.md)** — computador da oficina (rede local) ou servidor
 > na nuvem com HTTPS, backup e checklist do primeiro dia.
@@ -79,6 +82,8 @@ com o sistema parado.
 | **Assistente de IA** | Botão ✦ em todas as telas: responde perguntas sobre os dados (contas, clientes, produção, estoque…) usando Gemini ou Claude; a chave da API fica só no servidor e **cada perfil só recebe respostas com o que já pode ver** (Produção não recebe custos/margens/salários) |
 | **Envio por WhatsApp** | Botão ✆ nos orçamentos (proposta completa com itens, total e validade), nas OS e vendas (avisos de “pronto”/“enviado”/andamento) e nas contas a receber (lembrete de cobrança); abre uma janela de revisão com a mensagem editável e vai direto para a conversa do cliente no WhatsApp |
 | **Backup na nuvem** | Além do backup diário local, copia os dados para uma pasta sincronizada (Google Drive para Computador, OneDrive, Dropbox) com detecção automática das pastas, teste de escrita, “fazer backup agora” e status do último envio — se o computador quebrar, os dados estão na nuvem |
+| **Etiqueta de envio** | Botão 📦 no pedido e na OS: gera a etiqueta com **remetente da empresa** (cadastrado uma vez) e **destinatário do cadastro do cliente**, sem redigitar nada; ocupa ~1/3 de uma folha A4 vertical para recortar e colar na caixa, com destaque para nome, endereço, cidade/UF e CEP; imprime ou salva em PDF pela janela de impressão, e a emissão fica registrada no pedido/OS |
+| **Documentos e endereço** | Máscara automática de **CPF/CNPJ e CEP** com validação real (dígitos verificadores) — guardados só com números, então a busca funciona com ou sem pontuação; digitar o **CEP preenche endereço, bairro, cidade e UF** (nunca sobrescreve o que já está preenchido sem confirmar, e o cadastro continua funcionando sem internet) |
 | **Trabalho simultâneo** | Com um servidor único (rede local ou Tailscale), o servidor avisa as telas abertas e elas se **atualizam sozinhas em menos de 1 segundo** — sem recarregar e sem interromper quem está digitando (a atualização espera o formulário fechar) |
 | **Atualização em um clique** | **`ATUALIZAR.bat`** baixa a versão nova, troca só os arquivos do programa e reabre o sistema — a pasta `data` (dados da empresa) nunca é tocada |
 | **Acesso pelo celular** | Em *Administração → Configurações*, um **QR code** abre o sistema no celular (mesmo Wi-Fi) com os mesmos dados em tempo real — QR gerado localmente, sem internet; **LIBERAR NO CELULAR.bat** destrava o firewall do Windows com um clique |
