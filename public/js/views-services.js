@@ -492,9 +492,15 @@ App.registerView('os', async (view) => {
         <div class="actions">
           ${o.pagamentoStatus === 'pendente' && App.can('receivables') ? `<button class="btn" onclick="OS.payment(${o.id})">💰 Registrar pagamento</button>` : ''}
           <button class="btn wa" onclick="OS.wa(${o.id})" title="Avisar o cliente no WhatsApp">✆ WhatsApp</button>
+          <button class="btn" onclick="OS.etiqueta(${o.id})" title="Etiqueta de envio com os dados do cliente">📦 Etiqueta</button>
           <button class="btn" onclick="OS.printOne(${o.id})">🖨️ Imprimir OS</button>
           <button class="btn primary" onclick="OS.save(${o.id})">Salvar</button>
         </div>`, { wide: true });
+    },
+    etiqueta(id) {
+      const o = oss.find(x => x.id === id);
+      const c = clients.find(x => x.id === o.clienteId) || {};
+      Etiqueta.abrir('serviceOrders', o, c);
     },
     wa(id) {
       const o = oss.find(x => x.id === id);

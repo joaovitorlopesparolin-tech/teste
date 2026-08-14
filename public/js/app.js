@@ -74,6 +74,93 @@ const App = {
     return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   },
 
+  /* ---------------- Documentos: máscara, validação, formatação ----------------
+     Regra: guardamos SEMPRE só os números. A formatação é aplicada na
+     exibição e na digitação — assim uma busca por "12345678000199"
+     encontra o CNPJ salvo, independentemente de pontos e barras. */
+  digits(v) { return String(v == null ? '' : v).replace(/\D/g, ''); },
+
+  fmtCpfCnpj(v) {
+    const d = this.digits(v);
+    if (d.length === 11) return d.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, '$1.$2.$3-$4');
+    if (d.length === 14) return d.replace(/(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})/, '$1.$2.$3/$4-$5');
+    return String(v || '');
+  },
+  fmtCep(v) {
+    const d = this.digits(v);
+    return d.length === 8 ? d.replace(/(\d{5})(\d{3})/, '$1-$2') : String(v || '');
+  },
+
+  /* Máscara progressiva enquanto digita */
+  maskCpfCnpj(v) {
+    const d = this.digits(v).slice(0, 14);
+    if (d.length <= 11) {
+      return d.replace(/^(\d{3})(\d)/, '$1.$2').replace(/^(\d{3})\.(\d{3})(\d)/, '$1.$2.$3')
+        .replace(/\.(\d{3})(\d{1,2})$/, '.$1-$2');
+    }
+    return d.replace(/^(\d{2})(\d)/, '$1.$2').replace(/^(\d{2})\.(\d{3})(\d)/, '$1.$2.$3')
+      .replace(/\.(\d{3})(\d)/, '.$1/$2').replace(/(\d{4})(\d{1,2})$/, '$1-$2');
+  },
+  maskCep(v) {
+    const d = this.digits(v).slice(0, 8);
+    return d.length > 5 ? d.replace(/^(\d{5})(\d{1,3})/, '$1-$2') : d;
+  },
+
+  /* Validação real (dígitos verificadores), não só contagem de caracteres */
+  validCpf(v) {
+    const c = this.digits(v);
+    if (c.length !== 11 || /^(\d)\1{10}$/.test(c)) return false;
+    const dv = (base, pesoIni) => {
+      let s = 0;
+      for (let i = 0; i < base.length; i++) s += Number(base[i]) * (pesoIni - i);
+      const r = (s * 10) % 11;
+      return r === 10 ? 0 : r;
+    };
+    return dv(c.slice(0, 9), 10) === Number(c[9]) && dv(c.slice(0, 10), 11) === Number(c[10]);
+  },
+  validCnpj(v) {
+    const c = this.digits(v);
+    if (c.length !== 14 || /^(\d)\1{13}$/.test(c)) return false;
+    const dv = (base) => {
+      let peso = base.length - 7, s = 0;
+      for (let i = 0; i < base.length; i++) {
+        s += Number(base[i]) * peso--;
+        if (peso < 2) peso = 9;
+      }
+      const r = s % 11;
+      return r < 2 ? 0 : 11 - r;
+    };
+    return dv(c.slice(0, 12)) === Number(c[12]) && dv(c.slice(0, 13)) === Number(c[13]);
+  },
+  /** '' é aceito (campo opcional); com conteúdo, precisa ser CPF ou CNPJ válido. */
+  validCpfCnpj(v) {
+    const d = this.digits(v);
+    if (!d) return true;
+    if (d.length === 11) return this.validCpf(d);
+    if (d.length === 14) return this.validCnpj(d);
+    return false;
+  },
+  validCep(v) {
+    const d = this.digits(v);
+    return !d || d.length === 8;
+  },
+
+  /** Consulta o CEP (ViaCEP). Devolve null sem internet — nunca trava o cadastro. */
+  async lookupCep(cep) {
+    const d = this.digits(cep);
+    if (d.length !== 8) return null;
+    try {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 6000);
+      const r = await fetch(`https://viacep.com.br/ws/${d}/json/`, { signal: ctrl.signal });
+      clearTimeout(t);
+      if (!r.ok) return null;
+      const j = await r.json();
+      if (j.erro) return null;
+      return { endereco: j.logradouro || '', bairro: j.bairro || '', cidade: j.localidade || '', estado: j.uf || '' };
+    } catch (e) { return null; } // offline ou serviço fora do ar
+  },
+
   /* Rótulos e cores de status */
   STATUS: {
     // entradas / OS
@@ -153,7 +240,9 @@ const App = {
             ? `<textarea name="${f.name}" ${f.required ? 'required' : ''}>${this.esc(f.value || '')}</textarea>`
           : f.type === 'checkbox'
             ? `<input type="checkbox" name="${f.name}" ${f.value ? 'checked' : ''}>`
-            : `<input type="${f.type || 'text'}" name="${f.name}" value="${this.esc(f.value != null ? f.value : '')}"
+            : `<input type="${f.type || 'text'}" name="${f.name}"
+                 value="${this.esc(f.mask === 'cpfcnpj' ? this.fmtCpfCnpj(f.value) : f.mask === 'cep' ? this.fmtCep(f.value) : (f.value != null ? f.value : ''))}"
+                 ${f.mask ? `data-mask="${f.mask}" inputmode="numeric"` : ''}
                  ${f.step ? `step="${f.step}"` : ''} ${f.required ? 'required' : ''} ${f.placeholder ? `placeholder="${this.esc(f.placeholder)}"` : ''}>`;
         return `<label class="field ${f.full ? 'full' : ''}"><span>${this.esc(f.label)}${f.required ? ' *' : ''}</span>${inner}</label>`;
       }).join('')}
@@ -163,6 +252,17 @@ const App = {
         <button type="submit" class="btn primary">${submitLabel || 'Salvar'}</button>
       </div></form>`;
     const m = this.modal(html, { wide });
+
+    /* Máscara automática enquanto digita (CPF/CNPJ e CEP) */
+    m.querySelectorAll('[data-mask]').forEach(inp => {
+      inp.addEventListener('input', () => {
+        const fim = inp.selectionStart === inp.value.length;
+        inp.value = inp.dataset.mask === 'cep' ? this.maskCep(inp.value) : this.maskCpfCnpj(inp.value);
+        if (fim) inp.setSelectionRange(inp.value.length, inp.value.length);
+        inp.setCustomValidity('');
+      });
+    });
+
     m.querySelector('#mform').addEventListener('submit', async e => {
       e.preventDefault();
       const fd = new FormData(e.target);
@@ -172,6 +272,19 @@ const App = {
         else {
           let v = fd.get(f.name);
           if (f.type === 'number') v = v === '' ? null : Number(v);
+          // Campos com máscara são guardados só com números
+          if (f.mask) {
+            const ok = f.mask === 'cep' ? this.validCep(v) : this.validCpfCnpj(v);
+            if (!ok) {
+              this.toast(f.mask === 'cep'
+                ? `CEP inválido em "${f.label}" — informe os 8 números`
+                : `CPF/CNPJ inválido em "${f.label}" — confira os números digitados`, 'err');
+              const el = e.target.elements[f.name];
+              if (el && el.focus) el.focus();
+              return;
+            }
+            v = this.digits(v);
+          }
           data[f.name] = v;
         }
       }

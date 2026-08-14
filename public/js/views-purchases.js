@@ -148,7 +148,7 @@ App.registerView('suppliers', async (view) => {
     </div>
     ${App.table(suppliers, [
       { h: 'Fornecedor', cell: s => `<b>${App.esc(s.nome)}</b>${s.fechamentoMensal ? ' <span class="badge info">fechamento mensal</span>' : ''}` },
-      { h: 'CNPJ', cell: s => `<span class="mono">${App.esc(s.cnpj || '—')}</span>` },
+      { h: 'CNPJ', cell: s => `<span class="mono">${App.esc(s.cnpj ? App.fmtCpfCnpj(s.cnpj) : '—')}</span>` },
       { h: 'Contato', cell: s => App.esc(s.telefone || s.email || '—') },
       { h: 'Em aberto no mês', class: 'num', cell: s => {
         const t = openBySupplier(s.id).reduce((sum, e) => sum + e.valor, 0);
@@ -177,7 +177,7 @@ App.registerView('suppliers', async (view) => {
       const s = id ? suppliers.find(x => x.id === id) : {};
       App.form(id ? 'Editar fornecedor' : 'Novo fornecedor', [
         { name: 'nome', label: 'Nome', value: s.nome, required: true, full: true },
-        { name: 'cnpj', label: 'CNPJ', value: s.cnpj },
+        { name: 'cnpj', label: 'CNPJ', value: s.cnpj, mask: 'cpfcnpj', placeholder: 'só números' },
         { name: 'telefone', label: 'Telefone', value: s.telefone },
         { name: 'email', label: 'E-mail', value: s.email },
         { name: 'fechamentoMensal', label: 'Fechamento mensal (gastos acumulados pagos por fatura)', type: 'checkbox', value: s.fechamentoMensal, full: true },
