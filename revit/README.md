@@ -6,7 +6,7 @@ que cria a aba **Martins Notari** no Revit com dois botões:
 | Botão | O que faz |
 |---|---|
 | **Conferir Nomenclatura** | Confere se as folhas seguem o padrão `SIGLA-NNN` com revisão numérica. Não exporta nada; mostra o que corrigir e a renumeração sugerida. |
-| **Publicar Pranchas** | Exporta PDF e/ou DWG das folhas escolhidas já com o nome no padrão `Obra_SIGLA_NNN_RXX` e gera o `manifesto_pranchas.json` que o aplicativo de obra importa com um clique. |
+| **Publicar Pranchas** | Exporta PDF, DWG e DXF das folhas escolhidas já com o nome no padrão `Obra_SIGLA_NNN_RXX` e gera o `manifesto_pranchas.json` que o aplicativo de obra importa com um clique. O DXF é o formato que o visualizador CAD embutido no app abre direto no navegador. |
 
 ## Instalação rápida
 

@@ -1,10 +1,12 @@
 # -*- coding: utf-8 -*-
 """Publica pranchas do Revit no padrao Martins Notari.
 
-Exporta PDF + DWG das folhas selecionadas com o nome no padrao
+Exporta PDF + DWG + DXF das folhas selecionadas com o nome no padrao
     Obra_SIGLA_NNN_RXX  (ex.: VilaNord_ARQ_001_R04.pdf)
 e gera o arquivo manifesto_pranchas.json, que o aplicativo de obra
 importa com um clique (modo Engenharia > "Importar do Revit").
+O DXF e o formato que o visualizador CAD embutido no aplicativo abre
+no navegador (com zoom, pan e medicao).
 
 Requisitos no modelo:
   - Numero de projeto (Informacoes do projeto) = codigo da obra (ex.: 20001)
@@ -30,7 +32,7 @@ from pyrevit import revit, forms, script
 
 from Autodesk.Revit.DB import (
     FilteredElementCollector, ViewSheet, BuiltInParameter, ElementId,
-    DWGExportOptions,
+    DWGExportOptions, DXFExportOptions,
 )
 from System.Collections.Generic import List
 
@@ -155,25 +157,26 @@ def exportar_pdf(pasta, sheet, nome_base):
     return os.path.join(pasta, nome_base + u'.pdf')
 
 
-def exportar_dwg(pasta, sheet, nome_base):
-    """Exporta em subpasta temporaria e renomeia, porque o Revit as vezes
-    acrescenta 'Sheet - ...' ao nome dependendo da versao."""
-    tmp = os.path.join(pasta, u'_tmp_dwg_mn')
+def exportar_cad(pasta, sheet, nome_base, formato):
+    """Exporta DWG ou DXF em subpasta temporaria e renomeia, porque o Revit
+    as vezes acrescenta 'Sheet - ...' ao nome dependendo da versao."""
+    ext = u'.' + formato  # '.dwg' ou '.dxf'
+    tmp = os.path.join(pasta, u'_tmp_cad_mn')
     if os.path.isdir(tmp):
         shutil.rmtree(tmp)
     os.makedirs(tmp)
-    opcoes = DWGExportOptions()
-    opcoes.MergedViews = True  # um DWG unico, sem xrefs por vista
+    opcoes = DWGExportOptions() if formato == u'dwg' else DXFExportOptions()
+    opcoes.MergedViews = True  # arquivo unico, sem xrefs por vista
     ids = List[ElementId]()
     ids.Add(sheet.Id)
     doc.Export(tmp, nome_base, ids, opcoes)
 
-    destino = os.path.join(pasta, nome_base + u'.dwg')
-    gerados = [f for f in os.listdir(tmp) if f.lower().endswith(u'.dwg')]
+    destino = os.path.join(pasta, nome_base + ext)
+    gerados = [f for f in os.listdir(tmp) if f.lower().endswith(ext)]
     if not gerados:
         shutil.rmtree(tmp)
         return None
-    exato = nome_base + u'.dwg'
+    exato = nome_base + ext
     origem = exato if exato in gerados else gerados[0]
     if os.path.exists(destino):
         os.remove(destino)
@@ -202,17 +205,20 @@ def main():
         return
 
     # 3. O que exportar ---------------------------------------------------
-    opcoes_menu = [u'PDF + DWG + manifesto', u'Só PDF + manifesto',
-                   u'Só DWG + manifesto', u'Só manifesto (sem arquivos)']
+    # DXF: e o formato que o visualizador CAD do aplicativo abre no navegador
+    opcoes_menu = [u'PDF + DWG + DXF (completo)', u'PDF + DXF (app)',
+                   u'PDF + DWG', u'Só manifesto (sem arquivos)']
     if not PDF_DISPONIVEL:
-        opcoes_menu = [u'Só DWG + manifesto', u'Só manifesto (sem arquivos)']
+        opcoes_menu = [u'DWG + DXF', u'Só DXF', u'Só manifesto (sem arquivos)']
     escolha = forms.CommandSwitchWindow.show(
         opcoes_menu,
-        message=u'O que exportar? (o manifesto é o arquivo que o app importa)')
+        message=u'O que exportar? (o manifesto é o arquivo que o app importa; '
+                u'o DXF abre no visualizador do app)')
     if not escolha:
         return
     quer_pdf = u'PDF' in escolha
     quer_dwg = u'DWG' in escolha
+    quer_dxf = u'DXF' in escolha
 
     # 4. Pasta de destino -------------------------------------------------
     pasta = forms.pick_folder(
@@ -269,12 +275,20 @@ def main():
                     avisos.append(u'{}: falha no PDF — {}'.format(numero, e))
             if quer_dwg:
                 try:
-                    if exportar_dwg(pasta, sheet, nome_base):
+                    if exportar_cad(pasta, sheet, nome_base, u'dwg'):
                         arquivos.append(u'DWG')
                     else:
                         avisos.append(u'{}: o Revit não gerou o DWG.'.format(numero))
                 except Exception as e:
                     avisos.append(u'{}: falha no DWG — {}'.format(numero, e))
+            if quer_dxf:
+                try:
+                    if exportar_cad(pasta, sheet, nome_base, u'dxf'):
+                        arquivos.append(u'DXF')
+                    else:
+                        avisos.append(u'{}: o Revit não gerou o DXF.'.format(numero))
+                except Exception as e:
+                    avisos.append(u'{}: falha no DXF — {}'.format(numero, e))
 
             pranchas.append({
                 u'num': u'{}-{}'.format(sigla, num3),

@@ -10,9 +10,11 @@ automaticamente.
 Quando você emitir uma revisão:
 
 1. No Revit, clique em **Publicar Pranchas** (aba *Martins Notari*).
-2. Escolha as pranchas, o que exportar (PDF/DWG) e a pasta da obra.
+2. Escolha as pranchas, o que exportar (PDF/DWG/DXF) e a pasta da obra.
    O Revit gera os arquivos já com o nome no padrão
    (`VilaNord_ARQ_001_R04.pdf`) e um arquivo `manifesto_pranchas.json`.
+   O DXF é o que o visualizador do app abre — exporte sempre que quiser
+   ver o desenho no navegador.
 3. Abra o aplicativo em modo **Engenharia** e clique em
    **⬆ Importar do Revit**, escolhendo o `manifesto_pranchas.json`.
 
@@ -111,11 +113,35 @@ Rotina sugerida: abrir o app → restaurar o último backup → importar manifes
 novos → salvar backup. Quando a integração com SharePoint/Graph API entrar
 (plano já definido), esse passo desaparece.
 
+## Visualizador embutido (PDF e DXF)
+
+Os botões **Abrir PDF** e **Ver DWG** dos cards agora abrem um visualizador de
+verdade, dentro do próprio app, sem internet e sem programa instalado:
+
+- **PDF** — renderizado pelo pdf.js (funciona também no celular/tablet, onde o
+  navegador não abre PDF embutido sozinho). Zoom com dois dedos ou roda do
+  mouse, arrastar para mover.
+- **DXF** — desenho CAD renderizado em WebGL (dxf-viewer). O card "Ver DWG"
+  abre o **DXF** da prancha, que o botão do Revit exporta junto com o DWG.
+  DWG binário não abre em navegador sem serviço pago (Autodesk APS) — para
+  DWG de terceiros, converta grátis com o **ODA File Converter**
+  (opendesign.com) ou peça o DXF ao projetista.
+- **📏 Medir** — toque em dois pontos e informe a escala da prancha
+  (ex.: 1:50): o app mostra a distância no papel e a distância real
+  (no DXF, os milímetros do desenho × escala). Confira sempre com uma cota
+  conhecida da prancha antes de confiar na medida.
+- O app mostra o **nome de arquivo esperado** (ex.: `VilaNord_ARQ_001_R05.pdf`)
+  para você achar rápido na pasta da obra.
+
+O app também ganhou **modo escuro** (botão 🌙 no topo) e a logo da Martins
+Notari no cabeçalho. Por causa do visualizador embutido, o arquivo HTML tem
+cerca de 4 MB — continua um arquivo único que funciona offline.
+
 ## Perguntas prováveis
 
 **Preciso do Revit novo?** A exportação de PDF nativa exige Revit 2022 ou mais
-recente. DWG e manifesto funcionam em qualquer versão com pyRevit. Em Revit
-mais antigo, o botão oferece só DWG + manifesto.
+recente. DWG, DXF e manifesto funcionam em qualquer versão com pyRevit. Em
+Revit mais antigo, o botão oferece DWG/DXF + manifesto.
 
 **E projetos que não são meus (estrutural, hidráulica de terceiros)?** Dois
 caminhos: (a) se vier `.rvt`, abra no seu Revit e publique do mesmo jeito;
@@ -137,6 +163,7 @@ qual prancha olhar.
    continuidade). O manifesto continua igual — só muda quem guarda os dados.
 2. Renomeação em lote das centenas de arquivos antigos com o Claude Code
    (de-para com revisão humana).
-3. Visualizador real de PDF/DWG no app — o nome-base do arquivo já viaja no
-   manifesto (`arquivo`), então ligar o botão "Abrir PDF" ao link do
-   SharePoint/Dropbox será direto.
+3. Abertura automática dos arquivos — hoje o visualizador pede para escolher
+   o arquivo (o navegador não pode ler pastas sozinho); quando o app estiver
+   no SharePoint, o nome-base que já viaja no manifesto (`arquivo`) permite
+   abrir o PDF/DXF direto pelo link, sem escolher nada.

@@ -21,7 +21,7 @@ canteiro vê só o que vale.
 
 | Pasta | Conteúdo |
 |---|---|
-| [`app/projetos_obra.html`](app/projetos_obra.html) | O aplicativo (arquivo único — funciona no celular, tablet e computador). Agora com importação de manifesto do Revit e backup/restauração de dados em arquivo. |
+| [`app/projetos_obra.html`](app/projetos_obra.html) | O aplicativo (arquivo único — funciona no celular, tablet e computador, offline). Importação de manifesto do Revit, backup/restauração em arquivo, **visualizador embutido de PDF e DXF com zoom e medição por escala**, modo escuro e logo Martins Notari. |
 | [`revit/`](revit/) | Extensão pyRevit com os botões **Conferir Nomenclatura** e **Publicar Pranchas**. |
 | [`docs/FLUXO_REVIT_APP.md`](docs/FLUXO_REVIT_APP.md) | Guia completo: instalação, preparação do modelo, rotina de publicação, perguntas prováveis. |
 | [`docs/exemplo/manifesto_pranchas.json`](docs/exemplo/manifesto_pranchas.json) | Manifesto de exemplo para testar a importação no app sem precisar do Revit. |
@@ -45,4 +45,5 @@ está embutida no app e nos scripts do Revit.
 1. Persistência real no SharePoint (Lista + biblioteca de documentos, via
    Microsoft Graph) — o manifesto já foi desenhado para esse futuro.
 2. Renomeação em lote dos arquivos antigos.
-3. Visualizador de PDF/DWG ligado aos arquivos reais.
+3. Abertura automática de PDF/DXF pelo link do SharePoint (o visualizador já
+   existe; hoje o usuário escolhe o arquivo da pasta da obra).
