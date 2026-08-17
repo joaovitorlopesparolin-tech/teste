@@ -2,21 +2,30 @@
    configurações e histórico de alterações (auditoria) */
 'use strict';
 
+/* Qual aba está aberta. Fica fora da view de propósito: quando alguém salva
+   algo, a atualização em tempo real redesenha a tela inteira, e sem isto o
+   usuário era jogado de volta para a primeira aba no meio do trabalho. */
+let abaAdmin = 'usuarios';
+
 App.registerView('admin', async (view) => {
   App.setTitle('Administração', 'Usuários, permissões, catálogo, configurações e auditoria');
 
   const tabs = {
     usuarios: renderUsers, permissoes: renderRoles, catalogo: renderCatalog,
-    config: renderSettings, auditoria: renderAudit
+    config: renderSettings, contaazul: renderContaAzul, auditoria: renderAudit
   };
+  if (!tabs[abaAdmin]) abaAdmin = 'usuarios';
+
+  const botoes = [
+    ['usuarios', 'Usuários'], ['permissoes', 'Perfis e permissões'],
+    ['catalogo', 'Catálogo de serviços'], ['config', 'Configurações'],
+    ['contaazul', 'Conta Azul'], ['auditoria', 'Histórico de alterações']
+  ];
 
   view.innerHTML = `
     <div class="tabs" id="adm-tabs">
-      <button data-t="usuarios" class="active">Usuários</button>
-      <button data-t="permissoes">Perfis e permissões</button>
-      <button data-t="catalogo">Catálogo de serviços</button>
-      <button data-t="config">Configurações</button>
-      <button data-t="auditoria">Histórico de alterações</button>
+      ${botoes.map(([k, l]) =>
+        `<button data-t="${k}"${k === abaAdmin ? ' class="active"' : ''}>${l}</button>`).join('')}
     </div>
     <div id="adm-body"></div>`;
 
@@ -26,9 +35,10 @@ App.registerView('admin', async (view) => {
     if (!b) return;
     document.querySelectorAll('#adm-tabs button').forEach(x => x.classList.remove('active'));
     b.classList.add('active');
-    tabs[b.dataset.t](body);
+    abaAdmin = b.dataset.t;
+    tabs[abaAdmin](body);
   });
-  renderUsers(body);
+  tabs[abaAdmin](body);
 
   /* ---------- usuários ---------- */
   async function renderUsers(el) {
@@ -147,8 +157,8 @@ App.registerView('admin', async (view) => {
 
   /* ---------- configurações ---------- */
   async function renderSettings(el) {
-    const [s, bk, net, ca] = await Promise.all([
-      App.get('/settings'), App.get('/backup/status'), App.get('/network'), App.get('/contaazul/status')
+    const [s, bk, net] = await Promise.all([
+      App.get('/settings'), App.get('/backup/status'), App.get('/network')
     ]);
     const provider = s.aiProvider || 'gemini';
     const lastBk = bk.cloud.last;
@@ -254,56 +264,6 @@ App.registerView('admin', async (view) => {
         restaurar você entra de novo, com o usuário e a senha de <b>onde o arquivo veio</b>.</p>
       </div>
 
-      <div class="card" style="max-width:560px;margin-top:16px">
-        <h3>🔗 CONTA AZUL</h3>
-        ${ca.conectado ? `
-          <p class="small" style="color:var(--ok);margin-bottom:4px">✓ Conectado${ca.conta && ca.conta.nome ? ' — ' + App.esc(ca.conta.nome) : ''}</p>
-          ${ca.conta && ca.conta.email ? `<p class="small muted" style="margin-bottom:10px">${App.esc(ca.conta.email)}</p>` : ''}
-          ${ca.conectadoEm ? `<p class="small muted" style="margin-bottom:12px">Autorizado em ${App.dateTime(ca.conectadoEm)}</p>` : ''}
-          <div style="display:flex;gap:8px;flex-wrap:wrap">
-            <button class="btn" onclick="Adm.caTestar()">🔌 Testar conexão</button>
-            <button class="btn ghost" onclick="Adm.caDesconectar()">Desconectar</button>
-          </div>
-          <div class="small" id="ca-resultado" style="margin-top:10px"></div>
-        ` : `
-          <p class="small muted" style="margin-bottom:12px">Ligação com a Conta Azul pela <b>API oficial</b>. Funciona
-          direto deste computador — o endereço de retorno pode ser <span class="mono">localhost</span>, então não é
-          preciso publicar o sistema na internet.</p>
-          <ol class="small muted" style="margin:0 0 12px 18px;padding:0">
-            <li>Crie uma aplicação em <b>portaldevs.contaazul.com</b>.</li>
-            <li>Lá, cadastre como endereço de retorno exatamente o que está no campo abaixo.</li>
-            <li>Copie o Client ID e o Client Secret para cá e salve.</li>
-            <li>Clique em <b>Conectar</b> e autorize na tela da Conta Azul.</li>
-          </ol>
-          <label class="field"><span>Client ID</span>
-            <input id="ca-id" placeholder="${ca.clientIdMascarado ? 'salvo: ' + App.esc(ca.clientIdMascarado) : 'cole aqui'}"></label>
-          <label class="field"><span>Client Secret</span>
-            <input id="ca-secret" type="password" placeholder="${ca.temSecret ? 'salvo — deixe em branco para manter' : 'cole aqui'}"></label>
-          <label class="field"><span>Endereço de retorno (cadastre este mesmo no portal)</span>
-            <input id="ca-redirect" value="${App.esc(ca.redirectUri || (location.origin + '/api/contaazul/callback'))}"></label>
-          <details style="margin:4px 0 10px">
-            <summary class="small muted" style="cursor:pointer">Ajustes avançados — ambiente e escopo</summary>
-            <p class="small muted" style="margin:8px 0">Mexa aqui só se a Conta Azul indicar endereços diferentes
-            (ambiente de desenvolvimento/sandbox) ou se a autorização for recusada por escopo.
-            Deixe em branco para voltar ao padrão.</p>
-            <label class="field"><span>Servidor de autorização</span>
-              <input id="ca-authbase" value="${App.esc(ca.authBase)}" placeholder="${App.esc(ca.padrao.authBase)}"></label>
-            <label class="field"><span>Servidor da API</span>
-              <input id="ca-apibase" value="${App.esc(ca.apiBase)}" placeholder="${App.esc(ca.padrao.apiBase)}"></label>
-            <label class="field"><span>Escopo</span>
-              <input id="ca-escopo" value="${App.esc(ca.escopo)}" placeholder="${App.esc(ca.padrao.escopo)}"></label>
-          </details>
-          <div style="display:flex;gap:8px;flex-wrap:wrap">
-            <button class="btn primary" onclick="Adm.caSalvar()">Salvar credenciais</button>
-            ${ca.configurado ? '<button class="btn" onclick="Adm.caConectar()">🔗 Conectar</button>' : ''}
-          </div>
-          <div id="ca-url" style="margin-top:10px"></div>
-        `}
-        ${ca.ultimoErro ? `<p class="small" style="color:var(--danger);margin-top:10px">${App.esc(ca.ultimoErro)}</p>` : ''}
-        <p class="small muted" style="margin-top:10px">O Client Secret e a autorização ficam gravados
-        <b>só neste computador</b> e nunca aparecem no navegador. O sistema continua sendo a ferramenta
-        principal da oficina — a Conta Azul segue como o lado financeiro e fiscal.</p>
-      </div>
 
       <div class="card" style="max-width:560px;margin-top:16px">
         <h3>📱 ACESSO PELO CELULAR</h3>
@@ -407,70 +367,6 @@ App.registerView('admin', async (view) => {
       else App.toast(r.naoConfigurado ? 'Backup local feito. Configure a pasta da nuvem para copiar para o Drive.' : 'Falhou: ' + (r.error || ''), r.naoConfigurado ? 'ok' : 'err');
       renderSettings(el);
     };
-    /* ---- Conta Azul ---- */
-    Adm.caSalvar = async () => {
-      const v = id => (document.getElementById(id) || {}).value || '';
-      const corpo = {
-        clientId: v('ca-id').trim(),
-        clientSecret: v('ca-secret').trim(),
-        redirectUri: v('ca-redirect').trim(),
-        authBase: v('ca-authbase').trim(),
-        apiBase: v('ca-apibase').trim(),
-        escopo: v('ca-escopo').trim()
-      };
-      if (!corpo.redirectUri) return App.toast('Informe o endereço de retorno.', 'err');
-      try {
-        await App.put('/contaazul/config', corpo);
-        App.toast('Credenciais salvas. Agora clique em Conectar.', 'ok');
-        renderSettings(el);
-      } catch (e) { App.toast(e.message, 'err'); }
-    };
-
-    /* A autorização acontece na tela da Conta Azul, no navegador do usuário —
-       a senha da Conta Azul nunca passa por aqui. */
-    Adm.caConectar = async () => {
-      const out = document.getElementById('ca-url');
-      try {
-        const r = await App.post('/contaazul/connect', {});
-        const u = new URL(r.url);
-        // Mostra o que está sendo enviado: quando a Conta Azul devolve uma tela
-        // de erro genérica, a diferença costuma estar aqui — normalmente no
-        // endereço de retorno, que precisa ser idêntico ao cadastrado no portal.
-        out.innerHTML = `
-          <p class="small muted" style="margin-bottom:6px">Se a Conta Azul mostrar uma página de erro,
-          compare estes valores com os do app em <b>portaldevs.contaazul.com</b> — eles precisam ser idênticos:</p>
-          <table class="small" style="width:100%;border-collapse:collapse">
-            ${[['client_id', u.searchParams.get('client_id')],
-               ['redirect_uri', u.searchParams.get('redirect_uri')],
-               ['scope', u.searchParams.get('scope')],
-               ['servidor', u.origin + u.pathname]]
-              .map(([k, val]) => `<tr>
-                <td style="padding:3px 8px 3px 0;color:var(--text-3);white-space:nowrap">${k}</td>
-                <td class="mono" style="padding:3px 0;word-break:break-all">${App.esc(val || '—')}</td></tr>`).join('')}
-          </table>
-          <p style="margin-top:8px"><a class="btn sm" href="${App.esc(r.url)}" target="_blank" rel="noopener">🔗 Abrir a autorização</a></p>`;
-        window.open(r.url, '_blank');
-      } catch (e) {
-        out.innerHTML = '';
-        App.toast(e.message, 'err');
-      }
-    };
-
-    Adm.caTestar = async () => {
-      const out = document.getElementById('ca-resultado');
-      out.innerHTML = '<span class="muted">Falando com a Conta Azul…</span>';
-      const r = await App.post('/contaazul/test', {});
-      out.innerHTML = r.ok
-        ? `<span style="color:var(--ok)">✓ Conexão boa${r.conta && r.conta.nome ? ' — ' + App.esc(r.conta.nome) : ''}</span>`
-        : `<span style="color:var(--danger)">${App.esc(r.error)}</span>`;
-    };
-
-    Adm.caDesconectar = async () => {
-      if (!await App.confirm('Desconectar a Conta Azul? Nada é apagado dos dois lados — só a autorização é revogada aqui.')) return;
-      await App.post('/contaazul/disconnect', {});
-      App.toast('Conta Azul desconectada', 'ok');
-      renderSettings(el);
-    };
 
     /* Baixa com o token no cabeçalho — o endereço nunca carrega a credencial. */
     Adm.baixarBackup = async () => {
@@ -535,6 +431,207 @@ App.registerView('admin', async (view) => {
       } catch (e) {
         out.innerHTML = `<span style="color:var(--danger)">✗ ${App.esc(e.message)}</span>`;
       }
+    };
+  }
+
+  /* ---------- Conta Azul: conexão + plano de sincronização ---------- */
+  async function renderContaAzul(el) {
+    const [ca, plano] = await Promise.all([App.get('/contaazul/status'), App.get('/sync/plano')]);
+
+    const SENTIDO_ROTULO = {
+      off: 'Não sincronizar',
+      enviar: 'Daqui → Conta Azul',
+      receber: 'Conta Azul → aqui',
+      ambos: 'Nos dois sentidos'
+    };
+    const CORES = { off: '', enviar: 'accent', receber: 'warn', ambos: 'ok' };
+
+    const linhaTipo = t => `
+      <tr>
+        <td style="padding:8px 10px 8px 0">
+          <b>${App.esc(t.nome)}</b>
+          ${t.obs ? `<div class="small muted">${App.esc(t.obs)}</div>` : ''}
+        </td>
+        <td style="padding:8px 10px 8px 0;white-space:nowrap">
+          <select class="sync-sentido" data-ent="${t.ent}" style="min-width:172px">
+            ${plano.sentidos.map(sv => `<option value="${sv}" ${sv === t.sentido ? 'selected' : ''}>${SENTIDO_ROTULO[sv]}</option>`).join('')}
+          </select>
+        </td>
+        <td class="num" style="padding:8px 0;white-space:nowrap">
+          ${t.sentido === 'off' ? '<span class="muted small">—</span>'
+            : t.sentido === 'receber' ? '<span class="small muted">só recebe de lá</span>'
+            : `<span class="badge ${CORES[t.sentido]}">${t.pendentes} a enviar</span>` +
+              (t.sincronizados ? ` <span class="small muted">${t.sincronizados} já feitos</span>` : '') +
+              (t.comErro ? ` <span class="badge danger">${t.comErro} com erro</span>` : '')}
+        </td>
+        <td class="num" style="padding:8px 0">
+          ${t.exemplos.length ? `<button class="btn sm ghost" onclick="Adm.caVer('${t.ent}')">👁 Ver</button>` : ''}
+        </td>
+      </tr>`;
+
+    el.innerHTML = `
+      <div class="grid cols-2" style="align-items:start">
+      <div>
+      <div class="card" style="max-width:560px;margin-top:16px">
+        <h3>🔗 CONTA AZUL</h3>
+        ${ca.conectado ? `
+          <p class="small" style="color:var(--ok);margin-bottom:4px">✓ Conectado${ca.conta && ca.conta.nome ? ' — ' + App.esc(ca.conta.nome) : ''}</p>
+          ${ca.conta && ca.conta.email ? `<p class="small muted" style="margin-bottom:10px">${App.esc(ca.conta.email)}</p>` : ''}
+          ${ca.conectadoEm ? `<p class="small muted" style="margin-bottom:12px">Autorizado em ${App.dateTime(ca.conectadoEm)}</p>` : ''}
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn" onclick="Adm.caTestar()">🔌 Testar conexão</button>
+            <button class="btn ghost" onclick="Adm.caDesconectar()">Desconectar</button>
+          </div>
+          <div class="small" id="ca-resultado" style="margin-top:10px"></div>
+        ` : `
+          <p class="small muted" style="margin-bottom:12px">Ligação com a Conta Azul pela <b>API oficial</b>. Funciona
+          direto deste computador — o endereço de retorno pode ser <span class="mono">localhost</span>, então não é
+          preciso publicar o sistema na internet.</p>
+          <ol class="small muted" style="margin:0 0 12px 18px;padding:0">
+            <li>Crie uma aplicação em <b>portaldevs.contaazul.com</b>.</li>
+            <li>Lá, cadastre como endereço de retorno exatamente o que está no campo abaixo.</li>
+            <li>Copie o Client ID e o Client Secret para cá e salve.</li>
+            <li>Clique em <b>Conectar</b> e autorize na tela da Conta Azul.</li>
+          </ol>
+          <label class="field"><span>Client ID</span>
+            <input id="ca-id" placeholder="${ca.clientIdMascarado ? 'salvo: ' + App.esc(ca.clientIdMascarado) : 'cole aqui'}"></label>
+          <label class="field"><span>Client Secret</span>
+            <input id="ca-secret" type="password" placeholder="${ca.temSecret ? 'salvo — deixe em branco para manter' : 'cole aqui'}"></label>
+          <label class="field"><span>Endereço de retorno (cadastre este mesmo no portal)</span>
+            <input id="ca-redirect" value="${App.esc(ca.redirectUri || (location.origin + '/api/contaazul/callback'))}"></label>
+          <p class="small muted" style="margin:-6px 0 12px">Tem que ficar <b>idêntico</b> ao do portal, caractere por
+          caractere. <span class="mono">localhost</span> e <span class="mono">127.0.0.1</span> são endereços
+          diferentes para a Conta Azul, mesmo apontando para este computador — use nos dois lugares o mesmo que
+          você digita no navegador.</p>
+          <details style="margin:4px 0 10px">
+            <summary class="small muted" style="cursor:pointer">Ajustes avançados — ambiente e escopo</summary>
+            <p class="small muted" style="margin:8px 0">Mexa aqui só se a Conta Azul indicar endereços diferentes
+            (ambiente de desenvolvimento/sandbox) ou se a autorização for recusada por escopo.
+            Deixe em branco para voltar ao padrão.</p>
+            <label class="field"><span>Servidor de autorização</span>
+              <input id="ca-authbase" value="${App.esc(ca.authBase)}" placeholder="${App.esc(ca.padrao.authBase)}"></label>
+            <label class="field"><span>Servidor da API</span>
+              <input id="ca-apibase" value="${App.esc(ca.apiBase)}" placeholder="${App.esc(ca.padrao.apiBase)}"></label>
+            <label class="field"><span>Escopo</span>
+              <input id="ca-escopo" value="${App.esc(ca.escopo)}" placeholder="${App.esc(ca.padrao.escopo)}"></label>
+          </details>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn primary" onclick="Adm.caSalvar()">Salvar credenciais</button>
+            ${ca.configurado ? '<button class="btn" onclick="Adm.caConectar()">🔗 Conectar</button>' : ''}
+          </div>
+          <div id="ca-url" style="margin-top:10px"></div>
+        `}
+        ${ca.ultimoErro ? `<p class="small" style="color:var(--danger);margin-top:10px">${App.esc(ca.ultimoErro)}</p>` : ''}
+        <p class="small muted" style="margin-top:10px">O Client Secret e a autorização ficam gravados
+        <b>só neste computador</b> e nunca aparecem no navegador. O sistema continua sendo a ferramenta
+        principal da oficina — a Conta Azul segue como o lado financeiro e fiscal.</p>
+      </div>
+      </div>
+
+      <div class="card">
+        <h3>🔄 O QUE SINCRONIZAR</h3>
+        <p class="small muted" style="margin-bottom:12px">Cada tipo de dado tem um sentido. O padrão segue onde o
+        dado <b>nasce</b> na oficina: cliente, orçamento, OS e venda nascem aqui e vão para lá; a confirmação de
+        pagamento nasce lá, na conciliação do banco, e volta para cá.</p>
+        <table style="width:100%;border-collapse:collapse;font-size:13px">
+          ${plano.tipos.map(linhaTipo).join('')}
+        </table>
+        <p class="small muted" style="margin-top:12px">“A enviar” é o que mudou desde o último envio. Nada sai
+        daqui sozinho: quando a sincronização estiver ligada, você confere a lista antes de confirmar.</p>
+        ${plano.conectado
+          ? ''
+          : '<p class="small" style="margin-top:10px;color:var(--text-3)">A Conta Azul ainda não está conectada — dá para deixar tudo escolhido agora e ligar depois.</p>'}
+      </div>
+      </div>`;
+
+    window.Adm = window.Adm || {};
+    el.querySelectorAll('.sync-sentido').forEach(sel => {
+      sel.onchange = async () => {
+        try {
+          await App.put('/sync/config', { entidade: sel.dataset.ent, sentido: sel.value });
+          App.toast('Sentido atualizado', 'ok');
+          renderContaAzul(el);
+        } catch (e) { App.toast(e.message, 'err'); }
+      };
+    });
+
+    /* ---- Conta Azul ---- */
+    Adm.caSalvar = async () => {
+      const v = id => (document.getElementById(id) || {}).value || '';
+      const corpo = {
+        clientId: v('ca-id').trim(),
+        clientSecret: v('ca-secret').trim(),
+        redirectUri: v('ca-redirect').trim(),
+        authBase: v('ca-authbase').trim(),
+        apiBase: v('ca-apibase').trim(),
+        escopo: v('ca-escopo').trim()
+      };
+      if (!corpo.redirectUri) return App.toast('Informe o endereço de retorno.', 'err');
+      try {
+        await App.put('/contaazul/config', corpo);
+        App.toast('Credenciais salvas. Agora clique em Conectar.', 'ok');
+        renderContaAzul(el);
+      } catch (e) { App.toast(e.message, 'err'); }
+    };
+
+    /* A autorização acontece na tela da Conta Azul, no navegador do usuário —
+       a senha da Conta Azul nunca passa por aqui. */
+    Adm.caConectar = async () => {
+      const out = document.getElementById('ca-url');
+      try {
+        const r = await App.post('/contaazul/connect', {});
+        const u = new URL(r.url);
+        // Mostra o que está sendo enviado: quando a Conta Azul devolve uma tela
+        // de erro genérica, a diferença costuma estar aqui — normalmente no
+        // endereço de retorno, que precisa ser idêntico ao cadastrado no portal.
+        out.innerHTML = `
+          <p class="small muted" style="margin-bottom:6px">Se a Conta Azul mostrar uma página de erro,
+          compare estes valores com os do app em <b>portaldevs.contaazul.com</b> — eles precisam ser idênticos:</p>
+          <table class="small" style="width:100%;border-collapse:collapse">
+            ${[['client_id', u.searchParams.get('client_id')],
+               ['redirect_uri', u.searchParams.get('redirect_uri')],
+               ['scope', u.searchParams.get('scope')],
+               ['servidor', u.origin + u.pathname]]
+              .map(([k, val]) => `<tr>
+                <td style="padding:3px 8px 3px 0;color:var(--text-3);white-space:nowrap">${k}</td>
+                <td class="mono" style="padding:3px 0;word-break:break-all">${App.esc(val || '—')}</td></tr>`).join('')}
+          </table>
+          <p style="margin-top:8px"><a class="btn sm" href="${App.esc(r.url)}" target="_blank" rel="noopener">🔗 Abrir a autorização</a></p>`;
+        window.open(r.url, '_blank');
+      } catch (e) {
+        out.innerHTML = '';
+        App.toast(e.message, 'err');
+      }
+    };
+
+    Adm.caTestar = async () => {
+      const out = document.getElementById('ca-resultado');
+      out.innerHTML = '<span class="muted">Falando com a Conta Azul…</span>';
+      const r = await App.post('/contaazul/test', {});
+      out.innerHTML = r.ok
+        ? `<span style="color:var(--ok)">✓ Conexão boa${r.conta && r.conta.nome ? ' — ' + App.esc(r.conta.nome) : ''}</span>`
+        : `<span style="color:var(--danger)">${App.esc(r.error)}</span>`;
+    };
+
+    Adm.caDesconectar = async () => {
+      if (!await App.confirm('Desconectar a Conta Azul? Nada é apagado dos dois lados — só a autorização é revogada aqui.')) return;
+      await App.post('/contaazul/disconnect', {});
+      App.toast('Conta Azul desconectada', 'ok');
+      renderContaAzul(el);
+    };
+
+    /* Mostra exatamente quais registros estão pendentes daquele tipo. */
+    Adm.caVer = (ent) => {
+      const t = plano.tipos.find(x => x.ent === ent);
+      if (!t) return;
+      App.modal(`
+        <h2>${App.esc(t.nome)} — a enviar</h2>
+        <p class="small muted">${t.pendentes} registro(s) mudaram desde o último envio.
+        ${t.exemplos.length < t.pendentes ? `Mostrando os ${t.exemplos.length} primeiros.` : ''}</p>
+        <ul class="small" style="margin:12px 0 0 18px">
+          ${t.exemplos.map(x => `<li style="padding:2px 0">${App.esc(x.rotulo)}</li>`).join('')}
+        </ul>
+        <div class="actions"><button class="btn" onclick="App.closeModal()">Fechar</button></div>`);
     };
   }
 

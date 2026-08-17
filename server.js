@@ -1007,17 +1007,24 @@ route('POST', '/api/contaazul/explorar', 'admin', async (req, res, user) => {
 
 /* ---- integrações externas (preparação p/ Conta Azul) ----
    Só leitura do estado de sincronização; nenhuma chamada externa ainda. */
-route('GET', '/api/sync/status', 'admin', async (req, res, query) => {
-  const sistema = 'contaazul';
-  const pend = sync.pendencias(sistema);
+/* O plano de sincronização: o que iria, para onde, e o que já foi.
+   É calculado só com dados locais — não toca na Conta Azul. */
+route('GET', '/api/sync/plano', 'admin', async (req, res) => {
   ok(res, {
-    sistema,
-    habilitado: false,
-    entidades: sync.ENTIDADES,
-    pendentes: Object.fromEntries(Object.entries(pend).map(([k, v]) => [k, v.length])),
-    jaSincronizados: db.all('syncRefs').filter(r => r.sistema === sistema).length,
-    observacao: 'Estrutura pronta. A integração só será ligada após conferir a documentação oficial vigente da API.'
+    sistema: 'contaazul',
+    conectado: contaazul.conectado(),
+    sentidos: sync.SENTIDOS,
+    tipos: sync.plano('contaazul')
   });
+});
+
+route('PUT', '/api/sync/config', 'admin', async (req, res, user) => {
+  const b = await readBody(req);
+  try {
+    sync.definirSentido(String(b.entidade || ''), String(b.sentido || ''));
+  } catch (e) { return bad(res, e.message); }
+  audit(user, 'update', 'settings', 1, `Sincronização: ${b.entidade} → ${b.sentido}`);
+  ok(res, { sistema: 'contaazul', conectado: contaazul.conectado(), sentidos: sync.SENTIDOS, tipos: sync.plano('contaazul') });
 });
 
 /* ---- etiquetas de envio: registro de emissão (vínculo com pedido/OS) ---- */
@@ -2171,6 +2178,20 @@ route('POST', '/api/hrPayments/:id/pay', 'hr', async (req, res, user, params) =>
   ok(res, { ok: true });
 });
 
+/* Desfaz o pagamento: estorna a saída de caixa que ele gerou e devolve o
+   lançamento para "pendente", liberando edição e exclusão. */
+route('POST', '/api/hrPayments/:id/unpay', 'hr', async (req, res, user, params) => {
+  const h = db.get('hrPayments', params.id);
+  if (!h) return notFound(res);
+  if (h.status !== 'pago') return bad(res, 'Este lançamento não está pago.');
+  const lancamentos = db.all('cashflow').filter(c => c.refType === 'hrPayments' && c.refId === h.id);
+  for (const c of lancamentos) db.remove('cashflow', c.id);
+  db.update('hrPayments', h.id, { status: 'pendente', dataPagamento: null });
+  audit(user, 'estornou', 'hrPayments', h.id,
+    `Pagamento desfeito — R$ ${Number(h.valor || 0).toFixed(2)}; ${lancamentos.length} lançamento(s) de caixa estornado(s)`);
+  ok(res, { ok: true, estornados: lancamentos.length });
+});
+
 /* ---- rastreabilidade: linha do tempo de um cabeçote/entidade ---- */
 route('GET', '/api/trace/:entity/:id', 'dashboard', async (req, res, user, params) => {
   const list = db.all('audit').filter(a =>
@@ -2207,6 +2228,16 @@ async function handleRest(req, res, user, collection, id) {
     audit(user, 'criou', collection, rec.id, cfg.label + (body.nome ? ': ' + body.nome : body.titulo ? ': ' + body.titulo : ' #' + rec.id));
     return ok(res, rec);
   }
+  /* Um lançamento de RH já pago gerou uma saída no caixa. Alterar o valor ou
+     apagar o lançamento deixaria essa saída órfã ou com valor divergente —
+     primeiro se desfaz o pagamento (que estorna o caixa), depois se edita. */
+  if (collection === 'hrPayments' && (method === 'PUT' || method === 'DELETE')) {
+    const atual = db.get(collection, id);
+    if (atual && atual.status === 'pago') {
+      return bad(res, 'Este lançamento já foi pago e gerou uma saída no caixa. Use “Desfazer pagamento” antes de editar ou excluir.');
+    }
+  }
+
   if (method === 'PUT') {
     const body = await readBody(req);
     delete body.id; delete body.createdAt;
