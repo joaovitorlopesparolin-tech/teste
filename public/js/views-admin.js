@@ -530,6 +530,18 @@ App.registerView('admin', async (view) => {
         `}
 
         <div style="border-top:1px solid var(--line-soft);margin-top:14px;padding-top:12px">
+          <b class="small">🔁 Conectar pelo refresh token do portal (o jeito mais fácil)</b>
+          <p class="small muted" style="margin:6px 0 8px">No portal, na página <b>Autenticação com OAuth 2.0</b>, o
+          exemplo de cURL traz um <span class="mono">refresh_token</span> pronto do app de desenvolvimento. Cole-o
+          aqui e a conexão fica completa na hora, <b>sem prazo de 3 minutos</b> e com renovação automática.</p>
+          <div style="display:flex;gap:6px">
+            <input id="ca-refresh" class="mono" type="password" placeholder="refresh_token do exemplo de cURL" style="flex:1">
+            <button class="btn primary" style="flex:none" onclick="Adm.caRefresh()">Conectar</button>
+          </div>
+          <div class="small" id="ca-ref-msg" style="margin-top:6px"></div>
+        </div>
+
+        <div style="border-top:1px solid var(--line-soft);margin-top:14px;padding-top:12px">
           <b class="small">🧪 Token de teste do portal</b>
           <p class="small muted" style="margin:6px 0 8px">Ao criar o app de desenvolvimento, o portal mostra um
           <span class="mono">access_token</span> <b>uma única vez</b>, já ligado a uma conta de teste com dados
@@ -701,6 +713,24 @@ App.registerView('admin', async (view) => {
         }
       } catch (e) {
         mostra(`<span style="color:var(--danger)">${App.esc(e.message)}</span>`, 'err');
+      }
+    };
+
+    Adm.caRefresh = async () => {
+      const t = (document.getElementById('ca-refresh') || {}).value || '';
+      const msg = document.getElementById('ca-ref-msg');
+      if (msg) msg.innerHTML = '<span class="muted">Validando com a Conta Azul…</span>';
+      try {
+        const r = await App.post('/contaazul/refresh-manual', { token: t.trim() });
+        if (r.ok) {
+          App.toast('Conta Azul conectada — renovação automática ativa!', 'ok');
+          renderContaAzul(el);
+        } else {
+          if (msg) msg.innerHTML = `<span style="color:var(--danger)">${App.esc(r.error)}</span>`;
+          App.toast(r.error, 'err');
+        }
+      } catch (e) {
+        if (msg) msg.innerHTML = `<span style="color:var(--danger)">${App.esc(e.message)}</span>`;
       }
     };
 
