@@ -485,34 +485,32 @@ App.registerView('admin', async (view) => {
           <div class="small" id="ca-resultado" style="margin-top:10px"></div>
         ` : `
           <p class="small muted" style="margin-bottom:12px">Ligação com a Conta Azul pela <b>API oficial</b>. Funciona
-          direto deste computador — o endereço de retorno pode ser <span class="mono">localhost</span>, então não é
-          preciso publicar o sistema na internet.</p>
+          direto deste computador: depois de autorizada, todas as chamadas são <b>de saída</b> — nada precisa ficar
+          publicado na internet.</p>
           <ol class="small muted" style="margin:0 0 12px 18px;padding:0">
-            <li>Crie uma aplicação em <b>portaldevs.contaazul.com</b>.</li>
-            <li>Lá, cadastre como endereço de retorno exatamente o que está no campo abaixo.</li>
-            <li>Copie o Client ID e o Client Secret para cá e salve.</li>
-            <li>Clique em <b>Conectar</b> e autorize na tela da Conta Azul.</li>
+            <li>Em <b>portaldevs.contaazul.com</b>, abra a sua aplicação.</li>
+            <li>Copie de lá para cá o <b>Client ID</b>, o <b>Client Secret</b> e o <b>endereço de retorno</b>, e salve.</li>
+            <li>Clique em <b>Conectar</b> e faça login na tela da Conta Azul.</li>
+            <li>Se o retorno cair no site deles, copie a barra do navegador e cole no campo que aparece aqui.</li>
           </ol>
           <label class="field"><span>Client ID</span>
             <input id="ca-id" placeholder="${ca.clientIdMascarado ? 'salvo: ' + App.esc(ca.clientIdMascarado) : 'cole aqui'}"></label>
           <label class="field"><span>Client Secret</span>
             <input id="ca-secret" type="password" placeholder="${ca.temSecret ? 'salvo — deixe em branco para manter' : 'cole aqui'}"></label>
-          <label class="field"><span>Endereço de retorno (cadastre este mesmo no portal)</span>
-            <input id="ca-redirect" value="${App.esc(ca.redirectUri || (location.origin + '/api/contaazul/callback'))}"></label>
-          <p class="small muted" style="margin:-6px 0 12px">Tem que ficar <b>idêntico</b> ao do portal, caractere por
-          caractere. Se der <span class="mono">redirect_mismatch</span>, é exatamente isto que está diferente —
-          o mais prático é <b>copiar do portal para cá</b>, que o sistema atende no caminho que você colar.</p>
-          ${/^https?:\/\/(127\.0\.0\.1|\d+\.\d+\.\d+\.\d+)/.test(ca.redirectUri || location.origin) ? `
-          <p class="small" style="color:var(--warn,#d29922);margin:-6px 0 12px">⚠ A autenticação da Conta Azul roda
-          sobre AWS Cognito, que só aceita endereço sem cadeado quando o nome é <b>localhost</b> — um número de IP
-          como <span class="mono">127.0.0.1</span> é recusado. Abra o sistema por
-          <span class="mono">http://localhost:3000</span> e use esse endereço nos dois lugares.</p>` : ''}
+          <label class="field"><span>Endereço de retorno — <b>copie o do portal</b></span>
+            <input id="ca-redirect" value="${App.esc(ca.redirectUri || '')}" placeholder="ex.: https://contaazul.com"></label>
+          <p class="small muted" style="margin:-6px 0 12px">Tem que ficar <b>idêntico</b> ao cadastrado, caractere
+          por caractere — é o que causa o erro <span class="mono">redirect_mismatch</span>. No app de
+          desenvolvimento ele costuma ser <span class="mono">https://contaazul.com</span>, ou seja, o retorno cai
+          no site deles e não aqui; nesse caso você conclui colando o endereço da barra, logo abaixo.</p>
           <details style="margin:4px 0 10px">
             <summary class="small muted" style="cursor:pointer">Ajustes avançados — ambiente e escopo</summary>
             <p class="small muted" style="margin:8px 0">Mexa aqui só se a Conta Azul indicar endereços diferentes
             (ambiente de desenvolvimento/sandbox) ou se a autorização for recusada por escopo.
             Deixe em branco para voltar ao padrão.</p>
-            <label class="field"><span>Servidor de autorização</span>
+            <label class="field"><span>Endereço da tela de autorização</span>
+              <input id="ca-autorizar" value="${App.esc(ca.autorizarUrl)}" placeholder="${App.esc(ca.padrao.autorizarUrl)}"></label>
+            <label class="field"><span>Servidor de token</span>
               <input id="ca-authbase" value="${App.esc(ca.authBase)}" placeholder="${App.esc(ca.padrao.authBase)}"></label>
             <label class="field"><span>Servidor da API</span>
               <input id="ca-apibase" value="${App.esc(ca.apiBase)}" placeholder="${App.esc(ca.padrao.apiBase)}"></label>
@@ -594,6 +592,7 @@ App.registerView('admin', async (view) => {
         clientId: v('ca-id').trim(),
         clientSecret: v('ca-secret').trim(),
         redirectUri: v('ca-redirect').trim(),
+        autorizarUrl: v('ca-autorizar').trim(),
         authBase: v('ca-authbase').trim(),
         apiBase: v('ca-apibase').trim(),
         escopo: v('ca-escopo').trim()
@@ -613,6 +612,11 @@ App.registerView('admin', async (view) => {
       try {
         const r = await App.post('/contaazul/connect', {});
         const u = new URL(r.url);
+        /* Na Conta Azul os parâmetros vêm depois do "#", então não estão em
+           search — é preciso lê-los do fragmento. */
+        const bruto = u.search ? u.search.slice(1) : (u.hash.split('?')[1] || '');
+        const par = new URLSearchParams(bruto);
+        const servidor = r.url.split('?')[0];
         // Mostra o que está sendo enviado: quando a Conta Azul devolve uma tela
         // de erro genérica, a diferença costuma estar aqui — normalmente no
         // endereço de retorno, que precisa ser idêntico ao cadastrado no portal.
@@ -620,19 +624,52 @@ App.registerView('admin', async (view) => {
           <p class="small muted" style="margin-bottom:6px">Se a Conta Azul mostrar uma página de erro,
           compare estes valores com os do app em <b>portaldevs.contaazul.com</b> — eles precisam ser idênticos:</p>
           <table class="small" style="width:100%;border-collapse:collapse">
-            ${[['client_id', u.searchParams.get('client_id')],
-               ['redirect_uri', u.searchParams.get('redirect_uri')],
-               ['scope', u.searchParams.get('scope')],
-               ['servidor', u.origin + u.pathname]]
+            ${[['client_id', par.get('client_id')],
+               ['redirect_uri', par.get('redirect_uri')],
+               ['scope', par.get('scope')],
+               ['servidor', servidor]]
               .map(([k, val]) => `<tr>
                 <td style="padding:3px 8px 3px 0;color:var(--text-3);white-space:nowrap">${k}</td>
                 <td class="mono" style="padding:3px 0;word-break:break-all">${App.esc(val || '—')}</td></tr>`).join('')}
           </table>
-          <p style="margin-top:8px"><a class="btn sm" href="${App.esc(r.url)}" target="_blank" rel="noopener">🔗 Abrir a autorização</a></p>`;
+          <p style="margin-top:8px"><a class="btn sm" href="${App.esc(r.url)}" target="_blank" rel="noopener">🔗 Abrir a autorização</a></p>
+          <div style="border-top:1px dashed var(--line);margin-top:12px;padding-top:10px">
+            <b class="small">Voltou para o site da Conta Azul?</b>
+            <p class="small muted" style="margin:6px 0 8px">Se o retorno cadastrado não aponta para cá, você cai
+            numa página deles com <span class="mono">?code=…</span> no endereço. Copie a <b>barra do navegador
+            inteira</b> e cole aqui. <b style="color:var(--warn,#d29922)">O código vale 3 minutos</b> — cole logo.</p>
+            <div style="display:flex;gap:6px">
+              <input id="ca-codigo" class="mono" placeholder="https://contaazul.com/?code=…" style="flex:1">
+              <button class="btn primary" style="flex:none" onclick="Adm.caCodigo()">Concluir</button>
+            </div>
+            <div class="small" id="ca-cod-msg" style="margin-top:6px"></div>
+          </div>`;
         window.open(r.url, '_blank');
       } catch (e) {
         out.innerHTML = '';
         App.toast(e.message, 'err');
+      }
+    };
+
+    Adm.caCodigo = async () => {
+      const texto = (document.getElementById('ca-codigo') || {}).value || '';
+      const msg = document.getElementById('ca-cod-msg');
+      const mostra = (html, tipo) => {
+        // Toast também, porque o painel some se a tela se redesenhar.
+        if (msg) msg.innerHTML = html;
+        App.toast(msg ? msg.textContent : '', tipo);
+      };
+      if (msg) msg.innerHTML = '<span class="muted">Trocando o código pelos tokens…</span>';
+      try {
+        const r = await App.post('/contaazul/codigo', { texto });
+        if (r.ok) {
+          App.toast('Conta Azul conectada!', 'ok');
+          renderContaAzul(el);
+        } else {
+          mostra(`<span style="color:var(--danger)">${App.esc(r.error)}</span>`, 'err');
+        }
+      } catch (e) {
+        mostra(`<span style="color:var(--danger)">${App.esc(e.message)}</span>`, 'err');
       }
     };
 

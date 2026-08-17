@@ -13,7 +13,7 @@ Da documentação pública da Conta Azul (API v2, lançada em março/2025):
 |---|---|
 | Portal do desenvolvedor | `portaldevs.contaazul.com` |
 | Documentação | `developers.contaazul.com` |
-| Autorização | `https://auth.contaazul.com/oauth2/authorize` |
+| Autorização | `https://login.contaazul.com/#/oauth/authorize` (servidor diferente do de token, e o caminho vem depois do `#`) |
 | Token | `https://auth.contaazul.com/oauth2/token` |
 | API | `https://api-v2.contaazul.com` |
 | Escopo | `openid profile aws.cognito.signin.user.admin` |
@@ -23,11 +23,19 @@ API foi substituída por esta.
 
 ## Por que não precisa publicar o sistema na internet
 
-O endereço de retorno do OAuth **pode ser `localhost`**. A autorização
-acontece no navegador do usuário, que é redirecionado de volta para o
-próprio sistema rodando na máquina. Depois disso, todas as chamadas são de
-**saída** — o sistema fala com a Conta Azul, e nunca o contrário. Por isso
-a integração funciona no computador da oficina, sem endereço público.
+Depois de autorizada, **todas as chamadas são de saída** — o sistema fala
+com a Conta Azul, nunca o contrário. Só a autorização em si envolve um
+retorno, e ela tem dois caminhos:
+
+1. **Retorno para o próprio sistema.** O endereço de retorno pode ser
+   `localhost`, e aí o servidor atende no caminho cadastrado (qualquer um —
+   ver `caminhoRetorno`).
+2. **Retorno para o site da Conta Azul.** É o caso do app de
+   desenvolvimento, cujo retorno é `https://contaazul.com`. O usuário cai
+   numa página deles com `?code=…` no endereço, copia a barra do navegador
+   e cola na tela do sistema. **O código vale 3 minutos.**
+
+Nos dois casos nada precisa estar publicado na internet.
 
 ## O que já está pronto
 
@@ -44,10 +52,20 @@ a integração funciona no computador da oficina, sem endereço público.
 | `quemSou()` | identifica a conta conectada (userInfo do OpenID) |
 | `status()` | resumo para a tela, **sem segredo e sem tokens** |
 
-### Tela (Administração → Configurações → 🔗 Conta Azul)
+| `codigoDe(texto)` | tira o código de um endereço colado inteiro |
+| `caminhoRetorno()` | o caminho onde o servidor deve atender o retorno |
+| `tokenManual(token)` | guarda o token que o portal mostra uma vez só |
 
-Campos de Client ID / Client Secret / endereço de retorno, botão
-**Conectar**, **Testar conexão** e **Desconectar**.
+### Tela (Administração → Conta Azul)
+
+Credenciais, **Conectar**, campo para colar o código do retorno, campo para
+o token de teste, **Testar conexão**, **Desconectar** e o leitor de
+recursos. Ao lado, o **plano de sincronização**: o sentido de cada tipo de
+dado e quanto está pendente.
+
+Endereço da tela de autorização, servidor de token, servidor da API e
+escopo são configuráveis (em "ajustes avançados"), porque a Conta Azul tem
+ambiente de desenvolvimento além do de produção.
 
 ### Segurança
 
@@ -85,8 +103,9 @@ O caminho para destravar isso já está no sistema:
 
 **`POST /api/contaazul/explorar`** (administrador, só GET, não altera nada
 na Conta Azul) faz uma leitura de qualquer recurso e mostra a resposta
-crua. Com a conta conectada, é assim que se confirma o formato real de
-cada recurso antes de escrever o mapa de campos.
+crua. Funciona tanto com a conta conectada quanto só com o token de teste
+do portal — que vem ligado a uma conta de dados fictícios, ideal para
+confirmar formatos sem tocar em dado real.
 
 Depois disso, por entidade:
 
