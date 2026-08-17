@@ -236,9 +236,20 @@ App.registerView('admin', async (view) => {
           ${bk.cloud.dir ? '<button class="btn ghost" onclick="Adm.clearBackup()">Desativar</button>' : ''}
         </div>
         <div class="small" style="margin-top:10px">${bkStatus}</div>
-        <p class="small muted" style="margin-top:10px"><b>Para restaurar:</b> instale o sistema em qualquer computador,
-        pegue o arquivo <span class="mono">jaques-backup-….json</span> mais recente na nuvem, renomeie para
-        <span class="mono">db.json</span> e coloque na pasta <span class="mono">data</span> do sistema (com ele parado).</p>
+      </div>
+
+      <div class="card" style="max-width:560px;margin-top:16px">
+        <h3>📦 LEVAR OS DADOS DE UM LUGAR PARA OUTRO</h3>
+        <p class="small muted" style="margin-bottom:12px">Baixe um arquivo com <b>tudo</b> que está no sistema —
+        clientes, orçamentos, ordens de serviço, financeiro. Esse mesmo arquivo entra em qualquer outra
+        instalação do sistema pelo botão de restaurar, mesmo que ela esteja na nuvem.</p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn primary" onclick="Adm.baixarBackup()">⬇ Baixar cópia de tudo</button>
+          <button class="btn" onclick="Adm.restaurarBackup()">⬆ Restaurar de um arquivo</button>
+        </div>
+        <p class="small muted" style="margin-top:10px">Restaurar <b>substitui</b> os dados que estão aqui pelos do
+        arquivo. O sistema guarda sozinho uma cópia do que havia antes, então dá para voltar atrás. Depois de
+        restaurar você entra de novo, com o usuário e a senha de <b>onde o arquivo veio</b>.</p>
       </div>
 
       <div class="card" style="max-width:560px;margin-top:16px">
@@ -343,6 +354,55 @@ App.registerView('admin', async (view) => {
       else App.toast(r.naoConfigurado ? 'Backup local feito. Configure a pasta da nuvem para copiar para o Drive.' : 'Falhou: ' + (r.error || ''), r.naoConfigurado ? 'ok' : 'err');
       renderSettings(el);
     };
+    /* Baixa com o token no cabeçalho — o endereço nunca carrega a credencial. */
+    Adm.baixarBackup = async () => {
+      try {
+        const r = await fetch('/api/backup/download', { headers: { Authorization: 'Bearer ' + App.token() } });
+        if (!r.ok) throw new Error('Não consegui gerar a cópia.');
+        const blob = await r.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `jaques-backup-${new Date().toISOString().slice(0, 10)}.json`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+        App.toast('Cópia baixada — guarde este arquivo em lugar seguro', 'ok');
+      } catch (e) { App.toast(e.message, 'err'); }
+    };
+
+    Adm.restaurarBackup = () => {
+      const inp = document.createElement('input');
+      inp.type = 'file';
+      inp.accept = '.json,application/json';
+      inp.onchange = async () => {
+        const arq = inp.files && inp.files[0];
+        if (!arq) return;
+        let banco;
+        try {
+          banco = JSON.parse(await arq.text());
+        } catch (e) { return App.toast('Este arquivo não é um backup do sistema.', 'err'); }
+
+        const qtd = c => Array.isArray(banco[c]) ? banco[c].length : 0;
+        const okir = await App.confirm(
+          `<b>${App.esc(arq.name)}</b> contém ${qtd('clients')} cliente(s), ` +
+          `${qtd('serviceOrders')} ordem(ns) de serviço e ${qtd('users')} usuário(s).<br><br>` +
+          'Isto <b>substitui</b> todos os dados que estão aqui agora. Uma cópia do que existe ' +
+          'hoje é guardada automaticamente antes da troca.<br><br>' +
+          'Depois de restaurar, você precisa entrar de novo — com o usuário e a senha de onde o arquivo veio.',
+          { html: true });
+        if (!okir) return;
+
+        try {
+          const r = await App.post('/backup/restore', { banco });
+          App.toast(`Restaurado: ${r.clientes} cliente(s), ${r.usuarios} usuário(s). Entre de novo.`, 'ok');
+          setTimeout(() => App.logout(), 2500);
+        } catch (e) { App.toast(e.message, 'err'); }
+      };
+      inp.click();
+    };
+
     Adm.testAI = async () => {
       const out = document.getElementById('cfg-ai-result');
       out.innerHTML = '<span class="muted">Testando conexão…</span>';

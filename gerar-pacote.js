@@ -95,10 +95,14 @@ function criarZip(entradas, destino) {
 
 /* ---------------- montagem da lista ---------------- */
 
+/* Fora do pacote do Windows: a pasta dist (é o próprio pacote), os arquivos de
+   bastidor do git, o gerador e a receita de nuvem — que só a hospedagem usa. */
+const FORA = new Set(['.gitignore', '.gitattributes', 'gerar-pacote.js',
+                      'Dockerfile', '.dockerignore']);
+
 const versionados = execFileSync('git', ['ls-files'], { cwd: RAIZ, encoding: 'utf8' })
   .split('\n').map(s => s.trim())
-  .filter(s => s && !s.startsWith('dist/') && s !== '.gitignore' && s !== '.gitattributes'
-            && s !== 'gerar-pacote.js');
+  .filter(s => s && !s.startsWith('dist/') && !FORA.has(s));
 
 /* node.exe: da raiz, ou reaproveitado do pacote anterior */
 function acharNodeExe() {

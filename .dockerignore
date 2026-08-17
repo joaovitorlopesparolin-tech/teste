@@ -1,0 +1,8 @@
+# Nada disto deve entrar na imagem enviada para a nuvem.
+data
+dist
+node.exe
+node_modules
+.git
+*.bat
+windows
