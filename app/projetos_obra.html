@@ -1,0 +1,619 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Projetos Liberados — Martins Notari</title>
+<style>
+  :root{
+    --graphite:#1A1A1A;--yellow:#FFCD00;--offwhite:#F6F5F1;
+    --green:#1f7a3d;--green-bg:#e7f3eb;--red:#9a2b2b;--red-bg:#f5e6e6;
+    --gray:#6b6b6b;--line:#e2e1dc;--card:#ffffff;--blue:#1c4f8c;--blue-bg:#e8f0f9;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
+  html,body{background:var(--offwhite);color:var(--graphite);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    -webkit-font-smoothing:antialiased;}
+  body{padding-bottom:90px;}
+  header{background:var(--graphite);color:#fff;padding:14px 18px;position:sticky;top:0;z-index:50;box-shadow:0 2px 10px rgba(0,0,0,.18);}
+  .brandrow{display:flex;align-items:center;gap:12px;}
+  .mark{width:34px;height:34px;border-radius:7px;background:var(--yellow);display:flex;align-items:center;justify-content:center;flex-shrink:0;}
+  .mark span{font-weight:800;color:var(--graphite);font-size:16px;letter-spacing:-.5px;}
+  .brandtxt h1{font-size:15px;font-weight:700;letter-spacing:.3px;line-height:1.1;}
+  .brandtxt p{font-size:11px;color:#b9b9b9;margin-top:2px;letter-spacing:.4px;text-transform:uppercase;}
+  .rolepill{margin-left:auto;font-size:11px;font-weight:800;padding:6px 11px;border-radius:20px;letter-spacing:.5px;display:flex;align-items:center;gap:6px;cursor:pointer;border:1px solid #444;}
+  .rolepill.canteiro{background:#2a2a2a;color:#cfcfcf;}
+  .rolepill.eng{background:var(--yellow);color:var(--graphite);border-color:var(--yellow);}
+  .obrasel{background:#222;padding:13px 16px;display:flex;align-items:center;justify-content:space-between;cursor:pointer;border-top:1px solid #333;}
+  .osleft{display:flex;flex-direction:column;gap:2px;}
+  .oslabel{font-size:10px;font-weight:700;letter-spacing:1px;color:#8a8a8a;}
+  .osname{font-size:16px;font-weight:700;color:#fff;}
+  .oschev{width:22px;height:22px;color:var(--yellow);}
+  .obrabar{display:none;}
+  .toolbar{padding:14px 14px 6px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;}
+  .search{flex:1;min-width:160px;position:relative;}
+  .search input{width:100%;padding:11px 12px 11px 36px;border:1px solid var(--line);border-radius:10px;font-size:15px;background:#fff;color:var(--graphite);}
+  .search svg{position:absolute;left:11px;top:50%;transform:translateY(-50%);width:16px;height:16px;opacity:.45;}
+  .disc-filter{display:flex;gap:6px;overflow-x:auto;padding:4px 14px 8px;scrollbar-width:none;}
+  .disc-filter::-webkit-scrollbar{display:none;}
+  .dchip{flex-shrink:0;border:1px solid var(--line);background:#fff;color:var(--gray);padding:6px 12px;border-radius:8px;font-size:12.5px;font-weight:600;cursor:pointer;white-space:nowrap;}
+  .dchip.active{background:var(--graphite);color:#fff;border-color:var(--graphite);}
+  .toggle-old{display:flex;align-items:center;gap:7px;padding:2px 14px 10px;font-size:13px;color:var(--gray);}
+  .toggle-old input{width:18px;height:18px;accent-color:var(--graphite);}
+  .list{padding:4px 14px;}
+  .group-label{font-size:11px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;color:var(--gray);margin:18px 4px 8px;display:flex;align-items:center;gap:8px;}
+  .group-label::after{content:"";flex:1;height:1px;background:var(--line);}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:10px;box-shadow:0 1px 2px rgba(0,0,0,.03);}
+  .card.superada{opacity:.62;background:#fafafa;}
+  .ctop{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;}
+  .cnum{font-size:12px;font-weight:700;color:var(--gray);letter-spacing:.5px;font-family:ui-monospace,monospace;}
+  .ctitle{font-size:15.5px;font-weight:700;margin-top:3px;line-height:1.25;}
+  .badge{flex-shrink:0;font-size:11px;font-weight:800;padding:5px 9px;border-radius:7px;letter-spacing:.5px;display:inline-flex;align-items:center;gap:4px;}
+  .badge.lib{background:var(--green-bg);color:var(--green);}
+  .badge.sup{background:var(--red-bg);color:var(--red);}
+  .badge.off{background:#ececec;color:#777;}
+  .dot{width:6px;height:6px;border-radius:50%;background:currentColor;}
+  .meta{display:flex;flex-wrap:wrap;gap:14px;margin-top:10px;font-size:12.5px;color:var(--gray);}
+  .meta b{color:var(--graphite);font-weight:700;}
+  .obsbox{margin-top:9px;background:#fffbe9;border:1px solid #f0e3b0;border-radius:8px;padding:8px 10px;font-size:12.5px;color:#6b5d1a;display:flex;gap:7px;align-items:flex-start;line-height:1.4;}
+  .obsbox .obsic{font-weight:800;flex-shrink:0;}
+  .rev{display:inline-block;background:var(--graphite);color:var(--yellow);font-family:ui-monospace,monospace;font-weight:700;font-size:12px;padding:2px 8px;border-radius:6px;}
+  .actions{display:flex;gap:8px;margin-top:13px;}
+  .btn{flex:1;border:none;border-radius:9px;padding:11px;font-size:13.5px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:7px;transition:.15s;}
+  .btn svg{width:16px;height:16px;}
+  .btn-pdf{background:var(--graphite);color:#fff;}
+  .btn-dwg{background:#fff;color:var(--graphite);border:1.5px solid var(--graphite);}
+  .card.superada .btn-pdf{background:#888;}
+  .card.superada .btn-dwg{border-color:#aaa;color:#888;}
+  .admin-row{display:flex;gap:8px;margin-top:9px;padding-top:11px;border-top:1px dashed var(--line);}
+  .abtn{flex:1;border:none;border-radius:8px;padding:9px;font-size:12.5px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px;}
+  .abtn svg{width:14px;height:14px;}
+  .abtn.lib{background:var(--green-bg);color:var(--green);}
+  .abtn.lib:active{background:var(--green);color:#fff;}
+  .abtn.edit{background:#eee;color:#444;}
+  .abtn.hist{background:var(--blue-bg);color:var(--blue);}
+  .abtn.warn{background:#fdf0d8;color:#9a6b1a;}
+  .abtn.warn:active{background:#9a6b1a;color:#fff;}
+  .abtn.danger{background:var(--red-bg);color:var(--red);}
+  .abtn.danger:active{background:var(--red);color:#fff;}
+  .abtn[disabled]{opacity:.4;cursor:default;}
+  .empty{text-align:center;padding:50px 20px;color:var(--gray);}
+  .empty svg{width:40px;height:40px;opacity:.3;margin-bottom:10px;}
+  .fab{position:fixed;right:18px;bottom:22px;background:var(--yellow);color:var(--graphite);border:none;border-radius:16px;padding:15px 20px;font-size:15px;font-weight:800;cursor:pointer;box-shadow:0 6px 18px rgba(0,0,0,.28);display:none;align-items:center;gap:9px;z-index:60;}
+  .fab.show{display:flex;}
+  .fab svg{width:20px;height:20px;}
+  .modal{position:fixed;inset:0;background:rgba(20,20,20,.96);z-index:100;display:none;flex-direction:column;}
+  .modal.open{display:flex;}
+  .mhead{padding:14px 16px;display:flex;align-items:center;gap:12px;border-bottom:1px solid #333;color:#fff;}
+  .mhead .x{background:#333;border:none;color:#fff;width:34px;height:34px;border-radius:8px;font-size:20px;cursor:pointer;flex-shrink:0;line-height:1;}
+  .mhead .mt{flex:1;min-width:0;}
+  .mhead .mt h3{font-size:14px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .mhead .mt p{font-size:11.5px;color:#9a9a9a;margin-top:2px;}
+  .mbody{flex:1;display:flex;align-items:center;justify-content:center;padding:20px;text-align:center;color:#bbb;overflow-y:auto;}
+  .mbody .ph{max-width:340px;}
+  .mbody .ph .ico{width:60px;height:60px;margin:0 auto 16px;opacity:.5;}
+  .mbody .ph h4{color:#fff;font-size:16px;margin-bottom:8px;}
+  .mbody .ph p{font-size:13.5px;line-height:1.5;}
+  .measure-note{margin-top:16px;background:#2a2a2a;border-radius:10px;padding:12px 14px;font-size:12.5px;color:#cfcfcf;display:flex;gap:9px;align-items:flex-start;text-align:left;}
+  .measure-note .yc{color:var(--yellow);font-weight:800;flex-shrink:0;}
+  .sheet{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:110;display:none;align-items:flex-end;justify-content:center;}
+  .sheet.open{display:flex;}
+  .sheet-card{background:var(--offwhite);width:100%;max-width:520px;border-radius:20px 20px 0 0;padding:20px 18px calc(20px + env(safe-area-inset-bottom));max-height:92vh;overflow-y:auto;animation:slideup .25s ease;}
+  @keyframes slideup{from{transform:translateY(40px);opacity:.6}to{transform:translateY(0);opacity:1}}
+  .sheet-card h2{font-size:18px;font-weight:800;margin-bottom:4px;}
+  .sheet-card .sub{font-size:13px;color:var(--gray);margin-bottom:18px;}
+  .field{margin-bottom:14px;}
+  .field label{display:block;font-size:12px;font-weight:700;color:var(--gray);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;}
+  .field input,.field select{width:100%;padding:12px;border:1px solid var(--line);border-radius:10px;font-size:15px;background:#fff;color:var(--graphite);}
+  .filebox{border:1.5px dashed var(--line);border-radius:10px;padding:14px;text-align:center;font-size:13px;color:var(--gray);background:#fff;}
+  .filebox b{color:var(--graphite);}
+  .row2{display:flex;gap:10px;}.row2 .field{flex:1;}
+  .sheet-actions{display:flex;gap:10px;margin-top:8px;}
+  .sbtn{flex:1;border:none;border-radius:11px;padding:14px;font-size:15px;font-weight:800;cursor:pointer;}
+  .sbtn.primary{background:var(--graphite);color:#fff;}
+  .sbtn.ghost{background:transparent;color:var(--gray);border:1px solid var(--line);}
+  .seg{display:flex;background:#ececec;border-radius:10px;padding:3px;margin-bottom:16px;}
+  .seg button{flex:1;border:none;background:transparent;padding:10px;border-radius:8px;font-size:13px;font-weight:700;color:var(--gray);cursor:pointer;}
+  .seg button.on{background:#fff;color:var(--graphite);box-shadow:0 1px 3px rgba(0,0,0,.1);}
+  .hist-item{background:#fff;border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin-bottom:9px;display:flex;justify-content:space-between;align-items:center;gap:10px;}
+  .hist-item .hl{font-size:13.5px;}
+  .hist-item .hl b{font-family:ui-monospace,monospace;}
+  .hist-item .hd{font-size:11.5px;color:var(--gray);margin-top:2px;}
+  .modehint{background:var(--blue-bg);color:var(--blue);border-radius:10px;padding:10px 12px;font-size:12.5px;margin-bottom:14px;display:flex;gap:8px;align-items:flex-start;}
+  .modehint b{font-weight:800;}
+  footer{text-align:center;padding:24px 20px 0;font-size:11px;color:#b3b2ad;}
+  .toast{position:fixed;left:50%;bottom:100px;transform:translateX(-50%);background:var(--graphite);color:#fff;padding:12px 20px;border-radius:12px;font-size:13.5px;font-weight:600;z-index:200;opacity:0;pointer-events:none;transition:.3s;box-shadow:0 6px 20px rgba(0,0,0,.3);}
+  .toast.show{opacity:1;bottom:115px;}
+  /* ===== DESKTOP ===== */
+  @media (min-width:820px){
+    body{padding-bottom:40px;}
+    header{padding:16px 32px;}
+    .brandtxt h1{font-size:17px;}
+    .obrasel{padding:14px 32px;}
+    .obrasel .osleft{flex-direction:row;align-items:baseline;gap:10px;}
+    /* container central */
+    .toolbar,.disc-filter,.toggle-old,.list,footer,#engHint{max-width:1080px;margin-left:auto;margin-right:auto;}
+    .toolbar{padding-top:20px;}
+    .search input{font-size:14px;}
+    /* grade de cards */
+    .list{display:grid;grid-template-columns:1fr 1fr;gap:12px;align-items:start;padding:8px 24px;}
+    .group-label{grid-column:1/-1;margin:14px 4px 2px;}
+    .card{margin-bottom:0;}
+    /* botões em proporção (não esticam demais) */
+    .actions{gap:10px;}
+    .btn{flex:0 1 auto;min-width:130px;padding:10px 16px;}
+    .admin-row .abtn{padding:9px 12px;}
+    /* sheets viram modais centrais no desktop */
+    .sheet{align-items:center;}
+    .sheet-card{border-radius:16px;max-width:540px;animation:none;}
+    .fab{right:32px;bottom:32px;}
+    .modal .mbody .ph{max-width:460px;}
+  }
+  @media (min-width:1280px){
+    .list{grid-template-columns:1fr 1fr 1fr;max-width:1280px;}
+    .toolbar,.disc-filter,.toggle-old,footer,#engHint{max-width:1280px;}
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="brandrow">
+    <div class="mark"><span>MN</span></div>
+    <div class="brandtxt"><h1>Projetos Liberados</h1><p>Martins Notari</p></div>
+    <div class="rolepill canteiro" id="rolepill" onclick="openLogin()"><span id="roleicon">👁</span><span id="roletext">Canteiro</span></div>
+  </div>
+</header>
+<div class="obrasel" id="obrasel" onclick="openObraPicker()">
+  <div class="osleft"><span class="oslabel">OBRA</span><span class="osname" id="osname">—</span></div>
+  <svg class="oschev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m6 9 6 6 6-6"/></svg>
+</div>
+<div id="engHint"></div>
+<div class="toolbar">
+  <div class="search">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+    <input id="search" type="search" placeholder="Buscar prancha, número, disciplina…" />
+  </div>
+</div>
+<div class="disc-filter" id="discfilter"></div>
+<label class="toggle-old"><input type="checkbox" id="showOld"> Mostrar revisões superadas</label>
+<div class="list" id="list"></div>
+<footer>Revisão vigente verificada por Engenharia · Sempre execute pela revisão liberada</footer>
+<button class="fab" id="fab" onclick="openForm()">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg>Nova prancha
+</button>
+
+<div class="modal" id="viewer">
+  <div class="mhead"><button class="x" onclick="closeViewer()">×</button><div class="mt"><h3 id="mtitle">—</h3><p id="msub">—</p></div></div>
+  <div class="mbody"><div class="ph">
+    <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>
+    <h4 id="phtitle">Visualizador</h4><p id="phtext"></p>
+    <div class="measure-note"><span class="yc">↔</span><span id="measnote"></span></div>
+  </div></div>
+</div>
+
+<div class="sheet" id="loginSheet"><div class="sheet-card">
+  <h2>Entrar</h2><p class="sub">O canteiro só visualiza. A engenharia organiza e libera revisões.</p>
+  <div class="seg" id="loginSeg"><button class="on" onclick="pickRole('canteiro',event)">👁 Canteiro</button><button onclick="pickRole('eng',event)">🔧 Engenharia</button></div>
+  <div id="engPass" style="display:none"><div class="field"><label>Senha da engenharia</label><input type="password" id="passInput" placeholder="(protótipo: 1234)"/></div></div>
+  <div class="sheet-actions"><button class="sbtn ghost" onclick="closeLogin()">Cancelar</button><button class="sbtn primary" onclick="confirmLogin()">Entrar</button></div>
+</div></div>
+
+<div class="sheet" id="formSheet"><div class="sheet-card">
+  <h2 id="formTitle">Nova prancha</h2><p class="sub">Cadastre a prancha e anexe os arquivos. Ao liberar, a regra de revisão é aplicada.</p>
+  <div class="row2"><div class="field"><label>Obra</label><select id="fObra"></select></div><div class="field"><label>Disciplina</label><select id="fDisc"></select></div></div>
+  <div class="row2"><div class="field"><label>Número</label><input id="fNum" placeholder="ARQ-001"/></div><div class="field"><label>Revisão</label><input id="fRev" placeholder="R05"/></div></div>
+  <div class="field"><label>Título da prancha</label><input id="fTit" placeholder="Planta baixa — Pavimento Tipo"/></div>
+  <div class="field"><label>Autor / Projetista</label><input id="fAut" placeholder="Eng. Marcelo"/></div>
+  <div class="field"><label>Observação da revisão (o que mudou)</label><input id="fObs" placeholder="Ex.: Alteradas as esquadrias da fachada oeste"/></div>
+  <div class="row2"><div class="field"><label>Arquivo PDF</label><div class="filebox">📄 <b>Escolher PDF</b><br><span style="font-size:11px">(protótipo)</span></div></div><div class="field"><label>Arquivo DWG</label><div class="filebox">📐 <b>Escolher DWG</b><br><span style="font-size:11px">(protótipo)</span></div></div></div>
+  <div class="sheet-actions"><button class="sbtn ghost" onclick="closeForm()">Cancelar</button><button class="sbtn primary" onclick="saveForm()">Salvar e liberar</button></div>
+</div></div>
+
+<div class="sheet" id="histSheet"><div class="sheet-card">
+  <h2 id="histTitle">Histórico</h2><p class="sub" id="histSub"></p><div id="histList"></div>
+  <div class="sheet-actions"><button class="sbtn primary" onclick="closeHist()">Fechar</button></div>
+</div></div>
+
+<div class="sheet" id="obraPicker"><div class="sheet-card">
+  <h2>Selecionar obra</h2><p class="sub" id="opSub">Toque na obra que deseja abrir.</p>
+  <div id="obraList"></div>
+  <div id="opEngAdd" style="display:none"><button class="sbtn ghost" style="width:100%;margin-top:4px" onclick="openObraForm()">+ Cadastrar nova obra</button></div>
+  <div class="sheet-actions"><button class="sbtn ghost" onclick="closeObraPicker()">Fechar</button></div>
+</div></div>
+
+<div class="sheet" id="obraPassSheet"><div class="sheet-card">
+  <h2 id="opassTitle">Obra protegida</h2><p class="sub">Esta obra tem senha de visualização. Informe o código para abrir.</p>
+  <div class="field"><label>Senha da obra</label><input type="password" id="obraPassInput" placeholder="código de acesso"/></div>
+  <div class="sheet-actions"><button class="sbtn ghost" onclick="closeObraPass()">Cancelar</button><button class="sbtn primary" onclick="confirmObraPass()">Abrir</button></div>
+</div></div>
+
+<div class="sheet" id="obraFormSheet"><div class="sheet-card">
+  <h2 id="obraFormTitle">Nova obra</h2><p class="sub">Cadastre a obra. A senha de visualização é opcional — deixe em branco para acesso livre.</p>
+  <div class="row2"><div class="field"><label>Nome</label><input id="oNome" placeholder="Vila Nord"/></div><div class="field"><label>Código</label><input id="oCod" placeholder="20001"/></div></div>
+  <div class="field"><label>Cidade</label><input id="oCid" placeholder="Foz do Iguaçu — PR"/></div>
+  <div class="field"><label>Senha de visualização (opcional)</label><input id="oSenha" placeholder="deixe em branco = acesso livre"/></div>
+  <div class="sheet-actions"><button class="sbtn ghost" onclick="closeObraForm()">Cancelar</button><button class="sbtn primary" onclick="saveObra()">Salvar obra</button></div>
+</div></div>
+
+<div class="sheet" id="discSheet"><div class="sheet-card">
+  <h2>Tipos de projeto</h2><p class="sub">Lista única para todas as obras. No canteiro, só aparecem os tipos que têm prancha. Tipos em uso não podem ser removidos.</p>
+  <div id="discMgrList"></div>
+  <div class="field" style="margin-top:14px"><label>Novo tipo</label>
+    <div style="display:flex;gap:8px"><input id="newDisc" placeholder="Ex.: Incêndio (PPCI)"/><button class="sbtn primary" style="flex:0 0 auto;padding:12px 18px" onclick="addDisc()">Add</button></div>
+  </div>
+  <div class="sheet-actions"><button class="sbtn primary" onclick="closeDiscManager()">Fechar</button></div>
+</div></div>
+
+<div class="sheet" id="importSheet"><div class="sheet-card">
+  <h2>Importação concluída</h2><p class="sub" id="impSub"></p>
+  <div id="impList"></div>
+  <div class="sheet-actions"><button class="sbtn primary" onclick="closeImportSheet()">Fechar</button></div>
+</div></div>
+
+<input type="file" id="importFile" accept=".json,application/json" style="display:none" onchange="handleImportFile(event)">
+
+<div class="toast" id="toast"></div>
+
+<script>
+let OBRAS=[
+  {id:"20001",nome:"Vila Nord",cidade:"Foz do Iguaçu — PR",senha:""},
+  {id:"30600",nome:"Recanto",cidade:"Foz do Iguaçu — PR",senha:""},
+  {id:"40300",nome:"SESC Fecomércio",cidade:"Cascavel — PR",senha:"sesc2026"},
+];
+let DISCIPLINAS=["Arquitetônico","Interiores","Paisagismo","Luminotécnico","Estrutural","Fundações","Estrutura metálica","Hidrossanitário","Águas pluviais","Elétrica","SPDA","Climatização (AVAC)","Gás","Incêndio (PPCI)","Dados / Telecom","Automação (BMS)","Elevadores"];
+/* Guia de Nomenclatura v2.2 — sigla → nome da disciplina (usado na importação do manifesto do Revit) */
+const SIGLAS={ARQ:"Arquitetônico",INT:"Interiores",PAI:"Paisagismo",LUM:"Luminotécnico",IMP:"Impermeabilização",ESQ:"Esquadrias",COM:"Comunicação visual",ACU:"Acústica",EST:"Estrutural",FUN:"Fundações",EMT:"Estrutura metálica",DET:"Detalhamentos",HID:"Hidrossanitário",PLU:"Águas pluviais",ELE:"Elétrica",SPD:"SPDA",AVA:"Climatização (AVAC)",GAS:"Gás",INC:"Incêndio (PPCI)",DAD:"Dados / Telecom",BMS:"Automação (BMS)",ELV:"Elevadores",TOP:"Topografia / Implantação",TER:"Terraplenagem",PAV:"Pavimentação"};
+let PRANCHAS=[
+  {obra:"20001",disc:"Arquitetônico",num:"ARQ-001",titulo:"Planta baixa — Pavimento Tipo",rev:"R04",data:"12/06/2026",autor:"Eng. Marcelo",status:"liberado",obs:"Alteradas as esquadrias da fachada oeste e reposicionada a porta da suíte 02."},
+  {obra:"20001",disc:"Arquitetônico",num:"ARQ-001",titulo:"Planta baixa — Pavimento Tipo",rev:"R03",data:"02/04/2026",autor:"Eng. Marcelo",status:"superado"},
+  {obra:"20001",disc:"Arquitetônico",num:"ARQ-002",titulo:"Cortes AA e BB",rev:"R02",data:"12/06/2026",autor:"Eng. Marcelo",status:"liberado"},
+  {obra:"20001",disc:"Estrutural",num:"EST-010",titulo:"Fôrma — Fundação / Radier",rev:"R05",data:"28/05/2026",autor:"Zoco Engenharia",status:"liberado"},
+  {obra:"20001",disc:"Estrutural",num:"EST-021",titulo:"Armação — Pilares P1 a P14",rev:"R02",data:"30/05/2026",autor:"Zoco Engenharia",status:"liberado"},
+  {obra:"20001",disc:"Hidrossanitário",num:"HID-100",titulo:"Esgoto e água fria — Tipo",rev:"R01",data:"15/05/2026",autor:"Proj. Hidro",status:"liberado"},
+  {obra:"20001",disc:"Elétrica",num:"ELE-200",titulo:"Pontos elétricos — Tipo",rev:"R03",data:"10/06/2026",autor:"Eletroprojetos",status:"liberado"},
+  {obra:"20001",disc:"Elétrica",num:"ELE-200",titulo:"Pontos elétricos — Tipo",rev:"R02",data:"20/04/2026",autor:"Eletroprojetos",status:"superado"},
+  {obra:"30600",disc:"Arquitetônico",num:"ARQ-T01",titulo:"Torre Central — Planta tipo",rev:"R06",data:"08/06/2026",autor:"Eng. Marcelo",status:"liberado"},
+  {obra:"30600",disc:"Arquitetônico",num:"ARQ-CE1",titulo:"Centro de Eventos — Cobertura",rev:"R03",data:"05/06/2026",autor:"Eng. Marcelo",status:"liberado"},
+  {obra:"30600",disc:"Estrutural",num:"EST-T05",titulo:"Torre — Fôrma cobertura",rev:"R04",data:"01/06/2026",autor:"Zoco Engenharia",status:"liberado",obs:"Reforço de armadura na laje técnica conforme novo carregamento dos equipamentos de climatização."},
+  {obra:"30600",disc:"Hidrossanitário",num:"HID-T10",titulo:"Torre — Prumadas hidráulicas",rev:"R02",data:"03/06/2026",autor:"Proj. Hidro",status:"liberado"},
+  {obra:"30600",disc:"Climatização (AVAC)",num:"CLI-001",titulo:"Climatização — Centro de Eventos",rev:"R01",data:"28/05/2026",autor:"Bosch Climatização",status:"liberado"},
+  {obra:"40300",disc:"Arquitetônico",num:"ARQ-R01",titulo:"Retrofit — Planta geral térreo",rev:"R02",data:"02/06/2026",autor:"Eng. Marcelo",status:"liberado"},
+  {obra:"40300",disc:"Arquitetônico",num:"ARQ-R02",titulo:"Caixilhos — Fachada principal",rev:"R01",data:"20/05/2026",autor:"Eng. Marcelo",status:"liberado"},
+  {obra:"40300",disc:"Estrutural",num:"EST-R01",titulo:"Reforço estrutural — Mezanino",rev:"R03",data:"25/05/2026",autor:"Zoco Engenharia",status:"liberado"},
+];
+let state={obra:"20001",disc:"Todas",showOld:false,q:"",role:"canteiro",revMode:"auto"};
+let editing=null, loginRolePick="canteiro";
+let unlocked={"20001":true,"30600":true}; // obras sem senha já liberadas
+let pendingObra=null, editingObra=null;
+function hoje(){const d=new Date();return String(d.getDate()).padStart(2,'0')+'/'+String(d.getMonth()+1).padStart(2,'0')+'/'+d.getFullYear();}
+function esc(s){return (s||"").replace(/'/g,"\\'");}
+function toast(m){const t=document.getElementById('toast');t.textContent=m;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2200);}
+function obraById(id){return OBRAS.find(o=>o.id===id);}
+function canView(o){return state.role==="eng"||!o.senha||unlocked[o.id];}
+function renderObras(){
+  const o=obraById(state.obra);
+  document.getElementById("osname").textContent=o?o.nome+" · "+o.id:"—";
+}
+function openObraPicker(){
+  const eng=state.role==="eng";
+  document.getElementById("opEngAdd").style.display=eng?"block":"none";
+  document.getElementById("opSub").textContent=eng?"Toque para abrir, ou cadastre uma nova obra.":"Toque na obra que deseja abrir.";
+  document.getElementById("obraList").innerHTML=OBRAS.map(o=>{
+    const locked=!!o.senha&&!eng&&!unlocked[o.id];
+    return `<div class="hist-item" style="cursor:pointer" onclick="chooseObra('${o.id}')">
+      <div class="hl"><b>${o.nome}</b> · ${o.id}<div class="hd">${o.cidade||''}</div></div>
+      ${o.senha?`<span class="badge off"><span class="dot"></span>${locked?'🔒 SENHA':'🔓 LIBERADA'}</span>`:`<span class="hd">livre</span>`}
+    </div>`;
+  }).join("");
+  document.getElementById("obraPicker").classList.add("open");
+}
+function closeObraPicker(){document.getElementById("obraPicker").classList.remove("open");}
+function chooseObra(id){
+  const o=obraById(id);
+  if(!canView(o)){pendingObra=id;closeObraPicker();
+    document.getElementById('opassTitle').textContent='🔒 '+o.nome;
+    document.getElementById('obraPassInput').value='';
+    document.getElementById("obraPassSheet").classList.add("open");return;}
+  state.obra=id;closeObraPicker();renderObras();renderList();
+}
+function closeObraPass(){document.getElementById("obraPassSheet").classList.remove("open");pendingObra=null;}
+function confirmObraPass(){
+  const o=obraById(pendingObra);const v=document.getElementById('obraPassInput').value;
+  if(v!==o.senha){toast('Senha da obra incorreta');return;}
+  unlocked[o.id]=true;state.obra=o.id;
+  document.getElementById("obraPassSheet").classList.remove("open");
+  renderObras();renderList();toast(o.nome+' liberada');pendingObra=null;
+}
+/* cadastro de obra (eng) */
+function openObraForm(idObra){
+  if(idObra){editingObra=idObra;const o=obraById(idObra);
+    document.getElementById('obraFormTitle').textContent='Editar obra';
+    document.getElementById('oNome').value=o.nome;document.getElementById('oCod').value=o.id;
+    document.getElementById('oCid').value=o.cidade||'';document.getElementById('oSenha').value=o.senha||'';
+  }else{editingObra=null;document.getElementById('obraFormTitle').textContent='Nova obra';
+    document.getElementById('oNome').value='';document.getElementById('oCod').value='';
+    document.getElementById('oCid').value='';document.getElementById('oSenha').value='';}
+  closeObraPicker();document.getElementById("obraFormSheet").classList.add("open");
+}
+function closeObraForm(){document.getElementById("obraFormSheet").classList.remove("open");}
+function saveObra(){
+  const nome=document.getElementById('oNome').value.trim(),cod=document.getElementById('oCod').value.trim(),
+    cid=document.getElementById('oCid').value.trim(),senha=document.getElementById('oSenha').value.trim();
+  if(!nome||!cod){toast('Preencha nome e código');return;}
+  if(editingObra){const o=obraById(editingObra);Object.assign(o,{nome,cidade:cid,senha});if(!senha)unlocked[o.id]=true;toast('Obra atualizada');}
+  else{
+    if(obraById(cod)){toast('Já existe obra com esse código');return;}
+    OBRAS.push({id:cod,nome,cidade:cid,senha});
+    if(!senha)unlocked[cod]=true;
+    state.obra=cod;toast('Obra cadastrada');
+  }
+  closeObraForm();renderObras();renderList();
+}
+function discsNaObra(){
+  const set=new Set(PRANCHAS.filter(p=>p.obra===state.obra&&!p.desabilitada).map(p=>p.disc));
+  // mantém a ordem da lista mestre
+  return DISCIPLINAS.filter(d=>set.has(d));
+}
+function renderDisc(){
+  const presentes=discsNaObra();
+  // se a disciplina selecionada não existe mais nessa obra, volta para Todas
+  if(state.disc!=="Todas"&&!presentes.includes(state.disc))state.disc="Todas";
+  const all=["Todas",...presentes];
+  let html=all.map(d=>`<button class="dchip ${d===state.disc?'active':''}" onclick="setDisc('${esc(d)}')">${d}</button>`).join("");
+  if(state.role==="eng")html+=`<button class="dchip" style="border-style:dashed;color:var(--blue)" onclick="openDiscManager()">⚙ Tipos de projeto</button>`;
+  document.getElementById("discfilter").innerHTML=html;
+}
+function renderRole(){
+  const pill=document.getElementById("rolepill");const eng=state.role==="eng";
+  pill.className="rolepill "+(eng?"eng":"canteiro");
+  document.getElementById("roleicon").textContent=eng?"🔧":"👁";
+  document.getElementById("roletext").textContent=eng?"Engenharia":"Canteiro";
+  document.getElementById("fab").className="fab"+(eng?" show":"");
+  const hint=document.getElementById("engHint");
+  if(eng){hint.innerHTML=`<div style="padding:10px 14px 0"><div class="modehint"><span>⚙️</span><div>Modo de liberação: <b>${state.revMode==='auto'?'Automático':'Manual'}</b> — ${state.revMode==='auto'?'liberar nova revisão supera a anterior sozinha.':'você marca qual revisão está válida.'} <a href="#" onclick="toggleRevMode(event)" style="color:var(--blue);font-weight:800;margin-left:4px">trocar</a><br><a href="#" onclick="editCurrentObra(event)" style="color:var(--blue);font-weight:800">✎ Configurar esta obra (nome, cidade, senha)</a><br><a href="#" onclick="clickImport(event)" style="color:var(--blue);font-weight:800">⬆ Importar do Revit / restaurar backup</a> · <a href="#" onclick="exportDados(event)" style="color:var(--blue);font-weight:800">⬇ Salvar dados (backup)</a></div></div></div>`;}
+  else hint.innerHTML="";
+}
+function toggleRevMode(e){e.preventDefault();state.revMode=state.revMode==='auto'?'manual':'auto';renderRole();renderList();toast('Modo: '+(state.revMode==='auto'?'Automático':'Manual'));}
+function editCurrentObra(e){e.preventDefault();openObraForm(state.obra);}
+function renderList(){
+  const list=document.getElementById("list");
+  let items=PRANCHAS.filter(p=>p.obra===state.obra);
+  if(state.disc!=="Todas")items=items.filter(p=>p.disc===state.disc);
+  const eng2=state.role==="eng";
+  // canteiro nunca vê prancha desabilitada nem revisão suspensa
+  if(!eng2)items=items.filter(p=>!p.desabilitada&&p.status!=="suspenso");
+  const showOld=state.showOld||eng2;
+  if(!showOld)items=items.filter(p=>p.status==="liberado");
+  if(state.q){const q=state.q.toLowerCase();items=items.filter(p=>(p.titulo+" "+p.num+" "+p.disc+" "+p.rev).toLowerCase().includes(q));}
+  if(items.length===0){list.innerHTML=`<div class="empty"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg><p>Nenhuma prancha encontrada.</p></div>`;return;}
+  const groups={};items.forEach(p=>{(groups[p.disc]=groups[p.disc]||[]).push(p);});
+  let html="";
+  Object.keys(groups).forEach(disc=>{
+    html+=`<div class="group-label">${disc}</div>`;
+    groups[disc].forEach(p=>{
+      const sup=p.status==="superado";const susp=p.status==="suspenso";const desab=!!p.desabilitada;
+      const eng=state.role==="eng";const idx=PRANCHAS.indexOf(p);
+      const fam=PRANCHAS.filter(x=>x.obra===p.obra&&x.num===p.num);
+      const off=desab||susp;
+      let badgeCls="lib",badgeTxt="LIBERADA";
+      if(desab){badgeCls="off";badgeTxt="DESABILITADA";}
+      else if(susp){badgeCls="off";badgeTxt="SUSPENSA";}
+      else if(sup){badgeCls="sup";badgeTxt="SUPERADA";}
+      html+=`<div class="card ${(sup||off)?'superada':''}">
+        <div class="ctop"><div><div class="cnum">${p.num}</div><div class="ctitle">${p.titulo}</div></div>
+        <span class="badge ${badgeCls}"><span class="dot"></span>${badgeTxt}</span></div>
+        <div class="meta"><span>Revisão <span class="rev">${p.rev}</span></span><span>Liberada em <b>${p.data}</b></span><span>${p.autor}</span></div>
+        ${p.obs?`<div class="obsbox"><span class="obsic">✎</span><span>${p.obs}</span></div>`:''}
+        <div class="actions">
+          <button class="btn btn-pdf" onclick="openViewer('pdf','${p.num} ${p.rev}','${esc(p.titulo)}','${esc(p.arquivo||'')}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>Abrir PDF</button>
+          <button class="btn btn-dwg" onclick="openViewer('dwg','${p.num} ${p.rev}','${esc(p.titulo)}','${esc(p.arquivo||'')}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3h18v18H3z"/><path d="M3 9h18M9 21V9"/></svg>Ver DWG</button>
+        </div>
+        ${eng?`<div class="admin-row">
+          ${(sup||susp)?`<button class="abtn lib" onclick="setValida(${idx})"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20 6 9 17l-5-5"/></svg>Tornar válida</button>`:`<button class="abtn lib" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20 6 9 17l-5-5"/></svg>Vigente</button>`}
+          <button class="abtn edit" onclick="openForm(${idx})"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5z"/></svg>Editar</button>
+          <button class="abtn hist" onclick="openHist('${p.obra}','${esc(p.num)}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="M18 9l-6 6-4-4"/></svg>Histórico (${fam.length})</button>
+        </div>
+        <div class="admin-row" style="border-top:none;padding-top:0">
+          ${!desab?`<button class="abtn warn" onclick="toggleSuspensa(${idx})">${susp?'↩ Reativar revisão':'⏸ Suspender revisão'}</button>`:''}
+          <button class="abtn danger" onclick="toggleDesab('${p.obra}','${esc(p.num)}')">${desab?'↩ Reabilitar prancha':'🚫 Desabilitar prancha'}</button>
+        </div>`:""}
+      </div>`;
+    });
+  });
+  list.innerHTML=html;
+}
+function setObra(id){state.obra=id;renderObras();renderList();}
+function setDisc(d){state.disc=d;renderDisc();renderList();}
+/* ---- GERENCIADOR DE TIPOS DE PROJETO ---- */
+function discUsageCount(d){return PRANCHAS.filter(p=>p.disc===d).length;}
+function openDiscManager(){renderDiscMgr();document.getElementById("discSheet").classList.add("open");}
+function closeDiscManager(){document.getElementById("discSheet").classList.remove("open");renderDisc();renderList();}
+function renderDiscMgr(){
+  document.getElementById("discMgrList").innerHTML=DISCIPLINAS.map((d,i)=>{
+    const n=discUsageCount(d);
+    return `<div class="hist-item">
+      <div class="hl" style="flex:1"><input value="${d.replace(/"/g,'&quot;')}" id="dm${i}" style="width:100%;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:14px" onchange="renameDisc(${i})"/>
+      <div class="hd">${n>0?n+' prancha(s) usando':'sem uso'}</div></div>
+      <button class="abtn danger" style="flex:0 0 auto;padding:8px 12px" ${n>0?'disabled title="em uso"':''} onclick="removeDisc(${i})">🗑</button>
+    </div>`;
+  }).join("");
+}
+function addDisc(){
+  const v=document.getElementById('newDisc').value.trim();
+  if(!v){toast('Digite o nome do tipo');return;}
+  if(DISCIPLINAS.some(d=>d.toLowerCase()===v.toLowerCase())){toast('Esse tipo já existe');return;}
+  DISCIPLINAS.push(v);document.getElementById('newDisc').value='';renderDiscMgr();toast('Tipo adicionado');
+}
+function renameDisc(i){
+  const novo=document.getElementById('dm'+i).value.trim();const antigo=DISCIPLINAS[i];
+  if(!novo){document.getElementById('dm'+i).value=antigo;return;}
+  if(DISCIPLINAS.some((d,j)=>j!==i&&d.toLowerCase()===novo.toLowerCase())){toast('Já existe um tipo com esse nome');document.getElementById('dm'+i).value=antigo;return;}
+  // renomeia e propaga para as pranchas que usavam
+  PRANCHAS.forEach(p=>{if(p.disc===antigo)p.disc=novo;});
+  DISCIPLINAS[i]=novo;renderDiscMgr();toast('Renomeado — pranchas atualizadas');
+}
+function removeDisc(i){
+  if(discUsageCount(DISCIPLINAS[i])>0){toast('Tipo em uso — não pode remover');return;}
+  DISCIPLINAS.splice(i,1);renderDiscMgr();toast('Tipo removido');
+}
+document.getElementById("showOld").addEventListener("change",e=>{state.showOld=e.target.checked;renderList();});
+document.getElementById("search").addEventListener("input",e=>{state.q=e.target.value;renderList();});
+function openViewer(kind,sub,title,arquivo){
+  document.getElementById("mtitle").textContent=title;
+  document.getElementById("msub").textContent=sub+" · "+(kind==='pdf'?'PDF':'DWG')+(arquivo?" · "+arquivo+"."+kind:"");
+  document.getElementById("phtitle").textContent=kind==='pdf'?'Visualizador de PDF':'Visualizador CAD (DWG)';
+  document.getElementById("phtext").textContent=kind==='pdf'?'Aqui o PDF da prancha abriria em tela cheia, com zoom e medição.':'Aqui o DWG abriria no visualizador CAD: zoom, pan, camadas e medir.';
+  document.getElementById("measnote").textContent=kind==='pdf'?'No app real, o PDF abre com escala embutida — dá pra medir distâncias no tablet, offline.':'No app real, o DWG abre via visualizador CAD (ex.: Autodesk APS), medindo cotas reais sem AutoCAD.';
+  document.getElementById("viewer").classList.add("open");
+}
+function closeViewer(){document.getElementById("viewer").classList.remove("open");}
+function openLogin(){loginRolePick=state.role;document.getElementById("loginSheet").classList.add("open");
+  document.querySelectorAll('#loginSeg button').forEach((b,i)=>b.classList.toggle('on',(i===0)===(loginRolePick==='canteiro')));
+  document.getElementById('engPass').style.display=loginRolePick==='eng'?'block':'none';}
+function closeLogin(){document.getElementById("loginSheet").classList.remove("open");}
+function pickRole(r,e){loginRolePick=r;document.querySelectorAll('#loginSeg button').forEach(b=>b.classList.remove('on'));e.target.classList.add('on');document.getElementById('engPass').style.display=r==='eng'?'block':'none';}
+function confirmLogin(){
+  if(loginRolePick==='eng'){const p=document.getElementById('passInput').value;if(p!=='1234'){toast('Senha incorreta (protótipo: 1234)');return;}}
+  state.role=loginRolePick;
+  // ao virar canteiro, se a obra atual exige senha e não foi liberada, cai para a primeira obra acessível
+  if(state.role==='canteiro'){const o=obraById(state.obra);if(o&&o.senha&&!unlocked[o.id]){const livre=OBRAS.find(x=>canView(x));if(livre)state.obra=livre.id;}}
+  closeLogin();renderObras();renderRole();renderList();
+  toast(state.role==='eng'?'Modo Engenharia ativo':'Modo Canteiro');document.getElementById('passInput').value='';
+}
+function fillSelects(){
+  document.getElementById('fObra').innerHTML=OBRAS.map(o=>`<option value="${o.id}">${o.nome}</option>`).join("");
+  document.getElementById('fDisc').innerHTML=DISCIPLINAS.map(d=>`<option>${d}</option>`).join("");
+}
+function openForm(idx){
+  fillSelects();
+  if(idx!=null&&idx>=0){editing=idx;const p=PRANCHAS[idx];
+    document.getElementById('formTitle').textContent='Editar prancha';
+    document.getElementById('fObra').value=p.obra;document.getElementById('fDisc').value=p.disc;
+    document.getElementById('fNum').value=p.num;document.getElementById('fRev').value=p.rev;
+    document.getElementById('fTit').value=p.titulo;document.getElementById('fAut').value=p.autor;
+    document.getElementById('fObs').value=p.obs||'';
+  }else{editing=null;document.getElementById('formTitle').textContent='Nova prancha';
+    document.getElementById('fObra').value=state.obra;document.getElementById('fDisc').value=DISCIPLINAS[0];
+    document.getElementById('fNum').value='';document.getElementById('fRev').value='';
+    document.getElementById('fTit').value='';document.getElementById('fAut').value='';document.getElementById('fObs').value='';}
+  document.getElementById("formSheet").classList.add("open");
+}
+function closeForm(){document.getElementById("formSheet").classList.remove("open");}
+function saveForm(){
+  const o=document.getElementById('fObra').value,d=document.getElementById('fDisc').value,
+    n=document.getElementById('fNum').value.trim(),r=document.getElementById('fRev').value.trim(),
+    t=document.getElementById('fTit').value.trim(),a=document.getElementById('fAut').value.trim(),
+    obs=document.getElementById('fObs').value.trim();
+  if(!n||!r||!t){toast('Preencha número, revisão e título');return;}
+  if(editing!=null){const p=PRANCHAS[editing];Object.assign(p,{obra:o,disc:d,num:n,rev:r,titulo:t,autor:a,obs:obs});toast('Prancha atualizada');}
+  else{
+    if(state.revMode==='auto'){PRANCHAS.forEach(p=>{if(p.obra===o&&p.num===n&&p.status==='liberado')p.status='superado';});}
+    PRANCHAS.push({obra:o,disc:d,num:n,titulo:t,rev:r,data:hoje(),autor:a||'—',status:'liberado',obs:obs});
+    toast(state.revMode==='auto'?'Liberada — revisão anterior superada':'Liberada');
+  }
+  state.obra=o;closeForm();renderObras();renderList();
+}
+function setValida(idx){const p=PRANCHAS[idx];PRANCHAS.forEach(x=>{if(x.obra===p.obra&&x.num===p.num&&x.status==='liberado')x.status='superado';});p.status='liberado';renderList();toast(p.num+' '+p.rev+' agora é a vigente');}
+function toggleSuspensa(idx){
+  const p=PRANCHAS[idx];
+  if(p.status==='suspenso'){p.status='superado';toast(p.num+' '+p.rev+' reativada (superada — libere ou torne válida)');}
+  else{p.status='suspenso';toast(p.num+' '+p.rev+' suspensa — fora do canteiro');}
+  renderList();
+}
+function toggleDesab(obra,num){
+  const fam=PRANCHAS.filter(p=>p.obra===obra&&p.num===num);
+  const turningOff=!fam[0].desabilitada;
+  fam.forEach(p=>p.desabilitada=turningOff);
+  renderList();
+  toast(turningOff?num+' desabilitada — fora do canteiro':num+' reabilitada');
+}
+function openHist(obra,num){
+  const fam=PRANCHAS.filter(p=>p.obra===obra&&p.num===num).sort((a,b)=>b.rev.localeCompare(a.rev));
+  document.getElementById('histTitle').textContent='Histórico — '+num;
+  document.getElementById('histSub').textContent=fam[0]?fam[0].titulo:'';
+  document.getElementById('histList').innerHTML=fam.map(p=>{
+    let bc="lib",bt="LIBERADA";
+    if(p.desabilitada){bc="off";bt="DESABILITADA";}else if(p.status==="suspenso"){bc="off";bt="SUSPENSA";}else if(p.status==="superado"){bc="sup";bt="SUPERADA";}
+    return `<div class="hist-item"><div class="hl" style="flex:1"><b>${p.rev}</b> — ${p.data}<div class="hd">${p.autor}</div>${p.obs?`<div class="hd" style="margin-top:4px;color:#444">✎ ${p.obs}</div>`:''}</div><span class="badge ${bc}"><span class="dot"></span>${bt}</span></div>`;
+  }).join("");
+  document.getElementById("histSheet").classList.add("open");
+}
+function closeHist(){document.getElementById("histSheet").classList.remove("open");}
+/* ---- IMPORTAÇÃO DO REVIT (manifesto) E BACKUP ---- */
+function clickImport(e){if(e)e.preventDefault();
+  if(state.role!=='eng'){toast('Disponível só no modo Engenharia');return;}
+  const inp=document.getElementById('importFile');inp.value='';inp.click();}
+function handleImportFile(ev){
+  const f=ev.target.files[0];if(!f)return;
+  const rd=new FileReader();
+  rd.onload=()=>{let d;
+    try{d=JSON.parse(rd.result);}catch(err){toast('Arquivo inválido — não é um JSON');return;}
+    if(d&&d.formato==='mn-manifesto-v1')importManifesto(d);
+    else if(d&&d.formato==='mn-dados-v1')restoreBackup(d);
+    else toast('Formato não reconhecido — use o manifesto do Revit ou um backup do app');
+  };
+  rd.readAsText(f,'utf-8');
+}
+function revNum(r){const m=String(r||'').match(/\d+/);return m?parseInt(m[0],10):-1;}
+function revNorm(r){const n=revNum(r);return n>=0?'R'+String(n).padStart(2,'0'):'R00';}
+function importManifesto(d){
+  if(!d.obra||!d.obra.id||!Array.isArray(d.pranchas)){toast('Manifesto incompleto — gere de novo no Revit');return;}
+  const stats={novas:0,atualizadas:0,iguais:0,avisos:[]};
+  const oid=String(d.obra.id).trim();
+  let o=obraById(oid);
+  if(!o){o={id:oid,nome:d.obra.nome||('Obra '+oid),cidade:d.obra.cidade||'',senha:''};OBRAS.push(o);unlocked[oid]=true;
+    stats.avisos.push('Obra "'+o.nome+'" criada automaticamente — configure cidade e senha se precisar.');}
+  d.pranchas.forEach(m=>{
+    if(!m.num||!m.rev)return;
+    const disc=m.disc||SIGLAS[m.sigla]||m.sigla||'Outros';
+    if(!DISCIPLINAS.includes(disc)){DISCIPLINAS.push(disc);stats.avisos.push('Tipo de projeto "'+disc+'" adicionado à lista.');}
+    const rev=revNorm(m.rev);
+    let p=PRANCHAS.find(x=>x.obra===oid&&x.num===m.num&&x.rev===rev);
+    if(p){
+      const antes=JSON.stringify([p.titulo,p.autor,p.obs||'',p.data,p.disc,p.arquivo||'']);
+      p.titulo=m.titulo||p.titulo;p.autor=m.autor||p.autor;p.obs=m.obs||p.obs;
+      p.data=m.data||p.data;p.disc=disc;p.arquivo=m.arquivo||p.arquivo;
+      if(JSON.stringify([p.titulo,p.autor,p.obs||'',p.data,p.disc,p.arquivo||''])===antes)stats.iguais++;else stats.atualizadas++;
+    }else{
+      const vig=PRANCHAS.find(x=>x.obra===oid&&x.num===m.num&&x.status==='liberado');
+      let status='liberado';
+      if(vig){
+        if(revNum(rev)>revNum(vig.rev)){
+          if(state.revMode==='auto')vig.status='superado';
+          else stats.avisos.push(m.num+' '+rev+' importada — modo manual: marque qual revisão é a vigente.');
+        }else{status='superado';stats.avisos.push(m.num+' '+rev+' é mais antiga que a vigente '+vig.rev+' — entrou no histórico como superada.');}
+      }
+      PRANCHAS.push({obra:oid,disc,num:m.num,titulo:m.titulo||m.num,rev,data:m.data||hoje(),autor:m.autor||'—',status,obs:m.obs||'',arquivo:m.arquivo||''});
+      stats.novas++;
+    }
+  });
+  state.obra=oid;renderObras();renderDisc();renderList();
+  document.getElementById('impSub').textContent=(d.origem?d.origem+' → ':'')+o.nome+' · '+oid+(d.gerado_em?' · gerado em '+d.gerado_em:'');
+  let html='<div class="hist-item"><div class="hl"><b>'+stats.novas+'</b> nova(s) · <b>'+stats.atualizadas+'</b> atualizada(s) · <b>'+stats.iguais+'</b> sem mudança</div></div>';
+  if(stats.avisos.length)html+=stats.avisos.map(a=>'<div class="obsbox"><span class="obsic">!</span><span>'+a+'</span></div>').join('');
+  html+='<div class="modehint" style="margin-top:12px"><span>💾</span><div>Os dados vivem só nesta aba. Antes de fechar, use <b>Salvar dados (backup)</b> para não perder o que importou.</div></div>';
+  document.getElementById('impList').innerHTML=html;
+  document.getElementById('importSheet').classList.add('open');
+}
+function closeImportSheet(){document.getElementById('importSheet').classList.remove('open');}
+function exportDados(e){if(e)e.preventDefault();
+  const d={formato:'mn-dados-v1',gerado_em:hoje(),obras:OBRAS,disciplinas:DISCIPLINAS,pranchas:PRANCHAS};
+  const blob=new Blob([JSON.stringify(d,null,1)],{type:'application/json'});
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);
+  a.download='mn-dados-'+hoje().replace(/\//g,'-')+'.json';
+  document.body.appendChild(a);a.click();a.remove();URL.revokeObjectURL(a.href);
+  toast('Backup baixado — guarde na pasta da obra');
+}
+function restoreBackup(d){
+  if(!confirm('Substituir TODOS os dados atuais pelos do backup de '+(d.gerado_em||'data desconhecida')+'?'))return;
+  if(Array.isArray(d.obras))OBRAS=d.obras;
+  if(Array.isArray(d.disciplinas))DISCIPLINAS=d.disciplinas;
+  if(Array.isArray(d.pranchas))PRANCHAS=d.pranchas;
+  OBRAS.forEach(o=>{if(!o.senha)unlocked[o.id]=true;});
+  if(!obraById(state.obra)&&OBRAS[0])state.obra=OBRAS[0].id;
+  renderObras();renderDisc();renderList();toast('Backup restaurado');
+}
+renderObras();renderDisc();renderRole();renderList();
+</script>
+</body>
+</html>

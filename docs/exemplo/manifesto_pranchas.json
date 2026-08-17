@@ -1,0 +1,52 @@
+{
+ "formato": "mn-manifesto-v1",
+ "gerado_em": "17/08/2026 10:30",
+ "origem": "VilaNord.rvt",
+ "obra": {"id": "20001", "nome": "Vila Nord", "arquivo": "VilaNord"},
+ "pranchas": [
+  {
+   "num": "ARQ-001",
+   "titulo": "Planta baixa — Pavimento Tipo",
+   "sigla": "ARQ",
+   "disc": "Arquitetônico",
+   "rev": "R05",
+   "data": "17/08/2026",
+   "autor": "Eng. Marcelo",
+   "obs": "Revisado o shaft da prumada conforme compatibilização com hidráulica.",
+   "arquivo": "VilaNord_ARQ_001_R05"
+  },
+  {
+   "num": "ARQ-003",
+   "titulo": "Detalhes de escada e guarda-corpo",
+   "sigla": "ARQ",
+   "disc": "Arquitetônico",
+   "rev": "R00",
+   "data": "17/08/2026",
+   "autor": "Eng. Marcelo",
+   "obs": "",
+   "arquivo": "VilaNord_ARQ_003_R00"
+  },
+  {
+   "num": "ESQ-001",
+   "titulo": "Mapa de esquadrias — Fachadas",
+   "sigla": "ESQ",
+   "disc": "Esquadrias",
+   "rev": "R00",
+   "data": "17/08/2026",
+   "autor": "Eng. Marcelo",
+   "obs": "",
+   "arquivo": "VilaNord_ESQ_001_R00"
+  },
+  {
+   "num": "EST-010",
+   "titulo": "Fôrma — Fundação / Radier",
+   "sigla": "EST",
+   "disc": "Estrutural",
+   "rev": "R05",
+   "data": "28/05/2026",
+   "autor": "Zoco Engenharia",
+   "obs": "",
+   "arquivo": "VilaNord_EST_010_R05"
+  }
+ ]
+}
