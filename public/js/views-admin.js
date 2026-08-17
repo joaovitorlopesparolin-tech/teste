@@ -469,8 +469,10 @@ App.registerView('admin', async (view) => {
               (t.sincronizados ? ` <span class="small muted">${t.sincronizados} já feitos</span>` : '') +
               (t.comErro ? ` <span class="badge danger">${t.comErro} com erro</span>` : '')}
         </td>
-        <td class="num" style="padding:8px 0">
+        <td class="num" style="padding:8px 0;white-space:nowrap">
           ${t.exemplos.length ? `<button class="btn sm ghost" onclick="Adm.caVer('${t.ent}')">👁 Ver</button>` : ''}
+          ${t.ent === 'clients' && plano.conectado && (t.sentido === 'enviar' || t.sentido === 'ambos') && t.pendentes
+            ? `<button class="btn sm primary" onclick="Adm.caEnviarClientes()">▶ Enviar…</button>` : ''}
         </td>
       </tr>`;
 
@@ -775,6 +777,70 @@ App.registerView('admin', async (view) => {
     /* Redesenha o painel de conexão, se havia um em andamento — a tela pode
        ter sido refeita pela atualização em tempo real no meio do processo. */
     Adm.caDesenhaPainel();
+
+    /* Envio de clientes em três passos: conferir → testar com 1 → enviar todos.
+       Tudo acontece contra a conta conectada (hoje, a de teste do portal). */
+    Adm.caEnviarClientes = async () => {
+      const m = App.modal(`
+        <h2>Clientes → Conta Azul</h2>
+        <p class="small muted">Passo 1 de 3: conferindo o formato com a Conta Azul — um GET de amostra e o
+        JSON exato do primeiro cliente que iria. <b>Nada foi enviado ainda.</b></p>
+        <div id="cae-corpo"><p class="muted small">Consultando…</p></div>
+        <div class="actions">
+          <button class="btn" onclick="App.closeModal()">Fechar</button>
+          <button class="btn" id="cae-um" disabled>Enviar 1 de teste</button>
+          <button class="btn primary" id="cae-todos" disabled>Enviar todos</button>
+        </div>`, { wide: true });
+      const corpo = m.querySelector('#cae-corpo');
+      const btnUm = m.querySelector('#cae-um');
+      const btnTodos = m.querySelector('#cae-todos');
+
+      let ensaio;
+      try {
+        ensaio = await App.post('/contaazul/sync/clientes/ensaio', {});
+      } catch (e) {
+        corpo.innerHTML = `<p style="color:var(--danger)">${App.esc(e.message)}</p>`;
+        return;
+      }
+      const sondaOk = ensaio.sonda && ensaio.sonda.status >= 200 && ensaio.sonda.status < 300;
+      corpo.innerHTML = `
+        <div class="small" style="margin-bottom:8px">
+          Leitura de <span class="mono">/v1/pessoas</span>:
+          ${sondaOk ? '<span style="color:var(--ok)">✓ respondeu ' + ensaio.sonda.status + '</span>'
+                    : '<span style="color:var(--danger)">✗ ' + App.esc(String(ensaio.sonda.status || '')) + '</span>'}
+        </div>
+        <pre class="mono small" style="max-height:180px;overflow:auto;background:var(--bg-0);padding:8px;border-radius:8px;white-space:pre-wrap;word-break:break-all">${App.esc(JSON.stringify(ensaio.sonda.corpo, null, 1).slice(0, 2500))}</pre>
+        <div class="small" style="margin:10px 0 4px"><b>${ensaio.pendentes}</b> cliente(s) pendente(s). O primeiro iria assim:</div>
+        ${ensaio.exemplos.length ? `
+        <pre class="mono small" style="max-height:150px;overflow:auto;background:var(--bg-0);padding:8px;border-radius:8px;white-space:pre-wrap">${App.esc(JSON.stringify(ensaio.exemplos[0].corpo, null, 1))}</pre>` : ''}
+        <div id="cae-result" class="small" style="margin-top:8px"></div>`;
+      btnUm.disabled = !ensaio.pendentes;
+      btnTodos.disabled = !ensaio.pendentes;
+
+      const enviar = async (limite) => {
+        btnUm.disabled = btnTodos.disabled = true;
+        const out = m.querySelector('#cae-result');
+        out.innerHTML = '<span class="muted">Enviando…</span>';
+        try {
+          const r = await App.post('/contaazul/sync/clientes/enviar', limite ? { limite } : {});
+          out.innerHTML = `
+            <div style="margin-bottom:6px"><b style="color:var(--ok)">${r.enviados} enviado(s)</b>
+            ${r.falhas ? ` · <b style="color:var(--danger)">${r.falhas} falha(s)</b>` : ''}</div>
+            <ul style="margin:0 0 0 16px;max-height:160px;overflow:auto">
+              ${r.resultados.map(x => `<li style="padding:2px 0">${x.ok ? '✓' : '✗'} ${App.esc(x.rotulo)}
+                ${x.ok ? `<span class="muted mono small">${App.esc(String(x.idExterno))}</span>`
+                       : `<div class="small" style="color:var(--danger)">${App.esc(x.erro)}</div>`}</li>`).join('')}
+            </ul>`;
+          btnUm.disabled = btnTodos.disabled = false;
+          renderContaAzul(el);
+        } catch (e) {
+          out.innerHTML = `<span style="color:var(--danger)">${App.esc(e.message)}</span>`;
+          btnUm.disabled = btnTodos.disabled = false;
+        }
+      };
+      btnUm.onclick = () => enviar(1);
+      btnTodos.onclick = () => enviar(0);
+    };
 
     /* Mostra exatamente quais registros estão pendentes daquele tipo. */
     Adm.caVer = (ent) => {

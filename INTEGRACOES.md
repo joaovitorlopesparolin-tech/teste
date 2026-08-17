@@ -89,6 +89,41 @@ Já existente, é o que **evita duplicidade** quando a sincronização entrar:
 `idLocal` ↔ `idExterno` garante que um cliente daqui nunca vire dois lá; o
 `hash` evita reenviar o que não mudou.
 
+## Caminhos confirmados da API v2
+
+Garimpados das páginas oficiais indexadas de `developers.contaazul.com`
+(o site em si é inalcançável do ambiente de desenvolvimento):
+
+| Recurso | Caminho |
+|---|---|
+| Pessoas (clientes/fornecedores) | `GET/POST /v1/pessoas` · `ativar` · `inativar` · `excluir` |
+| Vendas | `POST /v1/venda` · `GET /v1/venda/{id}` |
+| Contas a receber | `POST /v1/financeiro/eventos-financeiros/contas-a-receber` |
+| Contas a pagar | `POST /v1/financeiro/eventos-financeiros` (payable) |
+| Parcelas de um evento | `GET /v1/financeiro/eventos-financeiros/{id}/parcelas` |
+| Baixas de parcela | `GET/POST /v1/financeiro/eventos-financeiros/parcelas/{parcela_id}/baixa` |
+| Contas financeiras | busca (searchfinancialaccounts) |
+| Categorias | busca (searchcategories) |
+| Produtos | listagem (open-api-inventory) |
+
+Campos vistos na documentação: pessoa `{uuid, nome, tipo_pessoa
+FISICA|JURIDICA, documento, email, telefone, endereco}`; venda
+`{id_cliente, numero, data_venda, situacao, itens[{descricao, quantidade,
+valor}], condicao_pagamento{tipo_pagamento, opcao_condicao_pagamento,
+parcelas[{data_vencimento, valor, descricao}]}}`; baixa `{data_pagamento,
+valor_composicao, conta_financeira, metodo_pagamento}`. Paginação por
+`page`/`size`; datas ISO 8601.
+
+## Primeira fatia implementada: Clientes → Pessoas
+
+`lib/casync.js` + botão **▶ Enviar…** na aba Conta Azul. Fluxo de três
+passos, todos visíveis: (1) sonda com `GET /v1/pessoas` e mostra a
+resposta crua; (2) mostra o JSON exato do primeiro cliente que iria;
+(3) envia **um** de teste, e só então todos. Cada envio grava o
+`idExterno` em `syncRefs`; reenvio de quem já foi vira atualização
+(`PUT /v1/pessoas/{id}`) em vez de duplicar. Falhas não interrompem a
+fila e guardam a resposta crua da Conta Azul para diagnóstico.
+
 ## O que ainda falta
 
 **A sincronização das entidades** (clientes, produtos, vendas, contas a
