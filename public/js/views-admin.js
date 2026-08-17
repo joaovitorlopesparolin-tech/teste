@@ -281,10 +281,23 @@ App.registerView('admin', async (view) => {
             <input id="ca-secret" type="password" placeholder="${ca.temSecret ? 'salvo — deixe em branco para manter' : 'cole aqui'}"></label>
           <label class="field"><span>Endereço de retorno (cadastre este mesmo no portal)</span>
             <input id="ca-redirect" value="${App.esc(ca.redirectUri || (location.origin + '/api/contaazul/callback'))}"></label>
+          <details style="margin:4px 0 10px">
+            <summary class="small muted" style="cursor:pointer">Ajustes avançados — ambiente e escopo</summary>
+            <p class="small muted" style="margin:8px 0">Mexa aqui só se a Conta Azul indicar endereços diferentes
+            (ambiente de desenvolvimento/sandbox) ou se a autorização for recusada por escopo.
+            Deixe em branco para voltar ao padrão.</p>
+            <label class="field"><span>Servidor de autorização</span>
+              <input id="ca-authbase" value="${App.esc(ca.authBase)}" placeholder="${App.esc(ca.padrao.authBase)}"></label>
+            <label class="field"><span>Servidor da API</span>
+              <input id="ca-apibase" value="${App.esc(ca.apiBase)}" placeholder="${App.esc(ca.padrao.apiBase)}"></label>
+            <label class="field"><span>Escopo</span>
+              <input id="ca-escopo" value="${App.esc(ca.escopo)}" placeholder="${App.esc(ca.padrao.escopo)}"></label>
+          </details>
           <div style="display:flex;gap:8px;flex-wrap:wrap">
             <button class="btn primary" onclick="Adm.caSalvar()">Salvar credenciais</button>
             ${ca.configurado ? '<button class="btn" onclick="Adm.caConectar()">🔗 Conectar</button>' : ''}
           </div>
+          <div id="ca-url" style="margin-top:10px"></div>
         `}
         ${ca.ultimoErro ? `<p class="small" style="color:var(--danger);margin-top:10px">${App.esc(ca.ultimoErro)}</p>` : ''}
         <p class="small muted" style="margin-top:10px">O Client Secret e a autorização ficam gravados
@@ -396,10 +409,14 @@ App.registerView('admin', async (view) => {
     };
     /* ---- Conta Azul ---- */
     Adm.caSalvar = async () => {
+      const v = id => (document.getElementById(id) || {}).value || '';
       const corpo = {
-        clientId: document.getElementById('ca-id').value.trim(),
-        clientSecret: document.getElementById('ca-secret').value.trim(),
-        redirectUri: document.getElementById('ca-redirect').value.trim()
+        clientId: v('ca-id').trim(),
+        clientSecret: v('ca-secret').trim(),
+        redirectUri: v('ca-redirect').trim(),
+        authBase: v('ca-authbase').trim(),
+        apiBase: v('ca-apibase').trim(),
+        escopo: v('ca-escopo').trim()
       };
       if (!corpo.redirectUri) return App.toast('Informe o endereço de retorno.', 'err');
       try {
@@ -412,12 +429,31 @@ App.registerView('admin', async (view) => {
     /* A autorização acontece na tela da Conta Azul, no navegador do usuário —
        a senha da Conta Azul nunca passa por aqui. */
     Adm.caConectar = async () => {
+      const out = document.getElementById('ca-url');
       try {
         const r = await App.post('/contaazul/connect', {});
-        const aba = window.open(r.url, '_blank');
-        if (!aba) return App.toast('O navegador bloqueou a janela. Libere os pop-ups e tente de novo.', 'err');
-        App.toast('Autorize na aba que abriu e depois volte aqui.', 'ok');
-      } catch (e) { App.toast(e.message, 'err'); }
+        const u = new URL(r.url);
+        // Mostra o que está sendo enviado: quando a Conta Azul devolve uma tela
+        // de erro genérica, a diferença costuma estar aqui — normalmente no
+        // endereço de retorno, que precisa ser idêntico ao cadastrado no portal.
+        out.innerHTML = `
+          <p class="small muted" style="margin-bottom:6px">Se a Conta Azul mostrar uma página de erro,
+          compare estes valores com os do app em <b>portaldevs.contaazul.com</b> — eles precisam ser idênticos:</p>
+          <table class="small" style="width:100%;border-collapse:collapse">
+            ${[['client_id', u.searchParams.get('client_id')],
+               ['redirect_uri', u.searchParams.get('redirect_uri')],
+               ['scope', u.searchParams.get('scope')],
+               ['servidor', u.origin + u.pathname]]
+              .map(([k, val]) => `<tr>
+                <td style="padding:3px 8px 3px 0;color:var(--text-3);white-space:nowrap">${k}</td>
+                <td class="mono" style="padding:3px 0;word-break:break-all">${App.esc(val || '—')}</td></tr>`).join('')}
+          </table>
+          <p style="margin-top:8px"><a class="btn sm" href="${App.esc(r.url)}" target="_blank" rel="noopener">🔗 Abrir a autorização</a></p>`;
+        window.open(r.url, '_blank');
+      } catch (e) {
+        out.innerHTML = '';
+        App.toast(e.message, 'err');
+      }
     };
 
     Adm.caTestar = async () => {

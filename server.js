@@ -906,6 +906,10 @@ route('PUT', '/api/contaazul/config', 'admin', async (req, res, user) => {
   if (typeof b.clientId === 'string' && b.clientId.trim()) c.clientId = b.clientId.trim();
   if (typeof b.clientSecret === 'string' && b.clientSecret.trim()) c.clientSecret = b.clientSecret.trim();
   if (typeof b.redirectUri === 'string' && b.redirectUri.trim()) c.redirectUri = b.redirectUri.trim();
+  // Campos avançados: em branco volta ao padrão.
+  for (const k of ['authBase', 'apiBase', 'escopo']) {
+    if (typeof b[k] === 'string') c[k] = b[k].trim();
+  }
   db.save();
   audit(user, 'update', 'settings', 1, 'Credenciais da Conta Azul atualizadas');
   ok(res, contaazul.status());
