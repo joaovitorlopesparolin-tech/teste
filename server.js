@@ -972,6 +972,18 @@ async function contaazulRetorno(req, res, query) {
 route('GET', '/api/contaazul/callback', null, async (req, res, user, params, query) =>
   contaazulRetorno(req, res, query));
 
+/* O portal da Conta Azul mostra o token do app de desenvolvimento uma única
+   vez. Guardar aqui permite explorar a API da conta de teste enquanto a
+   autorização completa não está concluída. */
+route('POST', '/api/contaazul/token-manual', 'admin', async (req, res, user) => {
+  const b = await readBody(req);
+  const token = String(b.token || '').trim();
+  if (token.length < 20) return bad(res, 'Cole o access_token completo, do jeito que o portal mostrou.');
+  contaazul.tokenManual(token, b.minutos);
+  audit(user, 'update', 'settings', 1, 'Conta Azul — token de teste guardado');
+  ok(res, contaazul.status());
+});
+
 route('POST', '/api/contaazul/test', 'admin', async (req, res) => {
   try {
     const eu = await contaazul.quemSou();

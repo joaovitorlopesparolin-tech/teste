@@ -525,6 +525,34 @@ App.registerView('admin', async (view) => {
           </div>
           <div id="ca-url" style="margin-top:10px"></div>
         `}
+
+        <div style="border-top:1px solid var(--line-soft);margin-top:14px;padding-top:12px">
+          <b class="small">🧪 Token de teste do portal</b>
+          <p class="small muted" style="margin:6px 0 8px">Ao criar o app de desenvolvimento, o portal mostra um
+          <span class="mono">access_token</span> <b>uma única vez</b>, já ligado a uma conta de teste com dados
+          fictícios. Cole aqui para conferirmos o formato dos dados antes da conexão definitiva ficar pronta.
+          Ele vence em cerca de 1 hora e não se renova sozinho.</p>
+          <label class="field"><span>access_token</span>
+            <input id="ca-token" placeholder="eyJraWQiOi…"></label>
+          <button class="btn" onclick="Adm.caToken()">Guardar token de teste</button>
+          ${ca.temToken ? `<p class="small" style="margin-top:8px;color:${Date.now() < ca.tokenExpiraEm ? 'var(--ok)' : 'var(--danger)'}">
+            ${Date.now() < ca.tokenExpiraEm
+              ? '✓ Token guardado' + (ca.tokenManual ? ' (de teste)' : '') + ' — vale até ' + App.dateTime(new Date(ca.tokenExpiraEm).toISOString())
+              : '✗ O token guardado expirou — gere outro no portal'}</p>` : ''}
+        </div>
+
+        ${ca.temToken ? `
+        <div style="border-top:1px solid var(--line-soft);margin-top:12px;padding-top:12px">
+          <b class="small">🔎 Ler um recurso da API</b>
+          <p class="small muted" style="margin:6px 0 8px">Só leitura — não altera nada na Conta Azul. Serve para
+          vermos o formato real de cada recurso e escrever a sincronização em cima dele.</p>
+          <div style="display:flex;gap:6px">
+            <input id="ca-caminho" class="mono" placeholder="/v1/pessoa" style="flex:1">
+            <button class="btn" style="flex:none" onclick="Adm.caExplorar()">Ler</button>
+          </div>
+          <pre id="ca-saida" class="mono small" style="margin-top:8px;max-height:300px;overflow:auto;
+            background:var(--bg-0);padding:10px;border-radius:8px;white-space:pre-wrap;word-break:break-all"></pre>
+        </div>` : ''}
         ${ca.ultimoErro ? `<p class="small" style="color:var(--danger);margin-top:10px">${App.esc(ca.ultimoErro)}</p>` : ''}
         <p class="small muted" style="margin-top:10px">O Client Secret e a autorização ficam gravados
         <b>só neste computador</b> e nunca aparecem no navegador. O sistema continua sendo a ferramenta
@@ -606,6 +634,28 @@ App.registerView('admin', async (view) => {
         out.innerHTML = '';
         App.toast(e.message, 'err');
       }
+    };
+
+    Adm.caToken = async () => {
+      const t = (document.getElementById('ca-token') || {}).value || '';
+      try {
+        await App.post('/contaazul/token-manual', { token: t.trim() });
+        App.toast('Token guardado — já dá para ler recursos da API', 'ok');
+        renderContaAzul(el);
+      } catch (e) { App.toast(e.message, 'err'); }
+    };
+
+    Adm.caExplorar = async () => {
+      const caminho = (document.getElementById('ca-caminho') || {}).value.trim();
+      const out = document.getElementById('ca-saida');
+      if (!caminho) return App.toast('Informe o caminho, começando com "/".', 'err');
+      out.textContent = 'Lendo…';
+      try {
+        const r = await App.post('/contaazul/explorar', { caminho });
+        out.textContent = r.erro
+          ? '✗ ' + r.erro
+          : `HTTP ${r.status}\n\n` + JSON.stringify(r.corpo, null, 2).slice(0, 8000);
+      } catch (e) { out.textContent = '✗ ' + e.message; }
     };
 
     Adm.caTestar = async () => {
