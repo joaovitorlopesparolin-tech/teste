@@ -907,7 +907,7 @@ route('PUT', '/api/contaazul/config', 'admin', async (req, res, user) => {
   if (typeof b.clientSecret === 'string' && b.clientSecret.trim()) c.clientSecret = b.clientSecret.trim();
   if (typeof b.redirectUri === 'string' && b.redirectUri.trim()) c.redirectUri = b.redirectUri.trim();
   // Campos avançados: em branco volta ao padrão.
-  for (const k of ['authBase', 'apiBase', 'escopo']) {
+  for (const k of ['autorizarUrl', 'authBase', 'apiBase', 'escopo']) {
     if (typeof b[k] === 'string') c[k] = b[k].trim();
   }
   db.save();
@@ -971,6 +971,34 @@ async function contaazulRetorno(req, res, query) {
 }
 route('GET', '/api/contaazul/callback', null, async (req, res, user, params, query) =>
   contaazulRetorno(req, res, query));
+
+/* Conclui a autorização a partir do código colado à mão.
+   É o caminho para quando o app está cadastrado para voltar no site da
+   Conta Azul em vez de aqui: o usuário copia o endereço da barra do
+   navegador, que traz "?code=…", e cola. */
+route('POST', '/api/contaazul/codigo', 'admin', async (req, res, user) => {
+  const b = await readBody(req);
+  const code = contaazul.codigoDe(b.texto);
+  if (!code) {
+    return bad(res, 'Não achei o código nesse texto. Cole o endereço inteiro da barra do navegador, aquele que tem "code=".');
+  }
+  try {
+    await contaazul.trocarCodigo(code);
+    try {
+      const eu = await contaazul.quemSou();
+      const c = contaazul.config();
+      c.conta = { nome: eu.name || eu['cognito:username'] || '', email: eu.email || '' };
+      db.save();
+    } catch (e) { /* conectou; só não deu para descobrir o nome da conta */ }
+    audit(user, 'update', 'settings', 1, 'Conta Azul conectada (código colado)');
+    ok(res, { ok: true, status: contaazul.status() });
+  } catch (e) {
+    /* De propósito não grava o erro: gravar mexe nos dados, a tela se
+       redesenha sozinha e o painel com o campo do código some — e o código
+       vale só 3 minutos. O erro volta na resposta, que é o que importa. */
+    ok(res, { ok: false, error: e.message });
+  }
+});
 
 /* O portal da Conta Azul mostra o token do app de desenvolvimento uma única
    vez. Guardar aqui permite explorar a API da conta de teste enquanto a
