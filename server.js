@@ -19,6 +19,7 @@ const ai = require('./lib/ai');
 const xlsx = require('./lib/xlsx');
 const sync = require('./lib/sync');
 const contaazul = require('./lib/contaazul');
+const casync = require('./lib/casync');
 const { seedIfEmpty, hashPassword, checkPassword, isLegacyHash, MODULES } = require('./lib/seed');
 
 const PORT = process.env.PORT || 3000;
@@ -1081,6 +1082,27 @@ route('POST', '/api/contaazul/explorar', 'admin', async (req, res, user) => {
   } catch (e) {
     ok(res, { status: 0, erro: e.message });
   }
+});
+
+/* ---- sincronização real: Clientes → Pessoas ---- */
+
+/* Sonda o formato + mostra o que iria. Nada é enviado. */
+route('POST', '/api/contaazul/sync/clientes/ensaio', 'admin', async (req, res, user) => {
+  const ensaio = casync.ensaioClientes({ amostra: 5 });
+  let sonda = null;
+  try { sonda = await casync.sondarPessoas(); }
+  catch (e) { sonda = { status: 0, corpo: e.message }; }
+  audit(user, 'view', 'settings', 1, 'Conta Azul — ensaio de envio de clientes');
+  ok(res, Object.assign({ sonda }, ensaio));
+});
+
+/* Envia de verdade. { limite: 1 } é o teste com um cliente só. */
+route('POST', '/api/contaazul/sync/clientes/enviar', 'admin', async (req, res, user) => {
+  const b = await readBody(req);
+  const r = await casync.enviarClientes({ ids: b.ids, limite: b.limite });
+  audit(user, 'update', 'settings', 1,
+    `Conta Azul — envio de clientes: ${r.enviados} ok, ${r.falhas} falha(s)`);
+  ok(res, r);
 });
 
 /* ---- integrações externas (preparação p/ Conta Azul) ----
