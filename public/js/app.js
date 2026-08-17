@@ -255,6 +255,7 @@ const App = {
             : `<input type="${f.type || 'text'}" name="${f.name}"
                  value="${this.esc(f.mask === 'cpfcnpj' ? this.fmtCpfCnpj(f.value) : f.mask === 'cep' ? this.fmtCep(f.value) : (f.value != null ? f.value : ''))}"
                  ${f.mask ? `data-mask="${f.mask}" inputmode="numeric"` : ''}
+                 autocomplete="${f.type === 'password' ? 'new-password' : 'off'}"
                  ${f.step ? `step="${f.step}"` : ''} ${f.required ? 'required' : ''} ${f.placeholder ? `placeholder="${this.esc(f.placeholder)}"` : ''}>`;
         return `<label class="field ${f.full ? 'full' : ''}"><span>${this.esc(f.label)}${f.required ? ' *' : ''}</span>${inner}</label>`;
       }).join('')}
