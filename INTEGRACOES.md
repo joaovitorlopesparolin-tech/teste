@@ -1,75 +1,116 @@
-# Integrações externas — preparação (Conta Azul)
+# Conta Azul — integração pela API oficial
 
-Este documento descreve **como o sistema está preparado** para uma futura
-integração com a **Conta Azul**, sem que nada seja enviado para fora hoje.
+O **sistema próprio continua sendo a ferramenta principal da oficina**
+(entrada de cabeçotes, orçamentos, OS, produção, estoque, pendências,
+etiquetas). A Conta Azul fica com o lado **financeiro e fiscal**. A
+integração liga os dois; não substitui nenhum dos dois.
 
-## Princípio
+## Endereços oficiais
 
-O **sistema próprio continua sendo a ferramenta principal de gestão
-operacional** da empresa (entrada de cabeçotes, orçamentos, OS, produção,
-estoque, pendências, etiquetas). A Conta Azul, quando integrada, permanece
-como ferramenta **financeira/fiscal** — nunca substitui o sistema.
+Da documentação pública da Conta Azul (API v2, lançada em março/2025):
 
-## O que já existe
+| | |
+|---|---|
+| Portal do desenvolvedor | `portaldevs.contaazul.com` |
+| Documentação | `developers.contaazul.com` |
+| Autorização | `https://auth.contaazul.com/oauth2/authorize` |
+| Token | `https://auth.contaazul.com/oauth2/token` |
+| API | `https://api-v2.contaazul.com` |
+| Escopo | `openid profile aws.cognito.signin.user.admin` |
 
-### 1. Registro de correspondência (`syncRefs`)
+Autenticação: **OAuth 2.0, fluxo Authorization Code**. A versão legada da
+API foi substituída por esta.
 
-Cada registro local pode ter um "espelho" no sistema externo. A tabela
-`syncRefs` guarda essa ligação — é ela que **evita duplicidade**:
+## Por que não precisa publicar o sistema na internet
 
-```
-{ sistema: 'contaazul', entidade: 'clients', idLocal: 12,
-  idExterno: 'abc-123', hash: 'a1b2c3…', sincronizadoEm: '2026-08-14T…',
-  status: 'ok' | 'erro', mensagem: '' }
-```
+O endereço de retorno do OAuth **pode ser `localhost`**. A autorização
+acontece no navegador do usuário, que é redirecionado de volta para o
+próprio sistema rodando na máquina. Depois disso, todas as chamadas são de
+**saída** — o sistema fala com a Conta Azul, e nunca o contrário. Por isso
+a integração funciona no computador da oficina, sem endereço público.
 
-- `idLocal` ↔ `idExterno`: um cliente daqui nunca vira dois lá.
-- `hash`: impressão digital do registro. Se nada mudou desde o último envio,
-  não há motivo para reenviar; se mudou, o registro aparece como pendente.
+## O que já está pronto
 
-### 2. Funções de apoio (`lib/sync.js`)
+### Conexão (`lib/contaazul.js`)
 
 | Função | Para que serve |
 |---|---|
-| `pendente(sistema, entidade, registro)` | O registro precisa ser enviado? (novo ou alterado) |
-| `pendencias(sistema)` | Lista, por entidade, tudo que está pendente |
-| `marcar(sistema, entidade, idLocal, idExterno, registro)` | Registra que foi sincronizado |
-| `find(sistema, entidade, idLocal)` | Recupera a correspondência de um registro |
+| `urlAutorizacao()` | monta o endereço da tela de autorização, com `state` de uso único |
+| `consumirState(s)` | valida o retorno; cada `state` vale uma vez e por 10 minutos |
+| `trocarCodigo(code)` | troca o código pelos tokens |
+| `renovar()` | renova pelo refresh token |
+| `tokenValido()` | devolve um token válido, renovando sozinho antes de vencer |
+| `chamar(caminho)` | chamada autenticada, com uma repetição automática em caso de 401 |
+| `quemSou()` | identifica a conta conectada (userInfo do OpenID) |
+| `status()` | resumo para a tela, **sem segredo e sem tokens** |
 
-### 3. Consulta de estado
+### Tela (Administração → Configurações → 🔗 Conta Azul)
 
-`GET /api/sync/status` (perfil Administrador) devolve o panorama:
-quantos registros de cada entidade estão pendentes e quantos já foram
-sincronizados.
+Campos de Client ID / Client Secret / endereço de retorno, botão
+**Conectar**, **Testar conexão** e **Desconectar**.
 
-## Entidades previstas
+### Segurança
 
-`clients` · `suppliers` · `products` · `serviceCatalog` · `sales` ·
-`serviceOrders` · `payables` · `receivables` · `cashflow` (baixas e
-pagamentos). Notas fiscais entram junto com o módulo fiscal, quando houver.
+- Client Secret e tokens ficam **só no servidor** (`data/db.json`); o
+  `GET /api/settings` remove o bloco inteiro antes de responder.
+- A rota de retorno (`/api/contaazul/callback`) é aberta por necessidade —
+  quem chega nela vem de fora, sem sessão. Quem faz o papel de credencial é
+  o `state`: gerado só aqui, de uso único, com validade de 10 minutos.
+- A senha da Conta Azul nunca passa pelo sistema: quem a digita é o
+  usuário, na tela da própria Conta Azul.
 
-## O que falta para ligar de verdade
+### Registro de correspondência (`syncRefs`, `lib/sync.js`)
 
-1. **Conferir a documentação oficial vigente** da API da Conta Azul —
-   autenticação (OAuth), endpoints, campos obrigatórios e limites de uso
-   mudam com o tempo. Usar **somente** o que estiver oficialmente
-   documentado.
-2. Cadastrar as credenciais (client id/secret) em Administração →
-   Configurações, no mesmo padrão da chave de IA: **guardadas apenas no
-   servidor**, nunca no navegador.
-3. Implementar, por entidade, o mapa de campos (de/para) e a chamada de
-   envio/recebimento, marcando cada registro com `sync.marcar(...)`.
-4. Definir o sentido da sincronização por entidade (só envia, só recebe ou
-   dois sentidos) e o que fazer em caso de conflito.
-5. Tela de acompanhamento: pendentes, últimos envios e erros por registro.
+Já existente, é o que **evita duplicidade** quando a sincronização entrar:
 
-## Cuidados que a estrutura já respeita
+```
+{ sistema: 'contaazul', entidade: 'clients', idLocal: 12,
+  idExterno: 'abc-123', hash: 'a1b2c3…', sincronizadoEm: '…', status: 'ok' }
+```
 
-- **Sem duplicidade**: nada é enviado duas vezes por engano — a
-  correspondência é verificada antes.
-- **Rastreável**: dá para saber exatamente o que já foi sincronizado e
-  quando.
-- **Reversível**: apagar um registro de `syncRefs` apenas faz o item voltar
-  para "pendente"; nenhum dado operacional é perdido.
-- **Independente**: se a integração estiver desligada ou fora do ar, o
-  sistema funciona normalmente — nada aqui depende dela.
+`idLocal` ↔ `idExterno` garante que um cliente daqui nunca vire dois lá; o
+`hash` evita reenviar o que não mudou.
+
+## O que ainda falta
+
+**A sincronização das entidades** (clientes, produtos, vendas, contas a
+pagar e a receber) ainda não foi escrita, e por um motivo específico: para
+montar o mapa de campos é preciso o caminho exato de cada recurso e o nome
+exato de cada campo na documentação oficial — e o ambiente onde este
+código foi desenvolvido não alcança `developers.contaazul.com`. Escrever
+por suposição contraria a regra combinada de usar **somente** o que estiver
+oficialmente documentado.
+
+O caminho para destravar isso já está no sistema:
+
+**`POST /api/contaazul/explorar`** (administrador, só GET, não altera nada
+na Conta Azul) faz uma leitura de qualquer recurso e mostra a resposta
+crua. Com a conta conectada, é assim que se confirma o formato real de
+cada recurso antes de escrever o mapa de campos.
+
+Depois disso, por entidade:
+
+1. mapa de campos (de/para);
+2. sentido da sincronização (só envia, só recebe ou os dois);
+3. o que fazer em caso de conflito;
+4. marcar cada registro com `sync.marcar(...)`;
+5. tela de acompanhamento: pendentes, últimos envios e erros.
+
+## Sobre publicar como "extensão"
+
+A Conta Azul tem um programa de **extensões** — integrações publicadas na
+plataforma deles, listadas para outros clientes. Elas são construídas sobre
+esta mesma API oficial. Ou seja: o módulo feito aqui é a base do que um dia
+poderia virar uma extensão publicada; não são caminhos concorrentes.
+
+(O guia de extensões deles fica em `developers.contaazul.com/extension-guide`
+— não foi possível lê-lo daqui.)
+
+## Cuidados que a estrutura respeita
+
+- **Sem duplicidade**: a correspondência é verificada antes de qualquer envio.
+- **Rastreável**: dá para saber o que já foi sincronizado e quando.
+- **Reversível**: apagar um registro de `syncRefs` só faz o item voltar
+  para "pendente"; nenhum dado operacional se perde.
+- **Independente**: com a integração desligada ou fora do ar, o sistema
+  funciona normalmente — nada aqui depende dela.
