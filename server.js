@@ -18,6 +18,7 @@ const domain = require('./lib/domain');
 const ai = require('./lib/ai');
 const xlsx = require('./lib/xlsx');
 const sync = require('./lib/sync');
+const contaazul = require('./lib/contaazul');
 const { seedIfEmpty, hashPassword, checkPassword, isLegacyHash, MODULES } = require('./lib/seed');
 
 const PORT = process.env.PORT || 3000;
@@ -34,6 +35,14 @@ function send(res, status, data, headers) {
   res.writeHead(status, Object.assign({ 'Content-Type': 'application/json; charset=utf-8' }, headers));
   res.end(body);
 }
+/* Escapa texto para as poucas páginas HTML montadas aqui no servidor
+   (o retorno da autorização da Conta Azul). */
+function esc(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
 const ok = (res, data) => send(res, 200, data);
 const bad = (res, msg) => send(res, 400, { error: msg });
 const notFound = (res) => send(res, 404, { error: 'Não encontrado' });
@@ -514,11 +523,14 @@ route('GET', '/api/audit', 'admin', async (req, res, user, params, query) => {
   ok(res, list.slice(0, Number(query.limit) || 300));
 });
 
-/* A chave da API de IA nunca sai do servidor: o GET devolve só uma máscara. */
+/* Segredos nunca saem do servidor: o GET devolve só máscara.
+   Vale para a chave do assistente e para as credenciais da Conta Azul —
+   o bloco inteiro sai daqui, e a tela usa /api/contaazul/status. */
 function settingsForClient() {
   const s = Object.assign({}, db.settings);
   s.aiKeyMasked = s.aiApiKey ? '••••' + String(s.aiApiKey).slice(-4) : '';
   delete s.aiApiKey;
+  delete s.contaazul;
   return s;
 }
 
@@ -878,6 +890,115 @@ route('POST', '/api/backup/restore', 'admin', async (req, res, user) => {
     usuarios: novo.users.length,
     clientes: novo.clients.length
   });
+});
+
+/* ================= Conta Azul — conexão oficial (OAuth 2.0) =================
+   O Client Secret e os tokens nunca saem do servidor. O navegador só recebe
+   o estado da conexão e o endereço para onde deve mandar o usuário. */
+
+route('GET', '/api/contaazul/status', 'admin', async (req, res) => {
+  ok(res, contaazul.status());
+});
+
+route('PUT', '/api/contaazul/config', 'admin', async (req, res, user) => {
+  const b = await readBody(req);
+  const c = contaazul.config();
+  if (typeof b.clientId === 'string' && b.clientId.trim()) c.clientId = b.clientId.trim();
+  if (typeof b.clientSecret === 'string' && b.clientSecret.trim()) c.clientSecret = b.clientSecret.trim();
+  if (typeof b.redirectUri === 'string' && b.redirectUri.trim()) c.redirectUri = b.redirectUri.trim();
+  db.save();
+  audit(user, 'update', 'settings', 1, 'Credenciais da Conta Azul atualizadas');
+  ok(res, contaazul.status());
+});
+
+/* Devolve o endereço da tela de autorização da Conta Azul. Quem abre é o
+   navegador do usuário — o servidor nunca vê a senha da Conta Azul. */
+route('POST', '/api/contaazul/connect', 'admin', async (req, res) => {
+  if (!contaazul.configurado()) {
+    return bad(res, 'Preencha antes o Client ID, o Client Secret e o endereço de retorno.');
+  }
+  ok(res, { url: contaazul.urlAutorizacao() });
+});
+
+/* Para onde a Conta Azul devolve o usuário depois de autorizar.
+   Quem chega aqui é o navegador, vindo de fora e sem token do sistema — por
+   isso a rota é aberta, e quem faz o papel de credencial é o "state", que só
+   este servidor gerou e que vale uma vez só. */
+route('GET', '/api/contaazul/callback', null, async (req, res, user, params, query) => {
+  const pagina = (titulo, corpo, cor) => send(res, 200, `<!DOCTYPE html><html lang="pt-BR"><head>
+    <meta charset="utf-8"><title>Conta Azul — ${titulo}</title>
+    <style>body{font:15px/1.5 system-ui,sans-serif;background:#0b0b0c;color:#ededea;
+      display:grid;place-items:center;height:100vh;margin:0;text-align:center}
+      .cx{max-width:460px;padding:32px;border:1px solid #26262b;border-radius:16px;background:#121214}
+      h1{font-size:19px;margin:0 0 10px;color:${cor}} p{color:#9a9aa1;margin:0 0 16px}
+      a{color:#e43146}</style></head><body><div class="cx">
+    <h1>${titulo}</h1>${corpo}
+    <p><a href="/#/admin">Voltar ao sistema</a></p></div></body></html>`,
+    { 'Content-Type': 'text/html; charset=utf-8' });
+
+  if (query.error) {
+    return pagina('Autorização não concluída',
+      `<p>A Conta Azul respondeu: <b>${esc(query.error_description || query.error)}</b></p>`, '#e43146');
+  }
+  if (!contaazul.consumirState(query.state)) {
+    return pagina('Retorno não reconhecido',
+      '<p>Este retorno não corresponde a nenhum pedido de conexão feito aqui, ou demorou mais de 10 minutos. Comece de novo pelo botão <b>Conectar</b>.</p>', '#e43146');
+  }
+  if (!query.code) {
+    return pagina('Retorno incompleto', '<p>A Conta Azul não enviou o código de autorização.</p>', '#e43146');
+  }
+  try {
+    await contaazul.trocarCodigo(query.code);
+    try {
+      const eu = await contaazul.quemSou();
+      const c = contaazul.config();
+      c.conta = { nome: eu.name || eu['cognito:username'] || '', email: eu.email || '' };
+      db.save();
+    } catch (e) { /* conectou; só não deu para descobrir o nome da conta */ }
+    audit({ id: 0, name: 'sistema' }, 'update', 'settings', 1, 'Conta Azul conectada');
+    return pagina('Conta Azul conectada',
+      '<p>Pode fechar esta aba e voltar ao sistema.</p>', '#3fb950');
+  } catch (e) {
+    const c = contaazul.config();
+    c.ultimoErro = e.message;
+    db.save();
+    return pagina('Não consegui concluir', `<p>${esc(e.message)}</p>`, '#e43146');
+  }
+});
+
+route('POST', '/api/contaazul/test', 'admin', async (req, res) => {
+  try {
+    const eu = await contaazul.quemSou();
+    const c = contaazul.config();
+    c.conta = { nome: eu.name || eu['cognito:username'] || '', email: eu.email || '' };
+    c.ultimoErro = '';
+    db.save();
+    ok(res, { ok: true, conta: c.conta });
+  } catch (e) {
+    ok(res, { ok: false, error: e.message });
+  }
+});
+
+route('POST', '/api/contaazul/disconnect', 'admin', async (req, res, user) => {
+  contaazul.desconectar();
+  audit(user, 'update', 'settings', 1, 'Conta Azul desconectada');
+  ok(res, contaazul.status());
+});
+
+/* Ferramenta de leitura, para conferirmos junto o formato real de cada
+   recurso antes de escrever a sincronização. Só GET e só administrador:
+   não altera nada na Conta Azul. */
+route('POST', '/api/contaazul/explorar', 'admin', async (req, res, user) => {
+  const b = await readBody(req);
+  const caminho = String(b.caminho || '').trim();
+  if (!caminho.startsWith('/')) return bad(res, 'Informe o caminho do recurso, começando com "/".');
+  try {
+    const r = await contaazul.chamar(caminho, { method: 'GET' });
+    audit(user, 'view', 'settings', 1, `Conta Azul — leitura de ${caminho}`);
+    ok(res, { status: r.status, corpo: r.json !== null ? r.json : String(r.text || '').slice(0, 4000) });
+  } catch (e) {
+    ok(res, { status: 0, erro: e.message });
+  }
 });
 
 /* ---- integrações externas (preparação p/ Conta Azul) ----

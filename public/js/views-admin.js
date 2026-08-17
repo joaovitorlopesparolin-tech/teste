@@ -147,7 +147,9 @@ App.registerView('admin', async (view) => {
 
   /* ---------- configurações ---------- */
   async function renderSettings(el) {
-    const [s, bk, net] = await Promise.all([App.get('/settings'), App.get('/backup/status'), App.get('/network')]);
+    const [s, bk, net, ca] = await Promise.all([
+      App.get('/settings'), App.get('/backup/status'), App.get('/network'), App.get('/contaazul/status')
+    ]);
     const provider = s.aiProvider || 'gemini';
     const lastBk = bk.cloud.last;
     const bkStatus = !bk.cloud.dir
@@ -253,6 +255,44 @@ App.registerView('admin', async (view) => {
       </div>
 
       <div class="card" style="max-width:560px;margin-top:16px">
+        <h3>🔗 CONTA AZUL</h3>
+        ${ca.conectado ? `
+          <p class="small" style="color:var(--ok);margin-bottom:4px">✓ Conectado${ca.conta && ca.conta.nome ? ' — ' + App.esc(ca.conta.nome) : ''}</p>
+          ${ca.conta && ca.conta.email ? `<p class="small muted" style="margin-bottom:10px">${App.esc(ca.conta.email)}</p>` : ''}
+          ${ca.conectadoEm ? `<p class="small muted" style="margin-bottom:12px">Autorizado em ${App.dateTime(ca.conectadoEm)}</p>` : ''}
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn" onclick="Adm.caTestar()">🔌 Testar conexão</button>
+            <button class="btn ghost" onclick="Adm.caDesconectar()">Desconectar</button>
+          </div>
+          <div class="small" id="ca-resultado" style="margin-top:10px"></div>
+        ` : `
+          <p class="small muted" style="margin-bottom:12px">Ligação com a Conta Azul pela <b>API oficial</b>. Funciona
+          direto deste computador — o endereço de retorno pode ser <span class="mono">localhost</span>, então não é
+          preciso publicar o sistema na internet.</p>
+          <ol class="small muted" style="margin:0 0 12px 18px;padding:0">
+            <li>Crie uma aplicação em <b>portaldevs.contaazul.com</b>.</li>
+            <li>Lá, cadastre como endereço de retorno exatamente o que está no campo abaixo.</li>
+            <li>Copie o Client ID e o Client Secret para cá e salve.</li>
+            <li>Clique em <b>Conectar</b> e autorize na tela da Conta Azul.</li>
+          </ol>
+          <label class="field"><span>Client ID</span>
+            <input id="ca-id" placeholder="${ca.clientIdMascarado ? 'salvo: ' + App.esc(ca.clientIdMascarado) : 'cole aqui'}"></label>
+          <label class="field"><span>Client Secret</span>
+            <input id="ca-secret" type="password" placeholder="${ca.temSecret ? 'salvo — deixe em branco para manter' : 'cole aqui'}"></label>
+          <label class="field"><span>Endereço de retorno (cadastre este mesmo no portal)</span>
+            <input id="ca-redirect" value="${App.esc(ca.redirectUri || (location.origin + '/api/contaazul/callback'))}"></label>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn primary" onclick="Adm.caSalvar()">Salvar credenciais</button>
+            ${ca.configurado ? '<button class="btn" onclick="Adm.caConectar()">🔗 Conectar</button>' : ''}
+          </div>
+        `}
+        ${ca.ultimoErro ? `<p class="small" style="color:var(--danger);margin-top:10px">${App.esc(ca.ultimoErro)}</p>` : ''}
+        <p class="small muted" style="margin-top:10px">O Client Secret e a autorização ficam gravados
+        <b>só neste computador</b> e nunca aparecem no navegador. O sistema continua sendo a ferramenta
+        principal da oficina — a Conta Azul segue como o lado financeiro e fiscal.</p>
+      </div>
+
+      <div class="card" style="max-width:560px;margin-top:16px">
         <h3>📱 ACESSO PELO CELULAR</h3>
         ${net.ips.length ? `
         <p class="small muted" style="margin-bottom:12px">No celular (ou em outro computador) conectado ao
@@ -354,6 +394,48 @@ App.registerView('admin', async (view) => {
       else App.toast(r.naoConfigurado ? 'Backup local feito. Configure a pasta da nuvem para copiar para o Drive.' : 'Falhou: ' + (r.error || ''), r.naoConfigurado ? 'ok' : 'err');
       renderSettings(el);
     };
+    /* ---- Conta Azul ---- */
+    Adm.caSalvar = async () => {
+      const corpo = {
+        clientId: document.getElementById('ca-id').value.trim(),
+        clientSecret: document.getElementById('ca-secret').value.trim(),
+        redirectUri: document.getElementById('ca-redirect').value.trim()
+      };
+      if (!corpo.redirectUri) return App.toast('Informe o endereço de retorno.', 'err');
+      try {
+        await App.put('/contaazul/config', corpo);
+        App.toast('Credenciais salvas. Agora clique em Conectar.', 'ok');
+        renderSettings(el);
+      } catch (e) { App.toast(e.message, 'err'); }
+    };
+
+    /* A autorização acontece na tela da Conta Azul, no navegador do usuário —
+       a senha da Conta Azul nunca passa por aqui. */
+    Adm.caConectar = async () => {
+      try {
+        const r = await App.post('/contaazul/connect', {});
+        const aba = window.open(r.url, '_blank');
+        if (!aba) return App.toast('O navegador bloqueou a janela. Libere os pop-ups e tente de novo.', 'err');
+        App.toast('Autorize na aba que abriu e depois volte aqui.', 'ok');
+      } catch (e) { App.toast(e.message, 'err'); }
+    };
+
+    Adm.caTestar = async () => {
+      const out = document.getElementById('ca-resultado');
+      out.innerHTML = '<span class="muted">Falando com a Conta Azul…</span>';
+      const r = await App.post('/contaazul/test', {});
+      out.innerHTML = r.ok
+        ? `<span style="color:var(--ok)">✓ Conexão boa${r.conta && r.conta.nome ? ' — ' + App.esc(r.conta.nome) : ''}</span>`
+        : `<span style="color:var(--danger)">${App.esc(r.error)}</span>`;
+    };
+
+    Adm.caDesconectar = async () => {
+      if (!await App.confirm('Desconectar a Conta Azul? Nada é apagado dos dois lados — só a autorização é revogada aqui.')) return;
+      await App.post('/contaazul/disconnect', {});
+      App.toast('Conta Azul desconectada', 'ok');
+      renderSettings(el);
+    };
+
     /* Baixa com o token no cabeçalho — o endereço nunca carrega a credencial. */
     Adm.baixarBackup = async () => {
       try {

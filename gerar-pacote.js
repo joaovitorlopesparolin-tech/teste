@@ -104,6 +104,21 @@ const versionados = execFileSync('git', ['ls-files'], { cwd: RAIZ, encoding: 'ut
   .split('\n').map(s => s.trim())
   .filter(s => s && !s.startsWith('dist/') && !FORA.has(s));
 
+/* Arquivo novo que ainda não foi para o git não aparece em "git ls-files" e
+   ficaria de fora do pacote em silêncio — justamente o erro que este script
+   existe para evitar. Melhor parar e avisar. */
+const soltos = execFileSync('git', ['ls-files', '--others', '--exclude-standard'],
+  { cwd: RAIZ, encoding: 'utf8' })
+  .split('\n').map(s => s.trim())
+  .filter(s => s && /\.(js|css|html|json|md|bat|vbs|png|svg)$/i.test(s) && !FORA.has(s));
+
+if (soltos.length) {
+  console.error('Estes arquivos ainda não foram adicionados ao git e ficariam de fora do pacote:\n');
+  for (const s of soltos) console.error('  ' + s);
+  console.error('\nRode "git add" neles e gere o pacote de novo.');
+  process.exit(1);
+}
+
 /* node.exe: da raiz, ou reaproveitado do pacote anterior */
 function acharNodeExe() {
   const local = path.join(RAIZ, 'node.exe');
