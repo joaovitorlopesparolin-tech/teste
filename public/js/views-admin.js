@@ -674,6 +674,11 @@ App.registerView('admin', async (view) => {
             </div>
             <div class="small" id="ca-cod-msg" style="margin-top:6px"></div>
           </div>`;
+        /* Colou? Conclui sozinho — cada segundo conta com o código de 3 minutos. */
+        const cx = document.getElementById('ca-codigo');
+        if (cx) cx.addEventListener('paste', () => setTimeout(() => {
+          if (/code=|^[\w-]{6,}$/.test(cx.value.trim())) Adm.caCodigo();
+        }, 60));
       }
     };
 
