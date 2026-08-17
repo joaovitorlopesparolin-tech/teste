@@ -11,15 +11,25 @@ const App = {
   views: {},        // registradas por cada arquivo views-*.js
   cache: {},        // cache leve de coleções por página
 
-  /* Selo da marca (monograma JM) para fundos escuros. */
+  /* ---------------- Marca ----------------
+     Dois arquivos, sem fundo (PNG transparente), em /img:
+       logo-jaques.png         → cores originais, para papel e fundo claro
+       logo-jaques-escuro.png  → roxo clareado, para o fundo preto do sistema
+       icone-jaques.png        → o "j" em ladrilho quadrado (favicon, selo)  */
+  IMG_LOGO: '/img/logo-jaques.png',
+  IMG_LOGO_ESCURO: '/img/logo-jaques-escuro.png',
+  IMG_ICONE: '/img/icone-jaques.png',
+
+  /* Selo quadrado da marca, para cantos apertados (barra, aba, avatar). */
   logoSeal(size) {
-    return `<svg viewBox="0 0 80 80" width="${size}" height="${size}" aria-label="Jaques Motorsport">
-      <circle cx="40" cy="42" r="29" fill="none" stroke="#EDEDEA" stroke-width="2"/>
-      <circle cx="40" cy="42" r="25.4" fill="none" stroke="#EDEDEA" stroke-width="0.7"/>
-      <path d="M40 7 l4.5 7 h-9 z" fill="#E43146"/>
-      <text x="40" y="51" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif"
-        font-size="23" letter-spacing="1.5" fill="#EDEDEA">JM</text>
-    </svg>`;
+    return `<img class="logo-selo" src="${this.IMG_ICONE}" width="${size}" height="${size}"
+      alt="Jaques Motorsport" draggable="false">`;
+  },
+
+  /* Marca por extenso. altura em px; claro = versão para papel/fundo claro. */
+  logoMarca(altura, claro) {
+    return `<img class="logo-marca" src="${claro ? this.IMG_LOGO : this.IMG_LOGO_ESCURO}"
+      style="height:${altura}px" alt="Jaques Motorsport" draggable="false">`;
   },
 
   /* ---------------- API ---------------- */
@@ -325,10 +335,7 @@ const App = {
         .head { border-bottom: 2.5px solid #0B0B0C; padding-bottom: 10px; margin-bottom: 16px;
                 display: flex; justify-content: space-between; align-items: flex-end; }
         .brandp { text-align: right; }
-        .bp-nome { font-family: Georgia, 'Times New Roman', serif; font-size: 17px;
-                   letter-spacing: 3px; color: #0B0B0C; }
-        .bp-fio { height: 2px; background: #C0182B; margin: 2px 0 3px; }
-        .bp-sub { font-size: 7.5px; letter-spacing: 4.5px; color: #555; }
+        .bp-logo { height: 30px; display: block; margin-left: auto; }
         .bp-meta { font-size: 9.5px; color: #888; margin-top: 5px; }
         table { width: 100%; border-collapse: collapse; font-size: 11.5px; margin-top: 6px; }
         th { text-align: left; background: #eef1f5; border: 1px solid #c6ccd6; padding: 6px 8px;
@@ -345,9 +352,7 @@ const App = {
       <div class="head">
         <div><h1>${this.esc(title)}</h1><p class="meta">${this.esc(meta || '')}</p></div>
         <div class="brandp">
-          <div class="bp-nome">JAQUES</div>
-          <div class="bp-fio"></div>
-          <div class="bp-sub">MOTORSPORT</div>
+          <img class="bp-logo" src="${location.origin}${this.IMG_LOGO}" alt="Jaques Motorsport">
           <div class="bp-meta">Gerado em ${new Date().toLocaleString('pt-BR')} por ${this.esc(this.user ? this.user.name : '')}</div>
         </div>
       </div>
@@ -517,10 +522,7 @@ const App = {
     document.getElementById('app').innerHTML = `
       <div class="login-wrap"><div class="login-card">
         <div class="logotype" style="margin-bottom:22px">
-          ${this.logoSeal(84)}
-          <span class="lt-nome">JAQUES</span>
-          <div class="lt-fio"></div>
-          <span class="lt-sub">MOTORSPORT</span>
+          ${this.logoMarca(58)}
         </div>
         <p class="sub" style="text-align:center">Entre com o seu usuário e senha individuais.</p>
         <form id="loginform" autocomplete="on">
@@ -667,7 +669,7 @@ const App = {
     const ribbon = `
       <header class="ribbon" id="ribbon">
         <div class="ribbon-tabs">
-          <div class="ribbon-brand">${this.logoSeal(24)}<b>JAQUES</b></div>
+          <div class="ribbon-brand">${this.logoMarca(22)}</div>
           ${groups.map(([g], i) => `<button class="rtab" data-g="${i}">${g}</button>`).join('')}
           <div class="spacer"></div>
           <button class="btn ghost sm" onclick="App.toggleLayout()" title="Voltar ao menu lateral">▤ Menu lateral</button>
@@ -681,8 +683,10 @@ const App = {
       <div class="layout ${top ? 'layout-top' : ''}">
         ${top ? ribbon : ''}
         <aside class="sidebar" id="sidebar">
-          <div class="brand"><div class="logo">${this.logoSeal(34)}</div>
-            <div><b>Jaques Motorsport</b><small>Gestão · Performance</small></div></div>
+          <div class="brand">
+            ${this.logoMarca(30)}
+            <small>Gestão · Performance</small>
+          </div>
           <nav class="nav">${nav}</nav>
           <hr class="sep">
           <a class="btn ghost sm" style="width:100%" onclick="App.toggleLayout()">▥ Menu superior (estilo Revit)</a>
@@ -693,6 +697,7 @@ const App = {
           <div class="topbar">
             <div style="display:flex;align-items:center;gap:10px">
               <button class="btn menu-toggle" onclick="document.getElementById('sidebar').classList.toggle('open')">☰</button>
+              ${this.logoSeal(26)}
               <div><h1 id="page-title"></h1><div class="sub" id="page-sub"></div></div>
             </div>
             <div class="userchip"><b>${this.esc(this.user.name)}</b></div>
