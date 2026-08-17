@@ -907,7 +907,7 @@ route('PUT', '/api/contaazul/config', 'admin', async (req, res, user) => {
   if (typeof b.clientSecret === 'string' && b.clientSecret.trim()) c.clientSecret = b.clientSecret.trim();
   if (typeof b.redirectUri === 'string' && b.redirectUri.trim()) c.redirectUri = b.redirectUri.trim();
   // Campos avançados: em branco volta ao padrão.
-  for (const k of ['autorizarUrl', 'authBase', 'apiBase', 'escopo']) {
+  for (const k of ['autorizarUrl', 'tokenUrl', 'apiBase', 'escopo']) {
     if (typeof b[k] === 'string') c[k] = b[k].trim();
   }
   db.save();
@@ -1037,12 +1037,16 @@ route('POST', '/api/contaazul/token-manual', 'admin', async (req, res, user) => 
 
 route('POST', '/api/contaazul/test', 'admin', async (req, res) => {
   try {
-    const eu = await contaazul.quemSou();
+    // A prova real da conexão é obter um token válido (renova se preciso).
+    await contaazul.tokenValido();
     const c = contaazul.config();
-    c.conta = { nome: eu.name || eu['cognito:username'] || '', email: eu.email || '' };
+    try {
+      const eu = await contaazul.quemSou();
+      c.conta = { nome: eu.name || eu['cognito:username'] || '', email: eu.email || '' };
+    } catch (e) { /* identificação é cortesia; a conexão está de pé */ }
     c.ultimoErro = '';
     db.save();
-    ok(res, { ok: true, conta: c.conta });
+    ok(res, { ok: true, conta: c.conta || null });
   } catch (e) {
     ok(res, { ok: false, error: e.message });
   }

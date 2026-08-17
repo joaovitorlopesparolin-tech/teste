@@ -217,7 +217,7 @@ App.registerView('admin', async (view) => {
         <label class="field"><span>Chave da API &nbsp;${s.aiKeyMasked
           ? `<span class="badge ok">configurada ${App.esc(s.aiKeyMasked)}</span>`
           : '<span class="badge warn">não configurada</span>'}</span>
-          <input id="cfg-ai-key" type="password" autocomplete="off"
+          <input id="cfg-ai-key" type="password" autocomplete="new-password" readonly onfocus="this.removeAttribute('readonly')"
             placeholder="${s.aiKeyMasked ? 'deixe em branco para manter a chave atual' : 'cole aqui a chave da API'}"></label>
         <label class="field"><span>Modelo (opcional — deixe em branco para o padrão)</span>
           <input id="cfg-ai-model" value="${App.esc(s.aiModel || '')}"
@@ -499,9 +499,9 @@ App.registerView('admin', async (view) => {
             <li>Se o retorno cair no site deles, copie a barra do navegador e cole no campo que aparece aqui.</li>
           </ol>
           <label class="field"><span>Client ID</span>
-            <input id="ca-id" placeholder="${ca.clientIdMascarado ? 'salvo: ' + App.esc(ca.clientIdMascarado) : 'cole aqui'}"></label>
+            <input id="ca-id" autocomplete="off" readonly onfocus="this.removeAttribute('readonly')" placeholder="${ca.clientIdMascarado ? 'salvo: ' + App.esc(ca.clientIdMascarado) : 'cole aqui'}"></label>
           <label class="field"><span>Client Secret</span>
-            <input id="ca-secret" type="password" placeholder="${ca.temSecret ? 'salvo — deixe em branco para manter' : 'cole aqui'}"></label>
+            <input id="ca-secret" type="password" autocomplete="new-password" readonly onfocus="this.removeAttribute('readonly')" placeholder="${ca.temSecret ? 'salvo — deixe em branco para manter' : 'cole aqui'}"></label>
           <label class="field"><span>Endereço de retorno — <b>copie o do portal</b></span>
             <input id="ca-redirect" value="${App.esc(ca.redirectUri || '')}" placeholder="ex.: https://contaazul.com"></label>
           <p class="small muted" style="margin:-6px 0 12px">Tem que ficar <b>idêntico</b> ao cadastrado, caractere
@@ -515,8 +515,8 @@ App.registerView('admin', async (view) => {
             Deixe em branco para voltar ao padrão.</p>
             <label class="field"><span>Endereço da tela de autorização</span>
               <input id="ca-autorizar" value="${App.esc(ca.autorizarUrl)}" placeholder="${App.esc(ca.padrao.autorizarUrl)}"></label>
-            <label class="field"><span>Servidor de token</span>
-              <input id="ca-authbase" value="${App.esc(ca.authBase)}" placeholder="${App.esc(ca.padrao.authBase)}"></label>
+            <label class="field"><span>Endereço do token</span>
+              <input id="ca-tokenurl" value="${App.esc(ca.tokenUrl)}" placeholder="${App.esc(ca.padrao.tokenUrl)}"></label>
             <label class="field"><span>Servidor da API</span>
               <input id="ca-apibase" value="${App.esc(ca.apiBase)}" placeholder="${App.esc(ca.padrao.apiBase)}"></label>
             <label class="field"><span>Escopo</span>
@@ -535,7 +535,7 @@ App.registerView('admin', async (view) => {
           exemplo de cURL traz um <span class="mono">refresh_token</span> pronto do app de desenvolvimento. Cole-o
           aqui e a conexão fica completa na hora, <b>sem prazo de 3 minutos</b> e com renovação automática.</p>
           <div style="display:flex;gap:6px">
-            <input id="ca-refresh" class="mono" type="password" placeholder="refresh_token do exemplo de cURL" style="flex:1">
+            <input id="ca-refresh" class="mono" type="password" autocomplete="new-password" readonly onfocus="this.removeAttribute('readonly')" placeholder="refresh_token do exemplo de cURL" style="flex:1">
             <button class="btn primary" style="flex:none" onclick="Adm.caRefresh()">Conectar</button>
           </div>
           <div class="small" id="ca-ref-msg" style="margin-top:6px"></div>
@@ -548,7 +548,7 @@ App.registerView('admin', async (view) => {
           fictícios. Cole aqui para conferirmos o formato dos dados antes da conexão definitiva ficar pronta.
           Ele vence em cerca de 1 hora e não se renova sozinho.</p>
           <label class="field"><span>access_token</span>
-            <input id="ca-token" placeholder="eyJraWQiOi…"></label>
+            <input id="ca-token" autocomplete="off" placeholder="eyJraWQiOi…"></label>
           <button class="btn" onclick="Adm.caToken()">Guardar token de teste</button>
           ${ca.temToken ? `<p class="small" style="margin-top:8px;color:${Date.now() < ca.tokenExpiraEm ? 'var(--ok)' : 'var(--danger)'}">
             ${Date.now() < ca.tokenExpiraEm
@@ -611,7 +611,7 @@ App.registerView('admin', async (view) => {
         clientSecret: v('ca-secret').trim(),
         redirectUri: v('ca-redirect').trim(),
         autorizarUrl: v('ca-autorizar').trim(),
-        authBase: v('ca-authbase').trim(),
+        tokenUrl: v('ca-tokenurl').trim(),
         apiBase: v('ca-apibase').trim(),
         escopo: v('ca-escopo').trim()
       };
@@ -681,7 +681,7 @@ App.registerView('admin', async (view) => {
               : 'O retorno aponta para <span class="mono">' + App.esc(retorno) + '</span>, ou seja, você vai cair numa página da Conta Azul com <span class="mono">?code=…</span> no endereço. Copie a <b>barra do navegador inteira</b> e cole aqui.'}
             <b style="color:var(--warn,#d29922)">O código vale 3 minutos</b> — cole logo.</p>
             <div style="display:flex;gap:6px">
-              <input id="ca-codigo" class="mono" placeholder="https://contaazul.com/?code=…" style="flex:1">
+              <input id="ca-codigo" class="mono" autocomplete="off" placeholder="https://contaazul.com/?code=…" style="flex:1">
               <button class="btn primary" style="flex:none" onclick="Adm.caCodigo()">Concluir</button>
             </div>
             <div class="small" id="ca-cod-msg" style="margin-top:6px"></div>
