@@ -903,6 +903,15 @@ route('GET', '/api/contaazul/status', 'admin', async (req, res) => {
 route('PUT', '/api/contaazul/config', 'admin', async (req, res, user) => {
   const b = await readBody(req);
   const c = contaazul.config();
+  // Antes de sobrescrever a credencial, guarda a anterior. Se um
+  // preenchimento automático do navegador (ou um engano) passar por cima,
+  // o valor antigo continua recuperável em data/db.json → contaazul.anteriores.
+  for (const k of ['clientId', 'clientSecret']) {
+    const novo = typeof b[k] === 'string' ? b[k].trim() : '';
+    if (novo && c[k] && novo !== c[k]) {
+      (c.anteriores = c.anteriores || {})[k] = { valor: c[k], em: new Date().toISOString() };
+    }
+  }
   if (typeof b.clientId === 'string' && b.clientId.trim()) c.clientId = b.clientId.trim();
   if (typeof b.clientSecret === 'string' && b.clientSecret.trim()) c.clientSecret = b.clientSecret.trim();
   if (typeof b.redirectUri === 'string' && b.redirectUri.trim()) c.redirectUri = b.redirectUri.trim();
