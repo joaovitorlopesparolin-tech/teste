@@ -221,11 +221,13 @@ const App = {
   },
   closeModal() { document.getElementById('modal-root').innerHTML = ''; },
 
-  async confirm(msg) {
+  /* html: true só quando a mensagem for montada aqui no código, com App.esc
+     em cima de qualquer texto que venha de fora. */
+  async confirm(msg, { html } = {}) {
     return new Promise(resolve => {
       const m = this.modal(`
         <h2>Confirmação</h2>
-        <p>${this.esc(msg)}</p>
+        <p>${html ? msg : this.esc(msg)}</p>
         <div class="actions">
           <button class="btn" id="c-no">Cancelar</button>
           <button class="btn primary" id="c-yes">Confirmar</button>

@@ -18,7 +18,7 @@ const domain = require('./lib/domain');
 const ai = require('./lib/ai');
 const xlsx = require('./lib/xlsx');
 const sync = require('./lib/sync');
-const { seedIfEmpty, hashPassword, checkPassword, MODULES } = require('./lib/seed');
+const { seedIfEmpty, hashPassword, checkPassword, isLegacyHash, MODULES } = require('./lib/seed');
 
 const PORT = process.env.PORT || 3000;
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -357,6 +357,20 @@ function route(method, pattern, perm, handler) {
 }
 
 /* ---- sessão ---- */
+/* Quem está do outro lado da conexão.
+   Na nuvem o sistema fica atrás do servidor da hospedagem, e aí toda
+   requisição chega com o mesmo endereço — sem isto, o bloqueio por tentativas
+   trancaria todo mundo junto. O cabeçalho X-Forwarded-For traz o endereço real,
+   mas só é levado em conta quando JAQUES_TRUST_PROXY=1: fora da nuvem qualquer
+   um poderia forjá-lo e escapar do bloqueio. */
+function clientIp(req) {
+  if (process.env.JAQUES_TRUST_PROXY === '1') {
+    const xff = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+    if (xff) return xff;
+  }
+  return req.socket.remoteAddress || '?';
+}
+
 /* Proteção contra força bruta: máx. 10 senhas erradas por IP a cada 15 minutos. */
 const loginFailures = new Map();
 function bruteForceBlocked(ip) {
@@ -372,7 +386,7 @@ function noteLoginFailure(ip) {
 }
 
 route('POST', '/api/login', null, async (req, res) => {
-  const ip = req.socket.remoteAddress || '?';
+  const ip = clientIp(req);
   if (bruteForceBlocked(ip)) {
     return send(res, 429, { error: 'Muitas tentativas de login. Aguarde 15 minutos e tente novamente.' });
   }
@@ -384,6 +398,8 @@ route('POST', '/api/login', null, async (req, res) => {
   }
   loginFailures.delete(ip);
   if (!user.active) return send(res, 401, { error: 'Usuário inativo' });
+  // Senha certa e cadastro ainda no formato antigo: converte agora, em silêncio.
+  if (isLegacyHash(user.password)) db.update('users', user.id, { password: hashPassword(password) });
   // Expira sessões sem uso há mais de 30 dias (quem usa o sistema permanece conectado).
   const cutoff = Date.now() - 30 * 24 * 3600 * 1000;
   for (const s of db.all('sessions').filter(s => new Date(s.lastUsed || s.createdAt).getTime() < cutoff)) {
@@ -552,7 +568,7 @@ route('PUT', '/api/settings', 'admin', async (req, res, user) => {
 
 /* ---- backup na nuvem ---- */
 route('GET', '/api/backup/status', 'admin', async (req, res) => {
-  const localDir = path.join(__dirname, 'data', 'backups');
+  const localDir = path.join(db.DATA_DIR, 'backups');
   let locais = [];
   try { locais = fs.readdirSync(localDir).filter(f => /^db-\d{4}-\d{2}-\d{2}\.json$/.test(f)).sort(); } catch (e) {}
   ok(res, {
@@ -706,7 +722,7 @@ route('POST', '/api/cashflow/import-confirm', 'cashflow', async (req, res, user)
 });
 
 /* ---- modelos 3D (escaneamentos / CAD exportado como malha) ---- */
-const MODELS_DIR = path.join(__dirname, 'data', 'models');
+const MODELS_DIR = path.join(db.DATA_DIR, 'models');
 const MODEL_EXTS = ['stl', 'obj', 'ply'];
 
 route('POST', '/api/models3d/upload', 'products', async (req, res, user, params, query) => {
@@ -807,6 +823,61 @@ route('POST', '/api/backup/now', 'admin', async (req, res, user) => {
   const r = cloudBackup(true);
   audit(user, 'backup', 'settings', 1, r.ok ? `Backup manual → ${r.file}` : `Backup manual falhou: ${r.error || 'nuvem não configurada'}`);
   ok(res, r);
+});
+
+/* Baixa o banco inteiro como um arquivo só.
+   É o backup que dá para guardar fora do sistema — e é assim que os dados
+   saem de um computador para entrar em outro (ou na nuvem). */
+route('GET', '/api/backup/download', 'admin', async (req, res, user) => {
+  db.persistNow();
+  const conteudo = fs.readFileSync(db.DB_FILE);
+  const nome = `jaques-backup-${new Date().toISOString().slice(0, 10)}.json`;
+  audit(user, 'backup', 'settings', 1, 'Backup baixado');
+  res.writeHead(200, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Content-Disposition': `attachment; filename="${nome}"`,
+    'Content-Length': conteudo.length
+  });
+  res.end(conteudo);
+});
+
+/* Restaura um backup por cima do banco atual.
+   Antes de trocar qualquer coisa, o banco de agora é guardado em
+   data/backups — se o arquivo enviado estiver errado, nada se perde. */
+route('POST', '/api/backup/restore', 'admin', async (req, res, user) => {
+  const corpo = await readBody(req);
+  const novo = corpo && corpo.banco;
+  if (!novo || typeof novo !== 'object' || Array.isArray(novo)) {
+    return bad(res, 'Arquivo inválido: não parece um backup do sistema.');
+  }
+  if (!Array.isArray(novo.users) || !novo.users.length) {
+    return bad(res, 'Arquivo inválido: nenhum usuário dentro dele. Um backup sem usuários deixaria o sistema sem ninguém para entrar.');
+  }
+  const faltando = ['clients', 'settings'].filter(c => !Array.isArray(novo[c]));
+  if (faltando.length) return bad(res, `Arquivo inválido: faltam as tabelas ${faltando.join(', ')}.`);
+
+  const backupDir = path.join(db.DATA_DIR, 'backups');
+  fs.mkdirSync(backupDir, { recursive: true });
+  const salvaguarda = path.join(backupDir, `antes-da-restauracao-${Date.now()}.json`);
+  db.persistNow();
+  if (fs.existsSync(db.DB_FILE)) fs.copyFileSync(db.DB_FILE, salvaguarda);
+
+  for (const c of db.COLLECTIONS) if (!Array.isArray(novo[c])) novo[c] = [];
+  if (!novo._seq) novo._seq = {};
+  const tmp = db.DB_FILE + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(novo, null, 1));
+  fs.renameSync(tmp, db.DB_FILE);
+  db.reload();
+
+  console.log('Banco restaurado. Cópia do anterior:', salvaguarda);
+  audit(user, 'restore', 'settings', 1,
+    `Backup restaurado por ${user.name} — cópia do anterior em ${path.basename(salvaguarda)}`);
+  ok(res, {
+    ok: true,
+    salvaguarda: path.basename(salvaguarda),
+    usuarios: novo.users.length,
+    clientes: novo.clients.length
+  });
 });
 
 /* ---- integrações externas (preparação p/ Conta Azul) ----
@@ -2074,6 +2145,14 @@ const server = http.createServer(async (req, res) => {
   const urlPath = decodeURIComponent(u.pathname);
   const query = Object.fromEntries(u.searchParams.entries());
 
+  // Proteções básicas de navegador, que passam a valer quando o sistema fica
+  // acessível pela internet: nada de adivinhar tipo de arquivo, nada de abrir
+  // o sistema dentro de um site de terceiros, e o endereço interno não vaza
+  // no cabeçalho de origem ao clicar num link para fora.
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'same-origin');
+
   try {
     if (!urlPath.startsWith('/api/')) return serveStatic(req, res, urlPath);
 
@@ -2135,7 +2214,7 @@ function cloudCandidates() {
 function cloudBackup(force) {
   const dir = db.settings.backupDir;
   if (!dir) return { ok: false, naoConfigurado: true };
-  const dataFile = path.join(__dirname, 'data', 'db.json');
+  const dataFile = db.DB_FILE;
   try {
     if (!fs.existsSync(dataFile)) return { ok: false, error: 'ainda não há dados para copiar' };
     fs.mkdirSync(dir, { recursive: true });
@@ -2160,9 +2239,9 @@ function cloudBackup(force) {
 
 function ensureDailyBackup() {
   try {
-    const dataFile = path.join(__dirname, 'data', 'db.json');
+    const dataFile = db.DB_FILE;
     if (!fs.existsSync(dataFile)) return;
-    const backupDir = path.join(__dirname, 'data', 'backups');
+    const backupDir = path.join(db.DATA_DIR, 'backups');
     if (!fs.existsSync(backupDir)) fs.mkdirSync(backupDir, { recursive: true });
     const today = new Date().toISOString().slice(0, 10);
     const target = path.join(backupDir, `db-${today}.json`);
