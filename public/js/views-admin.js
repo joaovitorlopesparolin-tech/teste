@@ -500,9 +500,13 @@ App.registerView('admin', async (view) => {
           <label class="field"><span>Endereço de retorno (cadastre este mesmo no portal)</span>
             <input id="ca-redirect" value="${App.esc(ca.redirectUri || (location.origin + '/api/contaazul/callback'))}"></label>
           <p class="small muted" style="margin:-6px 0 12px">Tem que ficar <b>idêntico</b> ao do portal, caractere por
-          caractere. <span class="mono">localhost</span> e <span class="mono">127.0.0.1</span> são endereços
-          diferentes para a Conta Azul, mesmo apontando para este computador — use nos dois lugares o mesmo que
-          você digita no navegador.</p>
+          caractere. Se der <span class="mono">redirect_mismatch</span>, é exatamente isto que está diferente —
+          o mais prático é <b>copiar do portal para cá</b>, que o sistema atende no caminho que você colar.</p>
+          ${/^https?:\/\/(127\.0\.0\.1|\d+\.\d+\.\d+\.\d+)/.test(ca.redirectUri || location.origin) ? `
+          <p class="small" style="color:var(--warn,#d29922);margin:-6px 0 12px">⚠ A autenticação da Conta Azul roda
+          sobre AWS Cognito, que só aceita endereço sem cadeado quando o nome é <b>localhost</b> — um número de IP
+          como <span class="mono">127.0.0.1</span> é recusado. Abra o sistema por
+          <span class="mono">http://localhost:3000</span> e use esse endereço nos dois lugares.</p>` : ''}
           <details style="margin:4px 0 10px">
             <summary class="small muted" style="cursor:pointer">Ajustes avançados — ambiente e escopo</summary>
             <p class="small muted" style="margin:8px 0">Mexa aqui só se a Conta Azul indicar endereços diferentes
