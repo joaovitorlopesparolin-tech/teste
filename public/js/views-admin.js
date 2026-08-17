@@ -7,6 +7,11 @@
    usuário era jogado de volta para a primeira aba no meio do trabalho. */
 let abaAdmin = 'usuarios';
 
+/* Painel de conexão da Conta Azul (endereço da autorização + campo do código).
+   Fica fora da view porque a atualização em tempo real redesenha a tela, e
+   ele não pode sumir no meio: o código da Conta Azul vale só 3 minutos. */
+let caPainel = null;
+
 App.registerView('admin', async (view) => {
   App.setTitle('Administração', 'Usuários, permissões, catálogo, configurações e auditoria');
 
@@ -518,7 +523,7 @@ App.registerView('admin', async (view) => {
               <input id="ca-escopo" value="${App.esc(ca.escopo)}" placeholder="${App.esc(ca.padrao.escopo)}"></label>
           </details>
           <div style="display:flex;gap:8px;flex-wrap:wrap">
-            <button class="btn primary" onclick="Adm.caSalvar()">Salvar credenciais</button>
+            <button class="btn primary" onclick="Adm.caSalvarBotao()">Salvar credenciais</button>
             ${ca.configurado ? '<button class="btn" onclick="Adm.caConectar()">🔗 Conectar</button>' : ''}
           </div>
           <div id="ca-url" style="margin-top:10px"></div>
@@ -586,7 +591,8 @@ App.registerView('admin', async (view) => {
     });
 
     /* ---- Conta Azul ---- */
-    Adm.caSalvar = async () => {
+    /* silencioso: usado pelo Conectar, que salva e segue sem redesenhar. */
+    Adm.caSalvar = async ({ silencioso } = {}) => {
       const v = id => (document.getElementById(id) || {}).value || '';
       const corpo = {
         clientId: v('ca-id').trim(),
@@ -597,26 +603,49 @@ App.registerView('admin', async (view) => {
         apiBase: v('ca-apibase').trim(),
         escopo: v('ca-escopo').trim()
       };
-      if (!corpo.redirectUri) return App.toast('Informe o endereço de retorno.', 'err');
-      try {
-        await App.put('/contaazul/config', corpo);
-        App.toast('Credenciais salvas. Agora clique em Conectar.', 'ok');
+      if (!corpo.redirectUri) throw new Error('Informe o endereço de retorno (o mesmo cadastrado no portal).');
+      await App.put('/contaazul/config', corpo);
+      if (!silencioso) {
+        App.toast('Credenciais salvas', 'ok');
         renderContaAzul(el);
-      } catch (e) { App.toast(e.message, 'err'); }
+      }
+    };
+
+    Adm.caSalvarBotao = async () => {
+      try { await Adm.caSalvar(); } catch (e) { App.toast(e.message, 'err'); }
     };
 
     /* A autorização acontece na tela da Conta Azul, no navegador do usuário —
        a senha da Conta Azul nunca passa por aqui. */
+    /* Salva o que está nos campos ANTES de pedir a autorização: clicar em
+       Conectar sem salvar mandava os valores antigos, e a Conta Azul recusava
+       com "Não foi possível autorizar o acesso" só depois do login. */
     Adm.caConectar = async () => {
-      const out = document.getElementById('ca-url');
       try {
+        await Adm.caSalvar({ silencioso: true });
         const r = await App.post('/contaazul/connect', {});
+        caPainel = r.url;
+        Adm.caDesenhaPainel();
+        window.open(r.url, '_blank');
+      } catch (e) {
+        caPainel = null;
+        App.toast(e.message, 'err');
+      }
+    };
+
+    Adm.caDesenhaPainel = () => {
+      const out = document.getElementById('ca-url');
+      if (!out || !caPainel) return;
+      {
+        const r = { url: caPainel };
         const u = new URL(r.url);
         /* Na Conta Azul os parâmetros vêm depois do "#", então não estão em
            search — é preciso lê-los do fragmento. */
         const bruto = u.search ? u.search.slice(1) : (u.hash.split('?')[1] || '');
         const par = new URLSearchParams(bruto);
         const servidor = r.url.split('?')[0];
+        const retorno = par.get('redirect_uri') || '';
+        const apontaAqui = retorno.startsWith(location.origin);
         // Mostra o que está sendo enviado: quando a Conta Azul devolve uma tela
         // de erro genérica, a diferença costuma estar aqui — normalmente no
         // endereço de retorno, que precisa ser idêntico ao cadastrado no portal.
@@ -634,20 +663,17 @@ App.registerView('admin', async (view) => {
           </table>
           <p style="margin-top:8px"><a class="btn sm" href="${App.esc(r.url)}" target="_blank" rel="noopener">🔗 Abrir a autorização</a></p>
           <div style="border-top:1px dashed var(--line);margin-top:12px;padding-top:10px">
-            <b class="small">Voltou para o site da Conta Azul?</b>
-            <p class="small muted" style="margin:6px 0 8px">Se o retorno cadastrado não aponta para cá, você cai
-            numa página deles com <span class="mono">?code=…</span> no endereço. Copie a <b>barra do navegador
-            inteira</b> e cole aqui. <b style="color:var(--warn,#d29922)">O código vale 3 minutos</b> — cole logo.</p>
+            <b class="small">${apontaAqui ? 'Se o retorno não voltar sozinho' : 'Depois de autorizar'}</b>
+            <p class="small muted" style="margin:6px 0 8px">${apontaAqui
+              ? 'O retorno aponta para este sistema, então deve concluir sozinho. Se não concluir, copie a barra do navegador e cole aqui.'
+              : 'O retorno aponta para <span class="mono">' + App.esc(retorno) + '</span>, ou seja, você vai cair numa página da Conta Azul com <span class="mono">?code=…</span> no endereço. Copie a <b>barra do navegador inteira</b> e cole aqui.'}
+            <b style="color:var(--warn,#d29922)">O código vale 3 minutos</b> — cole logo.</p>
             <div style="display:flex;gap:6px">
               <input id="ca-codigo" class="mono" placeholder="https://contaazul.com/?code=…" style="flex:1">
               <button class="btn primary" style="flex:none" onclick="Adm.caCodigo()">Concluir</button>
             </div>
             <div class="small" id="ca-cod-msg" style="margin-top:6px"></div>
           </div>`;
-        window.open(r.url, '_blank');
-      } catch (e) {
-        out.innerHTML = '';
-        App.toast(e.message, 'err');
       }
     };
 
@@ -710,6 +736,10 @@ App.registerView('admin', async (view) => {
       App.toast('Conta Azul desconectada', 'ok');
       renderContaAzul(el);
     };
+
+    /* Redesenha o painel de conexão, se havia um em andamento — a tela pode
+       ter sido refeita pela atualização em tempo real no meio do processo. */
+    Adm.caDesenhaPainel();
 
     /* Mostra exatamente quais registros estão pendentes daquele tipo. */
     Adm.caVer = (ent) => {
