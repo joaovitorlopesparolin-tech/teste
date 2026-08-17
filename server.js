@@ -928,7 +928,7 @@ route('POST', '/api/contaazul/connect', 'admin', async (req, res) => {
    Quem chega aqui é o navegador, vindo de fora e sem token do sistema — por
    isso a rota é aberta, e quem faz o papel de credencial é o "state", que só
    este servidor gerou e que vale uma vez só. */
-route('GET', '/api/contaazul/callback', null, async (req, res, user, params, query) => {
+async function contaazulRetorno(req, res, query) {
   const pagina = (titulo, corpo, cor) => send(res, 200, `<!DOCTYPE html><html lang="pt-BR"><head>
     <meta charset="utf-8"><title>Conta Azul — ${titulo}</title>
     <style>body{font:15px/1.5 system-ui,sans-serif;background:#0b0b0c;color:#ededea;
@@ -968,7 +968,9 @@ route('GET', '/api/contaazul/callback', null, async (req, res, user, params, que
     db.save();
     return pagina('Não consegui concluir', `<p>${esc(e.message)}</p>`, '#e43146');
   }
-});
+}
+route('GET', '/api/contaazul/callback', null, async (req, res, user, params, query) =>
+  contaazulRetorno(req, res, query));
 
 route('POST', '/api/contaazul/test', 'admin', async (req, res) => {
   try {
@@ -2310,6 +2312,15 @@ const server = http.createServer(async (req, res) => {
   res.setHeader('Referrer-Policy', 'same-origin');
 
   try {
+    /* A Conta Azul devolve o usuário no endereço cadastrado no portal dela,
+       que nem sempre é o caminho padrão daqui. Atendemos no caminho que
+       estiver configurado, seja ele qual for. */
+    if (req.method === 'GET' && !urlPath.startsWith('/api/')) {
+      const retorno = contaazul.caminhoRetorno();
+      if (retorno && retorno !== '/' && urlPath === retorno) {
+        return await contaazulRetorno(req, res, query);
+      }
+    }
     if (!urlPath.startsWith('/api/')) return serveStatic(req, res, urlPath);
 
     // Rotas especiais primeiro.
