@@ -125,8 +125,7 @@ App.registerView('hr', async (view) => {
       { h: 'Data', cell: p => App.date(p.data) },
       ...(fin ? [{ h: 'Valor', class: 'num', cell: p => App.moneyHtml(p.valor) }] : []),
       { h: 'Status', cell: p => App.badge(p.status) },
-      { h: '', class: 'num', cell: p => p.status !== 'pago'
-          ? `<button class="btn sm primary" onclick="HR.pay(${p.id})">✓ Pagar</button>` : '' }
+      { h: '', class: 'num', cell: p => HR.acoes(p) }
     ]);
   };
 
@@ -164,14 +163,11 @@ App.registerView('hr', async (view) => {
             { h: 'Dias', class: 'num', cell: p => p.dias || 1 },
             ...(fin ? [{ h: 'Valor', class: 'num', cell: p => 'R$ ' + App.money(p.valor) }] : []),
             { h: 'Status', cell: p => App.badge(p.status) },
-            { h: '', class: 'num', cell: p => p.status !== 'pago'
-                ? `<button class="btn sm primary" onclick="HR.pay(${p.id})">✓ Pagar</button>` : '' }
+            { h: '', class: 'num', cell: p => HR.acoes(p) }
           ])}
         </div>`;
       }).join('');
   };
-
-  renderEmps(); renderPays(); renderEventos();
 
   window.HR = {
     limparFiltros() {
@@ -201,25 +197,74 @@ App.registerView('hr', async (view) => {
         App.closeModal(); App.toast('Colaborador salvo', 'ok'); App.route();
       });
     },
-    addPayment() {
+    /* Botões de cada linha. Enquanto está pendente dá para editar e excluir;
+       depois de pago é preciso desfazer o pagamento antes, porque o pagamento
+       gerou uma saída no caixa que precisa ser estornada junto. */
+    acoes(p) {
+      if (p.status === 'pago') {
+        return `<button class="btn sm ghost" onclick="HR.desfazer(${p.id})" title="Estorna a saída do caixa e volta para pendente">↩ Desfazer pagamento</button>`;
+      }
+      return `<button class="btn sm primary" onclick="HR.pay(${p.id})">✓ Pagar</button>
+        <button class="btn sm ghost" onclick="HR.editPayment(${p.id})" title="Editar">✎</button>
+        <button class="btn sm ghost" onclick="HR.delPayment(${p.id})" title="Excluir">🗑</button>`;
+    },
+
+    addPayment(id) {
       if (!employees.length) { App.toast('Cadastre um colaborador antes de lançar pagamentos', 'err'); return; }
-      App.form('Lançar pagamento de RH', [
+      const p = id ? payments.find(x => x.id === id) : null;
+      App.form(p ? 'Editar lançamento de RH' : 'Lançar pagamento de RH', [
         { name: 'employeeId', label: 'Colaborador', type: 'select', required: true, full: true,
+          value: p ? p.employeeId : '',
           options: [{ value: '', label: '— selecione —' }].concat(
-            employees.filter(e => e.ativo !== false).map(e => ({ value: e.id, label: e.nome }))) },
-        { name: 'tipo', label: 'Tipo', type: 'select', value: 'salario', options: [
+            employees.filter(e => e.ativo !== false || (p && e.id === p.employeeId))
+              .map(e => ({ value: e.id, label: e.nome }))) },
+        { name: 'tipo', label: 'Tipo', type: 'select', value: p ? p.tipo : 'salario', options: [
           { value: 'salario', label: 'Salário' }, { value: 'beneficio', label: 'Benefício' },
-          { value: 'bonus', label: 'Bônus de produção' }, { value: 'outro', label: 'Outro' }] },
-        { name: 'descricao', label: 'Descrição' },
-        { name: 'valor', label: 'Valor (R$)', type: 'number', step: '0.01', required: true },
-        { name: 'data', label: 'Data prevista', type: 'date', value: App.today(), required: true }
+          { value: 'bonus', label: 'Bônus de produção' }, { value: 'pista', label: 'Assistência de pista' },
+          { value: 'outro', label: 'Outro' }] },
+        { name: 'descricao', label: 'Descrição', value: p ? p.descricao : '' },
+        ...(p && p.tipo === 'pista' ? [
+          { name: 'evento', label: 'Evento / etapa', value: p.evento || '' },
+          { name: 'dias', label: 'Dias', type: 'number', value: p.dias || 1 }
+        ] : []),
+        { name: 'valor', label: 'Valor (R$)', type: 'number', step: '0.01', required: true, value: p ? p.valor : '' },
+        { name: 'data', label: 'Data prevista', type: 'date', value: p ? p.data : App.today(), required: true }
       ], async d => {
-        await App.post('/hrPayments', {
+        const corpo = {
           employeeId: Number(d.employeeId), tipo: d.tipo, descricao: d.descricao,
-          valor: Number(d.valor), data: d.data, status: 'pendente'
-        });
-        App.closeModal(); App.toast('Lançamento criado', 'ok'); App.route();
+          valor: Number(d.valor), data: d.data
+        };
+        if (d.evento !== undefined) corpo.evento = d.evento;
+        if (d.dias !== undefined) corpo.dias = Number(d.dias) || 1;
+        if (p) await App.put('/hrPayments/' + p.id, corpo);
+        else await App.post('/hrPayments', Object.assign(corpo, { status: 'pendente' }));
+        App.closeModal();
+        App.toast(p ? 'Lançamento atualizado' : 'Lançamento criado', 'ok');
+        App.route();
       });
+    },
+
+    editPayment(id) { HR.addPayment(id); },
+
+    async delPayment(id) {
+      const p = payments.find(x => x.id === id);
+      if (!p) return;
+      const quem = (employees.find(e => e.id === p.employeeId) || {}).nome || '';
+      if (!await App.confirm(`Excluir o lançamento de ${quem}${p.evento ? ' — ' + p.evento : ''}? Isto não pode ser desfeito.`)) return;
+      try {
+        await App.del('/hrPayments/' + id);
+        App.toast('Lançamento excluído', 'ok');
+        App.route();
+      } catch (e) { App.toast(e.message, 'err'); }
+    },
+
+    async desfazer(id) {
+      if (!await App.confirm('Desfazer este pagamento? A saída correspondente sai do caixa e o lançamento volta para pendente, podendo ser editado ou excluído.')) return;
+      try {
+        await App.post(`/hrPayments/${id}/unpay`, {});
+        App.toast('Pagamento desfeito — o caixa foi estornado', 'ok');
+        App.route();
+      } catch (e) { App.toast(e.message, 'err'); }
     },
     /* Registro por evento: escolhe uma etapa existente (ou cria) e adiciona
        várias pessoas de uma vez — o custo fica amarrado ao evento. */
@@ -300,4 +345,7 @@ App.registerView('hr', async (view) => {
       });
     }
   };
+
+  /* Só depois de HR existir: as tabelas usam HR.acoes() nas células. */
+  renderEmps(); renderPays(); renderEventos();
 });
