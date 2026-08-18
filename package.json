@@ -1,0 +1,11 @@
+{
+  "name": "gestao-obra-mn",
+  "private": true,
+  "description": "Painel de controle de pedidos de materiais e diário de obra — Martins Notari Construtora",
+  "scripts": {
+    "test": "node teste-ui.js"
+  },
+  "devDependencies": {
+    "playwright-core": "^1.49.0"
+  }
+}

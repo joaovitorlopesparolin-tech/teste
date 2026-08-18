@@ -139,6 +139,35 @@
   tfoot .resumo{font-size:12px;text-align:right}
   tfoot .resumo b{color:var(--accent);font-weight:600}
 
+  /* ── Toasts (avisos não bloqueantes) ───────────────── */
+  #toasts{position:fixed;right:16px;bottom:16px;z-index:80;display:flex;flex-direction:column;gap:8px;max-width:min(440px,calc(100vw - 32px))}
+  .toast{display:flex;align-items:center;gap:12px;background:var(--chrome);color:var(--ink);border:1px solid var(--line-strong);border-left:3px solid var(--accent);padding:10px 14px;font-size:13px;box-shadow:4px 4px 0 rgba(0,0,0,.35);animation:toast-in .18s ease-out}
+  .toast.erro{border-left-color:var(--danger);color:var(--danger)}
+  .toast button{border:1px solid var(--accent);background:none;color:var(--accent);font:600 12px var(--sans);padding:5px 10px;cursor:pointer;border-radius:2px;white-space:nowrap}
+  .toast button:hover{background:var(--accent-soft)}
+  .toast.some{opacity:0;transition:opacity .35s}
+  @keyframes toast-in{from{transform:translateY(8px);opacity:0}}
+
+  /* ── Ação em lote (select com cara de botão) ───────── */
+  select.btn{appearance:none;-webkit-appearance:none}
+  select.btn option{background:var(--surface);color:var(--ink)}
+
+  /* ── Filtro por situação nos contadores do rodapé ──── */
+  .f-sit{border:1px solid transparent;background:none;cursor:pointer;font:600 11px var(--mono);letter-spacing:.05em;padding:4px 10px;border-radius:2px;text-transform:uppercase;white-space:nowrap}
+  .f-sit b{font-size:12px;font-weight:600}
+  tfoot .resumo .f-sit b{color:inherit}
+  .f-sit.pedir{color:var(--pen-fg)}
+  .f-sit.enviado{color:var(--ped-fg)}
+  .f-sit.entregue{color:var(--ok-fg)}
+  .f-sit:hover{border-color:currentColor}
+  .f-sit.on{border-color:currentColor;background:rgba(255,255,255,.07)}
+  .f-sit.on::after{content:" ✕";opacity:.75}
+  .f-sep{margin:0 6px;color:#9FA3A7}
+
+  /* ── Alerta de entrega atrasada ────────────────────── */
+  td.data.atraso{color:var(--danger)}
+  .atraso-tag{display:inline-block;margin-left:6px;padding:1px 5px;background:var(--danger-bg);color:var(--danger);font:600 10px var(--mono);border-radius:2px;vertical-align:1px}
+
   /* ── Dialogs ───────────────────────────────────────── */
   dialog{border:1.5px solid var(--chrome);border-radius:0;box-shadow:8px 8px 0 rgba(0,0,0,.4);padding:0;max-width:520px;width:calc(100vw - 40px);font-family:var(--sans);color:var(--ink);background:var(--surface)}
   dialog::backdrop{background:rgba(0,0,0,.6)}
@@ -297,6 +326,36 @@
     .d-layout{grid-template-columns:1fr}
     .cal{position:static}
   }
+  /* ── Mobile: a tabela de pedidos vira cartões ──────── */
+  @media (max-width:720px){
+    #tabela{min-width:0;width:100%}
+    #tabela thead{display:none}
+    #tabela tbody tr{display:grid;grid-template-columns:34px 1fr auto;gap:2px 10px;padding:12px 14px;border-bottom:1px solid var(--line);align-items:center}
+    #tabela tbody tr:nth-child(even){background:var(--zebra)}
+    #tabela tbody tr.selecionada{background:var(--sel)}
+    #tabela tbody td{display:block;padding:0;border:none;background:none;width:auto}
+    #tabela tbody td:first-child{box-shadow:none}
+    #tabela td.chk{grid-column:1;grid-row:1;text-align:left}
+    #tabela td.id{grid-column:2;grid-row:1}
+    #tabela td:nth-child(10){grid-column:3;grid-row:1;justify-self:end}
+    #tabela td.desc{grid-column:1/4;grid-row:2;min-width:0;margin-top:4px}
+    #tabela td.cat{grid-column:1/3;grid-row:3}
+    #tabela td.acoes{grid-column:3;grid-row:4/7;align-self:end;justify-self:end}
+    #tabela td.un,#tabela td:nth-child(7){display:none}
+    #tabela td.num{grid-column:1/3;grid-row:4;text-align:left;font-size:13px}
+    #tabela td.num::before{content:"Qtd: ";font-family:var(--sans);font-size:12px;color:var(--ink-2)}
+    #tabela td.num::after{content:" " attr(data-un);color:var(--ink-2)}
+    #tabela td:nth-child(8){grid-column:1/3;grid-row:5;text-align:left}
+    #tabela td:nth-child(8)::before{content:"Pedido: ";font-family:var(--sans);font-size:12px;color:var(--ink-2)}
+    #tabela td:nth-child(9){grid-column:1/3;grid-row:6;text-align:left}
+    #tabela td:nth-child(9)::before{content:"Entrega: ";font-family:var(--sans);font-size:12px;color:var(--ink-2)}
+    #tabela tr.empty-cell{display:block;padding:0}
+    #tabela tr.empty-cell td{display:block;text-align:center;padding:44px 16px}
+    #tabela tfoot tr{display:flex;flex-direction:column;gap:6px;background:var(--chrome);border-top:2px solid var(--accent)}
+    #tabela tfoot td{display:block;position:static;border-top:none;white-space:normal;text-align:left;padding:8px 14px 0}
+    #tabela tfoot td:last-child{padding-bottom:10px}
+    #tabela tfoot .resumo{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+  }
   @media (prefers-reduced-motion:no-preference){
     tbody tr td{transition:background .12s}
   }
@@ -348,6 +407,12 @@
       <svg viewBox="0 0 24 24"><path d="M6 9V3h12v6M6 18H4v-7h16v7h-2"/><path d="M6 14h12v7H6z"/></svg>
       Folha de pedido <span id="selCount"></span>
     </button>
+    <select id="loteSit" class="btn" disabled title="Muda a situação de todos os itens selecionados de uma vez" aria-label="Marcar selecionados como">
+      <option value="" selected>Marcar selecionados…</option>
+      <option>A Pedir</option>
+      <option>Pedido Enviado</option>
+      <option>Entregue</option>
+    </select>
     <button class="btn" id="btnCSV">
       <svg viewBox="0 0 24 24"><path d="M12 3v12m0 0l-4-4m4 4l4-4"/><path d="M4 17v3h16v-3"/></svg>
       CSV
@@ -581,6 +646,8 @@
   <div class="folha" id="folha"></div>
 </div>
 
+<div id="toasts" role="status" aria-live="polite"></div>
+
 <script>
 "use strict";
 // ═══ Servidor compartilhado (Supabase) ════════════════════════════════
@@ -606,7 +673,7 @@ async function api(caminho, opts = {}){
 
 // colunas do banco <-> objeto usado na interface
 const toRow = d => ({ id:d.id, codigo:d.codigo, categoria:d.cat, descricao:d.desc, unidade:d.un, qtd:d.qtd, criado_em:d.criadoEm, data_pedido:d.dataPedido, data_entrega:d.dataEntrega, situacao:d.situacao, atualizado_em:new Date().toISOString() });
-const fromRow = r => ({ id:r.id, codigo:r.codigo, cat:r.categoria, desc:r.descricao, un:r.unidade, qtd:Number(r.qtd), criadoEm:r.criado_em, dataPedido:r.data_pedido, dataEntrega:r.data_entrega, situacao:r.situacao });
+const fromRow = r => ({ id:r.id, codigo:r.codigo, cat:r.categoria, desc:r.descricao, un:r.unidade, qtd:Number(r.qtd), criadoEm:r.criado_em, dataPedido:r.data_pedido, dataEntrega:r.data_entrega, situacao:r.situacao, atualizadoEm:r.atualizado_em });
 
 const upsertItens = itens => api("itens", { method:"POST", headers:{ Prefer:"resolution=merge-duplicates" }, body: JSON.stringify(itens.map(toRow)) });
 const apagarItemServidor = id => api("itens?id=eq." + encodeURIComponent(id), { method:"DELETE" });
@@ -620,6 +687,7 @@ let fotoServidor = "";               // p/ detectar mudanças vindas da outra pe
 
 let filtroTexto = "";
 let filtroCat = "Todos";
+let filtroSit = "";
 let sortCol = "codigo", sortDir = 1;
 let selecao = new Set();
 let editandoId = null;
@@ -637,6 +705,73 @@ const SITUACOES = ["A Pedir", "Pedido Enviado", "Entregue"];
 const PESO_SITUACAO = { "A Pedir":0, "Pedido Enviado":1, "Entregue":2 };
 const CLS_SITUACAO = { "A Pedir":"pedir", "Pedido Enviado":"enviado", "Entregue":"entregue" };
 const MSG_OFFLINE = "Sem conexão com o servidor. Use o botão Reconectar no topo da página.";
+const DIAS_ALERTA_ENTREGA = 7;   // dias após o envio do pedido para destacar a falta de entrega
+const diasDesde = iso => Math.round((new Date(hoje() + "T12:00:00") - new Date(iso + "T12:00:00")) / 864e5);
+// regras de datas ao trocar a situação (mesmas do formulário)
+const aplicarSituacao = (d, nova) => Object.assign({}, d, {
+  situacao: nova,
+  dataPedido: nova === "A Pedir" ? null : (d.dataPedido || hoje()),
+  dataEntrega: nova === "Entregue" ? (d.dataEntrega || hoje()) : null
+});
+
+// ═══ Toasts (avisos não bloqueantes, com Desfazer) ════════════════════
+function toast(msg, tipo, acao){
+  const el = document.createElement("div");
+  el.className = "toast" + (tipo === "erro" ? " erro" : "");
+  const span = document.createElement("span");
+  span.textContent = msg;
+  el.appendChild(span);
+  if(acao){
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = acao.rotulo;
+    b.addEventListener("click", () => { el.remove(); acao.fn(); });
+    el.appendChild(b);
+  }
+  $("#toasts").appendChild(el);
+  setTimeout(() => { el.classList.add("some"); setTimeout(() => el.remove(), 350); }, acao ? 8000 : 5000);
+}
+function toastDesfazer(msg, snapshot){
+  toast(msg, "", { rotulo: "Desfazer", fn: async () => {
+    if(!online) return toast(MSG_OFFLINE, "erro");
+    try {
+      const objs = snapshot.map(s => Object.assign({}, s));
+      await gravarItens(objs);
+      objs.forEach(o => { const d = store.itens.find(x => x.id === o.id); if(d) Object.assign(d, o); });
+      salvarCache(); render();
+      toast("Alteração desfeita.");
+    } catch(err){ tratarErroGravar(err); }
+  }});
+}
+
+// ═══ Gravação com checagem de conflito ════════════════════════════════
+// antes de gravar, confere se outra pessoa alterou o item desde a última
+// sincronização; havendo conflito, recarrega o estado e avisa em vez de
+// sobrescrever a edição alheia
+async function gravarItens(itens){
+  const comVersao = itens.filter(o => { const loc = store.itens.find(x => x.id === o.id); return loc && loc.atualizadoEm; });
+  if(comVersao.length){
+    const atuais = await api(`itens?id=in.(${comVersao.map(o => encodeURIComponent(o.id)).join(",")})&select=id,atualizado_em`);
+    const emConflito = (atuais || []).find(r => {
+      const loc = store.itens.find(x => x.id === r.id);
+      return loc && r.atualizado_em && new Date(r.atualizado_em) - new Date(loc.atualizadoEm) > 1000;
+    });
+    if(emConflito){
+      const d = store.itens.find(x => x.id === emConflito.id);
+      const err = new Error("conflito");
+      err.conflito = { codigo: d ? d.codigo : emConflito.id };
+      await iniciar();
+      throw err;
+    }
+  }
+  const rows = itens.map(toRow);
+  await api("itens", { method:"POST", headers:{ Prefer:"resolution=merge-duplicates" }, body: JSON.stringify(rows) });
+  rows.forEach(r => { const o = itens.find(x => x.id === r.id); if(o) o.atualizadoEm = r.atualizado_em; });
+}
+function tratarErroGravar(err){
+  if(err && err.conflito) toast(`${err.conflito.codigo} foi alterado por outra pessoa — a tabela foi recarregada. Confira e tente de novo.`, "erro");
+  else toast("Falha ao salvar no servidor. Verifique a internet e tente de novo.", "erro");
+}
 
 function salvarCache(){ localStorage.setItem(CACHE, JSON.stringify(store)); }
 function lerCache(){ try { const c = JSON.parse(localStorage.getItem(CACHE)); if(c && Array.isArray(c.itens)) return c; } catch(e){} return null; }
@@ -648,7 +783,7 @@ function setSync(estado){
   $("#bannerOff").hidden = estado !== "off";
   $("#btnNovo").disabled = estado !== "ok";
 }
-function exigirOnline(){ if(!online){ alert(MSG_OFFLINE); return false; } return true; }
+function exigirOnline(){ if(!online){ toast(MSG_OFFLINE, "erro"); return false; } return true; }
 
 // ═══ Carga inicial + sincronização ════════════════════════════════════
 async function baixarEstado(){
@@ -721,12 +856,15 @@ $("#tabs").addEventListener("click", e => {
 });
 
 // ═══ Filtro + ordenação ═══════════════════════════════════════════════
-function linhasVisiveis(){
+function filtrarBase(){
   const t = filtroTexto.trim().toLowerCase();
-  const rows = store.itens.filter(d =>
+  return store.itens.filter(d =>
     (filtroCat === "Todos" || d.cat === filtroCat) &&
     (!t || [d.codigo,d.cat,d.desc,d.un,d.situacao,fmtData(d.dataPedido),fmtData(d.criadoEm),fmtData(d.dataEntrega)].join(" ").toLowerCase().includes(t))
   );
+}
+function linhasVisiveis(){
+  const rows = filtrarBase().filter(d => !filtroSit || d.situacao === filtroSit);
   rows.sort((a,b) => {
     let va = a[sortCol], vb = b[sortCol];
     if(sortCol === "situacao"){ va = PESO_SITUACAO[va]; vb = PESO_SITUACAO[vb]; }
@@ -742,30 +880,35 @@ function render(){
   const rows = linhasVisiveis();
   selecao.forEach(id => { if(!store.itens.some(d => d.id === id)) selecao.delete(id); });
 
-  $("#corpo").innerHTML = rows.length ? rows.map(d => `<tr class="${selecao.has(d.id)?"selecionada":""}" data-id="${d.id}">
+  $("#corpo").innerHTML = rows.length ? rows.map(d => {
+      const diasEnv = d.situacao === "Pedido Enviado" && d.dataPedido ? diasDesde(d.dataPedido) : 0;
+      const atrasado = diasEnv >= DIAS_ALERTA_ENTREGA;
+      return `<tr class="${selecao.has(d.id)?"selecionada":""}" data-id="${d.id}">
       <td class="chk"><input type="checkbox" data-sel="${d.id}" ${selecao.has(d.id)?"checked":""} aria-label="Selecionar ${escHtml(d.desc)}"></td>
       <td class="id">${escHtml(d.codigo)}</td>
       <td class="cat">${escHtml(d.cat)}</td>
       <td class="desc">${escHtml(d.desc)}</td>
       <td class="un">${escHtml(d.un)}</td>
-      <td class="num">${fmtNum(d.qtd)}</td>
+      <td class="num" data-un="${escHtml(d.un)}">${fmtNum(d.qtd)}</td>
       <td class="data${d.criadoEm?"":" vazia"}">${fmtData(d.criadoEm)}</td>
-      <td class="data${d.dataPedido?"":" vazia"}">${fmtData(d.dataPedido)}</td>
+      <td class="data${d.dataPedido?"":" vazia"}${atrasado?" atraso":""}"${atrasado?` title="Pedido enviado há ${diasEnv} dias sem entrega"`:""}>${fmtData(d.dataPedido)}${atrasado?`<span class="atraso-tag">${diasEnv}d</span>`:""}</td>
       <td class="data${d.dataEntrega?"":" vazia"}">${fmtData(d.dataEntrega)}</td>
       <td><select class="sel-sit ${CLS_SITUACAO[d.situacao]}" data-sit="${d.id}" title="Alterar situação" aria-label="Situação de ${escHtml(d.desc)}">${SITUACOES.map(s => `<option${s === d.situacao ? " selected" : ""}>${s}</option>`).join("")}</select></td>
       <td class="acoes">
         <button class="row-btn" data-editar="${d.id}" title="Editar" aria-label="Editar ${escHtml(d.desc)}"><svg viewBox="0 0 24 24"><path d="M17 3l4 4L8 20l-5 1 1-5L17 3z"/></svg></button>
         <button class="row-btn del" data-excluir="${d.id}" title="Excluir" aria-label="Excluir ${escHtml(d.desc)}"><svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3m-8 0l1 13h8l1-13"/></svg></button>
       </td>
-    </tr>`).join("")
+    </tr>`; }).join("")
     : store.itens.length
-      ? `<tr class="empty-cell"><td colspan="11">Nenhum material corresponde à busca.</td></tr>`
+      ? `<tr class="empty-cell"><td colspan="11">Nenhum material corresponde aos filtros.</td></tr>`
       : `<tr class="empty-cell"><td colspan="11">Nenhum insumo cadastrado ainda.<br>
           <button class="btn primary" id="vazioNovo">+ Adicionar primeiro insumo</button></td></tr>`;
 
-  const conta = s => rows.filter(d => d.situacao === s).length;
+  const base = filtrarBase();
+  const conta = s => base.filter(d => d.situacao === s).length;
+  const ROT_SIT = { "A Pedir":"a pedir", "Pedido Enviado":"enviados", "Entregue":"entregues" };
   $("#resumo").innerHTML = store.itens.length
-    ? `<b>${conta("A Pedir")}</b> a pedir &nbsp;·&nbsp; <b>${conta("Pedido Enviado")}</b> enviados &nbsp;·&nbsp; <b>${conta("Entregue")}</b> entregues`
+    ? SITUACOES.map(s => `<button type="button" class="f-sit ${CLS_SITUACAO[s]}${filtroSit === s ? " on" : ""}" data-fsit="${s}" title="${filtroSit === s ? "Remover o filtro de situação" : "Mostrar só os itens " + ROT_SIT[s]}"><b>${conta(s)}</b> ${ROT_SIT[s]}</button>`).join(`<span class="f-sep">·</span>`)
     : "";
   atualizarSelecaoUI(rows);
 
@@ -790,6 +933,7 @@ function atualizarSelecaoUI(rows){
   $("#chkTodos").indeterminate = visSel > 0 && visSel < rows.length;
   $("#selCount").textContent = selecao.size ? `(${selecao.size})` : "";
   $("#btnFolha").disabled = selecao.size === 0;
+  $("#loteSit").disabled = selecao.size === 0;
 }
 
 $("#corpo").addEventListener("change", async e => {
@@ -807,29 +951,54 @@ $("#corpo").addEventListener("change", async e => {
   const d = store.itens.find(x => x.id === idSit);
   const nova = sel.value;
   if(!d || nova === d.situacao) return;
-  if(!online){ sel.value = d.situacao; alert(MSG_OFFLINE); return; }
-  // mesmas regras de datas do formulário: enviado ganha data do pedido, entregue ganha data de entrega
-  const objeto = Object.assign({}, d, {
-    situacao: nova,
-    dataPedido: nova === "A Pedir" ? null : (d.dataPedido || hoje()),
-    dataEntrega: nova === "Entregue" ? (d.dataEntrega || hoje()) : null
-  });
+  if(!online){ sel.value = d.situacao; toast(MSG_OFFLINE, "erro"); return; }
+  const antes = Object.assign({}, d);
+  const objeto = aplicarSituacao(d, nova);
   sel.disabled = true;
   sel.className = "sel-sit " + CLS_SITUACAO[nova];
   try {
-    await upsertItens([objeto]);
+    await gravarItens([objeto]);
     Object.assign(d, objeto);
     salvarCache(); render();
+    toastDesfazer(`${d.codigo} marcado como ${nova}.`, [antes]);
   } catch(err){
-    sel.value = d.situacao;
-    sel.className = "sel-sit " + CLS_SITUACAO[d.situacao];
-    sel.disabled = false;
-    alert("Falha ao salvar a situação no servidor. Verifique a internet e tente de novo.");
+    if(!err.conflito){
+      sel.value = antes.situacao;
+      sel.className = "sel-sit " + CLS_SITUACAO[antes.situacao];
+      sel.disabled = false;
+    }
+    tratarErroGravar(err);
   }
 });
 $("#chkTodos").addEventListener("change", e => {
   linhasVisiveis().forEach(d => e.target.checked ? selecao.add(d.id) : selecao.delete(d.id));
   render();
+});
+
+// filtro por situação clicando nos contadores do rodapé
+$("#resumo").addEventListener("click", e => {
+  const b = e.target.closest("[data-fsit]");
+  if(!b) return;
+  filtroSit = filtroSit === b.dataset.fsit ? "" : b.dataset.fsit;
+  render();
+});
+
+// ação em lote: muda a situação de todos os itens selecionados
+$("#loteSit").addEventListener("change", async e => {
+  const nova = e.target.value;
+  e.target.value = "";
+  if(!nova || !selecao.size) return;
+  if(!exigirOnline()) return;
+  const alvo = store.itens.filter(d => selecao.has(d.id) && d.situacao !== nova);
+  if(!alvo.length) return toast(`Os itens selecionados já estão como ${nova}.`);
+  const antes = alvo.map(d => Object.assign({}, d));
+  const novos = alvo.map(d => aplicarSituacao(d, nova));
+  try {
+    await gravarItens(novos);
+    novos.forEach(o => Object.assign(store.itens.find(d => d.id === o.id), o));
+    salvarCache(); render();
+    toastDesfazer(`${novos.length} ${novos.length > 1 ? "itens marcados" : "item marcado"} como ${nova}.`, antes);
+  } catch(err){ tratarErroGravar(err); }
 });
 
 // ═══ Formulário (novo / editar) ═══════════════════════════════════════
@@ -908,7 +1077,7 @@ $("#formInsumo").addEventListener("submit", async e => {
   const btn = $("#btnSalvar");
   btn.disabled = true; btn.textContent = "Salvando…";
   try {
-    await upsertItens([objeto]);
+    await gravarItens([objeto]);
     if(editandoId){
       const d = store.itens.find(x => x.id === editandoId);
       Object.assign(d, objeto);
@@ -917,7 +1086,9 @@ $("#formInsumo").addEventListener("submit", async e => {
     }
     salvarCache(); dlg.close(); montarTabs(); render();
   } catch(err) {
-    mostrarErro(/column|PGRST204/i.test(err.message)
+    mostrarErro(err.conflito
+      ? `${err.conflito.codigo} foi alterado por outra pessoa enquanto você editava. A tabela foi recarregada — feche e confira antes de salvar.`
+      : /column|PGRST204/i.test(err.message)
       ? "O banco ainda não tem as colunas de datas novas. Cole o script de atualização no SQL Editor do Supabase e tente de novo."
       : "Falha ao salvar no servidor. Verifique a internet e tente de novo.");
   } finally {
@@ -964,7 +1135,7 @@ $("#btnExcluir").addEventListener("click", async () => {
     await acaoExcluir();
     dlgConf.close();
   } catch(err) {
-    alert("Falha ao excluir no servidor. Verifique a internet e tente de novo.");
+    toast("Falha ao excluir no servidor. Verifique a internet e tente de novo.", "erro");
   } finally { btn.disabled = false; }
 });
 
@@ -988,7 +1159,7 @@ $$("thead th[data-col]").forEach(th => {
 $("#obraNome").addEventListener("change", e => {
   store.obra = e.target.value.trim();
   salvarCache();
-  if(online) salvarConfigServidor().catch(() => alert("Falha ao salvar o nome da obra no servidor."));
+  if(online) salvarConfigServidor().catch(() => toast("Falha ao salvar o nome da obra no servidor.", "erro"));
 });
 $("#dataHoje").textContent = fmtData(hoje());
 
@@ -1044,7 +1215,7 @@ $("#btnMarcarEnviado").addEventListener("click", async () => {
   btn.disabled = true; btn.textContent = "Salvando…";
   try {
     store.proxFolha++;
-    await upsertItens(atualizados);
+    await gravarItens(atualizados);
     await salvarConfigServidor();
     atualizados.forEach(a => Object.assign(store.itens.find(d => d.id === a.id), a));
     salvarCache(); render();
@@ -1052,7 +1223,7 @@ $("#btnMarcarEnviado").addEventListener("click", async () => {
   } catch(err) {
     store.proxFolha--;
     btn.disabled = false; btn.textContent = "Marcar itens como enviados";
-    alert("Falha ao salvar no servidor. Verifique a internet e tente de novo.");
+    tratarErroGravar(err);
   }
 });
 
@@ -1197,10 +1368,10 @@ $("#dAddFotos").addEventListener("click", () => $("#dFotosInput").click());
 $("#dFotosInput").addEventListener("change", async e => {
   const files = [...e.target.files];
   e.target.value = "";
-  if(fotosDia.length + files.length > 12) return alert("Máximo de 12 fotos por dia.");
+  if(fotosDia.length + files.length > 12) return toast("Máximo de 12 fotos por dia.", "erro");
   for(const f of files){
     try { fotosDia.push({ nome: f.name, img: await comprimirFoto(f) }); }
-    catch(err){ alert(`Não consegui ler a imagem "${f.name}".`); }
+    catch(err){ toast(`Não consegui ler a imagem "${f.name}".`, "erro"); }
   }
   renderFotos(); setDirtyD(true);
 });
@@ -1274,11 +1445,11 @@ $("#btnIntelMarcar").addEventListener("click", async () => {
   try {
     const atualizados = store.itens.filter(it => ids.includes(it.id))
       .map(it => Object.assign({}, it, { situacao: "Entregue", dataEntrega: intelDia, dataPedido: it.dataPedido || intelDia }));
-    await upsertItens(atualizados);
+    await gravarItens(atualizados);
     atualizados.forEach(a => Object.assign(store.itens.find(d => d.id === a.id), a));
     salvarCache(); render();
     $("#dlgIntel").close();
-  } catch(err){ alert("Falha ao atualizar os pedidos. Tente de novo."); }
+  } catch(err){ tratarErroGravar(err); }
   finally { btn.disabled = false; btn.textContent = "Marcar como entregue"; }
 });
 
@@ -1436,7 +1607,7 @@ async function abrirRDODoDia(dia, alvo){
     const reg = await lerDia(dia);
     abrirRDO(dia, reg ? reg.dados : {}, reg && Array.isArray(reg.fotos) ? reg.fotos : [], true);
   } catch(err){
-    alert("Falha ao abrir o diário. Verifique a conexão.");
+    toast("Falha ao abrir o diário. Verifique a conexão.", "erro");
   } finally { if(alvo) alvo.style.opacity = ""; }
 }
 $("#hGrid").addEventListener("click", e => {
