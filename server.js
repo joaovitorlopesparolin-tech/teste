@@ -1661,6 +1661,174 @@ route('POST', '/api/quotes/:id/reject', 'quotes', async (req, res, user, params)
 /* ---- ordens de serviço ---- */
 const OS_STATUS = ['em_analise', 'em_andamento', 'aguardando_peca', 'finalizado', 'aguardando_pagamento', 'cancelado'];
 
+/* ---- custos do serviço (OS) ----
+   custoBase: estimativa por linha (mão de obra, materiais, componentes,
+   terceirização, outros). custoReal: o que foi efetivamente gasto.
+   O resultado usa o real quando existe; senão, a estimativa. */
+const TIPOS_CUSTO_OS = ['mao_obra', 'materiais', 'componentes', 'terceirizacao', 'outros'];
+
+function somaCustos(lista) {
+  return (lista || []).reduce((s, c) => s + (Number(c.valor) || 0), 0);
+}
+
+/** Resultado do serviço: valor − custo (real se houver, senão estimado). */
+function resultadoOS(os) {
+  const bruto = Number(os.valorTotal) || 0;
+  const estimado = somaCustos(os.custoBase);
+  const real = somaCustos(os.custoReal);
+  const usado = (os.custoReal || []).length ? real : estimado;
+  const resultado = bruto - usado;
+  return {
+    bruto, custoEstimado: estimado, custoReal: real,
+    usouReal: (os.custoReal || []).length > 0, custoUsado: usado,
+    resultado, margem: bruto > 0 ? (resultado / bruto) * 100 : 0,
+    desvio: (os.custoReal || []).length ? real - estimado : 0
+  };
+}
+
+route('GET', '/api/os/:id/custos', 'finance_sensitive', async (req, res, user, params) => {
+  const os = db.get('serviceOrders', params.id);
+  if (!os) return notFound(res);
+  ok(res, {
+    tipos: TIPOS_CUSTO_OS,
+    custoBase: os.custoBase || [], custoReal: os.custoReal || [],
+    resultado: resultadoOS(os)
+  });
+});
+
+route('PUT', '/api/os/:id/custos', 'finance_sensitive', async (req, res, user, params) => {
+  const b = await readBody(req);
+  const os = db.get('serviceOrders', params.id);
+  if (!os) return notFound(res);
+  const limpa = lista => (Array.isArray(lista) ? lista : [])
+    .filter(c => c && (c.descricao || c.valor))
+    .map(c => ({
+      tipo: TIPOS_CUSTO_OS.includes(c.tipo) ? c.tipo : 'outros',
+      descricao: String(c.descricao || '').slice(0, 160),
+      valor: Number(c.valor) || 0
+    }));
+  const patch = {};
+  if (b.custoBase !== undefined) patch.custoBase = limpa(b.custoBase);
+  if (b.custoReal !== undefined) patch.custoReal = limpa(b.custoReal);
+  const rec = db.update('serviceOrders', os.id, patch);
+  audit(user, 'alterou', 'serviceOrders', os.id,
+    `Custos da OS nº ${os.numero} — estimado R$ ${somaCustos(rec.custoBase).toFixed(2)}, real R$ ${somaCustos(rec.custoReal).toFixed(2)}`);
+  ok(res, { custoBase: rec.custoBase || [], custoReal: rec.custoReal || [], resultado: resultadoOS(rec) });
+});
+
+/* ---- editar / duplicar / cancelar OS ---- */
+route('PUT', '/api/os/:id', 'os', async (req, res, user, params) => {
+  const antes = db.get('serviceOrders', params.id);
+  if (!antes) return notFound(res);
+  const b = await readBody(req);
+
+  const temFinanceiro = db.all('receivables').some(r => r.refType === 'serviceOrders' && r.refId === antes.id && r.status === 'paga')
+    || db.all('cashflow').some(c => c.refType === 'serviceOrders' && c.refId === antes.id);
+  const mudaValor = b.valorTotal !== undefined && Number(b.valorTotal) !== antes.valorTotal;
+  if (mudaValor && temFinanceiro) {
+    return bad(res, 'Esta OS já tem pagamento registrado. Estorne o recebimento antes de mudar o valor — assim o caixa não fica diferente da OS.');
+  }
+
+  const patch = {};
+  for (const k of ['modelo', 'problema', 'descricaoServico', 'observacoes', 'previsaoEntrega', 'identificacao', 'nfRetorno']) {
+    if (b[k] !== undefined) patch[k] = b[k];
+  }
+  if (b.clienteId !== undefined) {
+    const c = db.get('clients', b.clienteId);
+    if (!c) return bad(res, 'Cliente inválido');
+    patch.clienteId = c.id;
+  }
+  if (b.responsavelId !== undefined) patch.responsavelId = b.responsavelId || null;
+  if (b.itens !== undefined) {
+    const { items, total, extras } = computeQuoteTotals(b.itens, b.custosAdicionais);
+    patch.itens = items; patch.custosAdicionais = extras; patch.valorTotal = total;
+    if (temFinanceiro && total !== antes.valorTotal) {
+      return bad(res, 'Esta OS já tem pagamento registrado. Estorne o recebimento antes de mudar os serviços.');
+    }
+  } else if (b.valorTotal !== undefined) {
+    patch.valorTotal = Number(b.valorTotal) || 0;
+  }
+
+  const NOMES = { clienteId: 'Cliente', modelo: 'Modelo', valorTotal: 'Valor', previsaoEntrega: 'Previsão',
+                  descricaoServico: 'Descrição', problema: 'Problema', observacoes: 'Observações' };
+  const mudou = Object.keys(patch)
+    .filter(k => NOMES[k] && JSON.stringify(antes[k] ?? '') !== JSON.stringify(patch[k] ?? ''))
+    .map(k => `${NOMES[k]}: ${antes[k] ?? '—'} → ${patch[k] === '' ? '—' : patch[k]}`);
+  if (patch.itens) mudou.push(`Serviços: ${(antes.itens || []).length} → ${patch.itens.length}`);
+
+  const hist = (antes.historico || []).concat([{
+    at: new Date().toISOString(), por: user.name,
+    evento: 'OS editada' + (mudou.length ? ' — ' + mudou.join('; ') : '')
+  }]);
+  patch.historico = hist;
+  const os = db.update('serviceOrders', antes.id, patch);
+  audit(user, 'alterou', 'serviceOrders', os.id, `OS nº ${os.numero} editada${mudou.length ? ' — ' + mudou.join('; ') : ''}`);
+  ok(res, os);
+});
+
+route('POST', '/api/os/:id/duplicate', 'os', async (req, res, user, params) => {
+  const origem = db.get('serviceOrders', params.id);
+  if (!origem) return notFound(res);
+  const b = await readBody(req);
+  const cliente = db.get('clients', b.clienteId || origem.clienteId);
+  if (!cliente) return bad(res, 'Cliente inválido');
+  const numero = db.nextNumber('os', 1);
+  const os = db.insert('serviceOrders', {
+    numero,
+    quoteId: null, entryId: null, clienteId: cliente.id,
+    identificacao: '',
+    modelo: origem.modelo, problema: origem.problema, descricaoServico: origem.descricaoServico,
+    itens: JSON.parse(JSON.stringify(origem.itens || [])),
+    custosAdicionais: origem.custosAdicionais || 0,
+    custoBase: JSON.parse(JSON.stringify(origem.custoBase || [])),  // a estimativa serve de modelo
+    custoReal: [],                                                  // o real é sempre desta OS
+    observacoes: origem.observacoes || '',
+    valorTotal: origem.valorTotal,
+    status: 'em_analise',
+    previsaoEntrega: '', responsavelId: suggestAssignee('production'),
+    dataFinalizacao: null, pagamentoStatus: 'pendente',
+    nfRetorno: '', envioStatus: 'na_empresa',
+    duplicadaDe: origem.numero,
+    historico: [{ at: new Date().toISOString(), por: user.name, evento: `OS criada como cópia da nº ${origem.numero}` }]
+  });
+  audit(user, 'criou', 'serviceOrders', os.id, `OS nº ${numero} duplicada da nº ${origem.numero} — ${cliente.nome}`);
+  ok(res, os);
+});
+
+route('DELETE', '/api/os/:id', 'os', async (req, res, user, params) => {
+  const os = db.get('serviceOrders', params.id);
+  if (!os) return notFound(res);
+  const recs = db.all('receivables').filter(r => r.refType === 'serviceOrders' && r.refId === os.id);
+  const pagas = recs.filter(r => r.status === 'paga');
+  const caixa = db.all('cashflow').filter(c => c.refType === 'serviceOrders' && c.refId === os.id);
+  if (pagas.length || caixa.length) {
+    return bad(res, `Esta OS já tem ${pagas.length + caixa.length} movimentação(ões) financeira(s) registrada(s). Em vez de excluir, use Cancelar — o histórico e o financeiro ficam preservados.`);
+  }
+  for (const r of recs) db.remove('receivables', r.id);
+  if (os.quoteId) db.update('quotes', os.quoteId, { osId: null });
+  if (os.entryId) db.update('headEntries', os.entryId, { osId: null, status: 'orcado' });
+  db.remove('serviceOrders', os.id);
+  audit(user, 'excluiu', 'serviceOrders', os.id, `OS nº ${os.numero} excluída — ${recs.length} recebível(is) em aberto removido(s)`);
+  ok(res, { ok: true });
+});
+
+route('POST', '/api/os/:id/cancel', 'os', async (req, res, user, params) => {
+  const b = await readBody(req);
+  const os = db.get('serviceOrders', params.id);
+  if (!os) return notFound(res);
+  if (os.status === 'cancelada') return bad(res, 'Esta OS já está cancelada.');
+  // Recebíveis em aberto são cancelados; os recebidos ficam (o dinheiro entrou).
+  const recs = db.all('receivables').filter(r => r.refType === 'serviceOrders' && r.refId === os.id && r.status !== 'paga');
+  for (const r of recs) db.update('receivables', r.id, { status: 'cancelada' });
+  const hist = (os.historico || []).concat([{
+    at: new Date().toISOString(), por: user.name,
+    evento: `OS cancelada${b.motivo ? ' — ' + b.motivo : ''}${recs.length ? ` (${recs.length} parcela(s) em aberto cancelada(s))` : ''}`
+  }]);
+  db.update('serviceOrders', os.id, { status: 'cancelada', historico: hist });
+  audit(user, 'cancelou', 'serviceOrders', os.id, `OS nº ${os.numero} cancelada${b.motivo ? ' — ' + b.motivo : ''}`);
+  ok(res, db.get('serviceOrders', os.id));
+});
+
 route('POST', '/api/os/:id/status', 'os', async (req, res, user, params) => {
   const b = await readBody(req);
   const os = db.get('serviceOrders', params.id);
@@ -1728,49 +1896,91 @@ route('POST', '/api/os/:id/payment', 'receivables', async (req, res, user, param
   ok(res, { ok: true });
 });
 
-/* ---- vendas ---- */
-route('POST', '/api/sales', 'sales', async (req, res, user) => {
-  const b = await readBody(req);
-  const cliente = db.get('clients', b.clienteId);
-  if (!cliente) return bad(res, 'Cliente é obrigatório');
-  if (!Array.isArray(b.itens) || !b.itens.length) return bad(res, 'A venda precisa de ao menos um item');
+/* ---- vendas ----
+   Uma venda tem itens de dois tipos:
+     kind 'cabecote' — produto fabricado; consome componentes na PRODUÇÃO
+                       (quando a ordem fica "pronto"), não na venda;
+     kind 'peca'     — item do estoque próprio revendido; baixa na hora.
+   A distinção importa para o estoque não ser baixado duas vezes. */
 
-  // Valida configurações e monta itens
+/** Monta e valida os itens da venda. Devolve { itens, valorTotal, custoBaseTotal } ou { erro }. */
+function montarItensVenda(lista) {
   let valorTotal = 0, custoBaseTotal = 0;
   const itens = [];
-  for (const i of b.itens) {
-    const prod = db.get('products', i.productId);
-    if (!prod) return bad(res, 'Produto inválido');
-    const v = domain.validateConfig(prod.stage, i.comando, i.tucho);
-    if (!v.ok) return bad(res, v.error);
+  for (const i of lista) {
     const qtd = Math.max(1, Number(i.qtd) || 1);
+    if (i.kind === 'peca') {
+      const it = db.get('stockItems', i.stockItemId);
+      if (!it) return { erro: 'Peça do estoque inválida' };
+      const unit = Number(i.valorUnit) || 0;
+      const tot = qtd * unit;
+      valorTotal += tot;
+      custoBaseTotal += qtd * (Number(it.custoUnit) || 0);
+      itens.push({ kind: 'peca', stockItemId: it.id, produto: it.nome, qtd, valorUnit: unit, total: tot });
+      continue;
+    }
+    const prod = db.get('products', i.productId);
+    if (!prod) return { erro: 'Produto inválido' };
+    const v = domain.validateConfig(prod.stage, i.comando, i.tucho);
+    if (!v.ok) return { erro: v.error };
     const unit = Number(i.valorUnit) || prod.preco || 0;
     const tot = qtd * unit;
     valorTotal += tot;
     custoBaseTotal += qtd * (prod.custoBase || 0);
-    itens.push({ productId: prod.id, produto: prod.nome, tipo: prod.tipo, stage: prod.stage, comando: i.comando, tucho: String(i.tucho), qtd, valorUnit: unit, total: tot });
+    itens.push({ kind: 'cabecote', productId: prod.id, produto: prod.nome, tipo: prod.tipo, stage: prod.stage,
+                 comando: i.comando, tucho: String(i.tucho), qtd, valorUnit: unit, total: tot });
+  }
+  return { itens, valorTotal, custoBaseTotal };
+}
+
+/** Baixa (ou devolve) o estoque das peças de uma venda, uma única vez. */
+function estoquePecasDaVenda(sale, user, { devolver } = {}) {
+  const jaBaixado = !!sale.estoquePecasBaixado;
+  if (devolver ? !jaBaixado : jaBaixado) return;
+  for (const it of (sale.itens || []).filter(x => x.kind === 'peca')) {
+    moveStock(it.stockItemId, devolver ? 'entrada' : 'saida', it.qtd, 'sales', sale.id,
+      `${devolver ? 'Estorno da venda' : 'Venda'} nº ${sale.numero}`, user);
+  }
+  db.update('sales', sale.id, { estoquePecasBaixado: !devolver });
+}
+
+/** Desfaz tudo que uma venda gerou: produção não iniciada, recebíveis em
+    aberto, caixa e estoque de peças. Devolve o que não pôde ser desfeito. */
+function reverterVenda(sale, user) {
+  const travas = [];
+
+  // Produção: só remove o que ainda não consumiu componentes.
+  const pos = db.all('productionOrders').filter(p => p.saleId === sale.id);
+  for (const po of pos) {
+    if (po.estoqueBaixado) travas.push(`ordem de produção #${po.id} já consumiu componentes do estoque`);
+    else db.remove('productionOrders', po.id);
   }
 
-  const pagamento = b.pagamento || {};
-  pagamento.taxa = Number(pagamento.taxa) || 0;
-  pagamento.valorLiquido = valorTotal - pagamento.taxa;
+  // Recebíveis: em aberto são removidos; recebidos viram trava.
+  const recs = db.all('receivables').filter(r => r.refType === 'sales' && r.refId === sale.id);
+  for (const r of recs) {
+    if (r.status === 'paga' && !r.auto) travas.push(`parcela "${r.descricao}" já foi recebida`);
+    else db.remove('receivables', r.id);
+  }
 
-  const numero = db.nextNumber('pedido', 1);
-  const sale = db.insert('sales', {
-    numero, clienteId: cliente.id,
-    cidade: b.cidade || cliente.cidade || '', estado: b.estado || cliente.estado || '',
-    dataPedido: b.dataPedido || domain.today(),
-    previsaoEntrega: b.previsaoEntrega || '', dataEnvio: null,
-    itens, valorTotal,
-    custoBaseTotal,
-    custosAdicionais: b.custosAdicionais || [], // [{desc, valor}] — frete grátis, brindes extras...
-    pagamento,
-    observacoes: b.observacoes || '',
-    status: 'nao_produzido' // nao_produzido → preparacao → usinagem → montagem → pronto → enviado → entregue
-  });
+  // Recebimentos avulsos lançados na venda.
+  if ((sale.recebimentos || []).length) travas.push(`${sale.recebimentos.length} recebimento(s) já registrado(s)`);
 
+  if (travas.length) return travas;
+
+  // Sem travas: limpa caixa e devolve as peças ao estoque.
+  for (const c of db.all('cashflow').filter(c => c.refType === 'sales' && c.refId === sale.id)) {
+    db.remove('cashflow', c.id);
+  }
+  estoquePecasDaVenda(sale, user, { devolver: true });
+  return null;
+}
+
+/** Cria as ordens de produção dos cabeçotes de uma venda. */
+function gerarProducaoDaVenda(sale, cliente, user) {
+  const itens = sale.itens || [], numero = sale.numero;
   // Ordens de produção (uma por unidade de cabeçote) com checklist automático.
-  for (const item of itens) {
+  for (const item of itens.filter(i => i.kind !== 'peca')) {
     for (let u = 0; u < item.qtd; u++) {
       db.insert('productionOrders', {
         saleId: sale.id, pedidoNumero: numero, clienteNome: cliente.nome,
@@ -1782,7 +1992,12 @@ route('POST', '/api/sales', 'sales', async (req, res, user) => {
       });
     }
   }
+}
 
+/** Cria contas a receber / caixa de uma venda, conforme a forma de pagamento. */
+function gerarFinanceiroDaVenda(sale, cliente, user) {
+  const { valorTotal, numero, pagamento } = sale;
+  const b = {};
   // Financeiro: contas a receber / caixa conforme forma de pagamento.
   const formaAVista = ['pix', 'dinheiro'].includes(pagamento.forma) && pagamento.condicao !== 'parcelado';
   if (pagamento.condicao === 'parcelado' && (pagamento.forma === 'boleto' || pagamento.forma === 'cheque')) {
@@ -1820,7 +2035,9 @@ route('POST', '/api/sales', 'sales', async (req, res, user) => {
       clienteId: cliente.id, origem: 'venda', refType: 'sales', refId: sale.id,
       descricao: `Pedido nº ${numero} — à vista (${pagamento.forma})`,
       forma: pagamento.forma, valor: valorTotal, vencimento: sale.dataPedido,
-      status: 'paga', dataRecebimento: sale.dataPedido, parcela: 1, parcelas: 1
+      // auto: lançado pelo próprio sistema junto com a venda (não é uma baixa
+      // que alguém confirmou), então pode ser desfeito ao editar/excluir.
+      status: 'paga', auto: true, dataRecebimento: sale.dataPedido, parcela: 1, parcelas: 1
     });
   } else {
     // fallback: um recebível único no vencimento informado
@@ -1831,6 +2048,41 @@ route('POST', '/api/sales', 'sales', async (req, res, user) => {
       status: 'aberto', parcela: 1, parcelas: 1
     });
   }
+}
+
+route('POST', '/api/sales', 'sales', async (req, res, user) => {
+  const b = await readBody(req);
+  const cliente = db.get('clients', b.clienteId);
+  if (!cliente) return bad(res, 'Cliente é obrigatório');
+  if (!Array.isArray(b.itens) || !b.itens.length) return bad(res, 'A venda precisa de ao menos um item');
+
+  const montado = montarItensVenda(b.itens);
+  if (montado.erro) return bad(res, montado.erro);
+  const { itens, valorTotal, custoBaseTotal } = montado;
+
+  const pagamento = b.pagamento || {};
+  pagamento.taxa = Number(pagamento.taxa) || 0;
+  pagamento.valorLiquido = valorTotal - pagamento.taxa;
+
+  const numero = db.nextNumber('pedido', 1);
+  const sale = db.insert('sales', {
+    numero, clienteId: cliente.id,
+    cidade: b.cidade || cliente.cidade || '', estado: b.estado || cliente.estado || '',
+    dataPedido: b.dataPedido || domain.today(),
+    previsaoEntrega: b.previsaoEntrega || '', dataEnvio: null,
+    itens, valorTotal,
+    custoBaseTotal,
+    custosAdicionais: b.custosAdicionais || [], // [{desc, valor}] — frete grátis, brindes extras...
+    pagamento,
+    recebimentos: [],          // pagamentos parciais: [{valor, data, forma, obs}]
+    observacoes: b.observacoes || '',
+    status: 'nao_produzido' // nao_produzido → preparacao → usinagem → montagem → pronto → enviado → entregue
+  });
+
+  // Peças do estoque saem na hora da venda (cabeçotes saem na produção).
+  estoquePecasDaVenda(sale, user);
+  gerarProducaoDaVenda(sale, cliente, user);
+  gerarFinanceiroDaVenda(sale, cliente, user);
 
   audit(user, 'criou', 'sales', sale.id, `Pedido nº ${numero} — ${cliente.nome} — R$ ${valorTotal.toFixed(2)}`);
   db.insert('audit', {
@@ -1852,6 +2104,184 @@ route('POST', '/api/sales/:id/status', 'sales', async (req, res, user, params) =
   db.update('sales', sale.id, patch);
   audit(user, 'status', 'sales', sale.id, `Pedido nº ${sale.numero} → ${b.status}`);
   ok(res, db.get('sales', sale.id));
+});
+
+/* Editar venda: atualiza o lançamento existente. Se mexer em itens, valor
+   ou pagamento, desfaz o que a venda gerou e refaz — nunca duplica. */
+route('PUT', '/api/sales/:id', 'sales', async (req, res, user, params) => {
+  const antes = db.get('sales', params.id);
+  if (!antes) return notFound(res);
+  const b = await readBody(req);
+
+  const mexeEstruturaOuDinheiro = b.itens !== undefined || b.pagamento !== undefined;
+  let itens = antes.itens, valorTotal = antes.valorTotal, custoBaseTotal = antes.custoBaseTotal;
+  if (b.itens !== undefined) {
+    if (!Array.isArray(b.itens) || !b.itens.length) return bad(res, 'A venda precisa de ao menos um item');
+    const m = montarItensVenda(b.itens);
+    if (m.erro) return bad(res, m.erro);
+    ({ itens, valorTotal, custoBaseTotal } = m);
+  }
+
+  if (mexeEstruturaOuDinheiro) {
+    const travas = reverterVenda(antes, user);
+    if (travas) {
+      return bad(res, 'Não dá para alterar os itens ou o pagamento desta venda porque ' + travas.join('; ') +
+        '. Desfaça o recebimento (ou o estoque da produção) antes, ou edite apenas os dados cadastrais.');
+    }
+  }
+
+  const cliente = b.clienteId ? db.get('clients', b.clienteId) : db.get('clients', antes.clienteId);
+  if (!cliente) return bad(res, 'Cliente inválido');
+  const pagamento = b.pagamento !== undefined ? Object.assign({}, b.pagamento) : antes.pagamento;
+  pagamento.taxa = Number(pagamento.taxa) || 0;
+  pagamento.valorLiquido = valorTotal - pagamento.taxa;
+
+  const patch = {
+    clienteId: cliente.id,
+    cidade: b.cidade !== undefined ? b.cidade : antes.cidade,
+    estado: b.estado !== undefined ? b.estado : antes.estado,
+    dataPedido: b.dataPedido || antes.dataPedido,
+    previsaoEntrega: b.previsaoEntrega !== undefined ? b.previsaoEntrega : antes.previsaoEntrega,
+    itens, valorTotal, custoBaseTotal, pagamento,
+    custosAdicionais: b.custosAdicionais !== undefined ? b.custosAdicionais : antes.custosAdicionais,
+    observacoes: b.observacoes !== undefined ? b.observacoes : antes.observacoes
+  };
+  if (mexeEstruturaOuDinheiro) patch.estoquePecasBaixado = false;
+
+  const sale = db.update('sales', antes.id, patch);
+
+  if (mexeEstruturaOuDinheiro) {
+    estoquePecasDaVenda(sale, user);
+    gerarProducaoDaVenda(sale, cliente, user);
+    gerarFinanceiroDaVenda(sale, cliente, user);
+  }
+
+  const mudou = [];
+  if (antes.valorTotal !== sale.valorTotal) mudou.push(`Valor: ${antes.valorTotal} → ${sale.valorTotal}`);
+  if (antes.clienteId !== sale.clienteId) mudou.push('Cliente alterado');
+  if (JSON.stringify(antes.itens) !== JSON.stringify(sale.itens)) mudou.push(`Itens: ${antes.itens.length} → ${sale.itens.length}`);
+  audit(user, 'alterou', 'sales', sale.id, `Pedido nº ${sale.numero} editado${mudou.length ? ' — ' + mudou.join('; ') : ''}`);
+  ok(res, sale);
+});
+
+/* Duplicar: nova venda independente, com a original como modelo. */
+route('POST', '/api/sales/:id/duplicate', 'sales', async (req, res, user, params) => {
+  const origem = db.get('sales', params.id);
+  if (!origem) return notFound(res);
+  const b = await readBody(req);
+  const cliente = db.get('clients', b.clienteId || origem.clienteId);
+  if (!cliente) return bad(res, 'Cliente inválido');
+
+  const m = montarItensVenda(origem.itens.map(i => i.kind === 'peca'
+    ? { kind: 'peca', stockItemId: i.stockItemId, qtd: i.qtd, valorUnit: i.valorUnit }
+    : { productId: i.productId, comando: i.comando, tucho: i.tucho, qtd: i.qtd, valorUnit: i.valorUnit }));
+  if (m.erro) return bad(res, m.erro);
+
+  const numero = db.nextNumber('pedido', 1);
+  const sale = db.insert('sales', {
+    numero, clienteId: cliente.id,
+    cidade: cliente.cidade || '', estado: cliente.estado || '',
+    dataPedido: b.dataPedido || domain.today(),
+    previsaoEntrega: '', dataEnvio: null,
+    itens: m.itens, valorTotal: m.valorTotal, custoBaseTotal: m.custoBaseTotal,
+    custosAdicionais: [],
+    pagamento: { forma: (origem.pagamento || {}).forma || 'pix', taxa: 0, valorLiquido: m.valorTotal },
+    recebimentos: [],
+    observacoes: origem.observacoes || '',
+    status: 'nao_produzido',
+    duplicadoDe: origem.numero
+  });
+  estoquePecasDaVenda(sale, user);
+  gerarProducaoDaVenda(sale, cliente, user);
+  gerarFinanceiroDaVenda(sale, cliente, user);
+  audit(user, 'criou', 'sales', sale.id, `Pedido nº ${numero} duplicado do nº ${origem.numero} — ${cliente.nome}`);
+  ok(res, sale);
+});
+
+route('DELETE', '/api/sales/:id', 'sales', async (req, res, user, params) => {
+  const sale = db.get('sales', params.id);
+  if (!sale) return notFound(res);
+  const travas = reverterVenda(sale, user);
+  if (travas) {
+    return bad(res, 'Esta venda não pode ser excluída porque ' + travas.join('; ') +
+      '. Cancele o recebimento (Contas a receber) ou estorne a produção antes — assim o estoque e o caixa não ficam errados.');
+  }
+  db.remove('sales', sale.id);
+  audit(user, 'excluiu', 'sales', sale.id, `Pedido nº ${sale.numero} excluído — produção, recebíveis e estoque de peças estornados`);
+  ok(res, { ok: true });
+});
+
+/* Recebimento parcial: entrada + saldo na entrega, por exemplo.
+   O saldo continua em contas a receber e na projeção. */
+route('POST', '/api/sales/:id/receive', 'receivables', async (req, res, user, params) => {
+  const b = await readBody(req);
+  const sale = db.get('sales', params.id);
+  if (!sale) return notFound(res);
+  const valor = Number(b.valor) || 0;
+  if (valor <= 0) return bad(res, 'Informe o valor recebido.');
+  const recebido = (sale.recebimentos || []).reduce((s, r) => s + r.valor, 0);
+  const saldo = Math.round((sale.valorTotal - recebido) * 100) / 100;
+  if (valor > saldo + 0.005) {
+    return bad(res, `O saldo em aberto é R$ ${saldo.toFixed(2)} — não dá para receber R$ ${valor.toFixed(2)}.`);
+  }
+  const data = b.data || domain.today();
+  const rec = { valor, data, forma: b.forma || 'pix', obs: b.obs || '' };
+  const lista = (sale.recebimentos || []).concat([rec]);
+  db.update('sales', sale.id, { recebimentos: lista });
+  db.insert('cashflow', {
+    tipo: 'entrada', valor, data, conta: b.conta || 'principal',
+    categoria: 'venda_cabecote', origem: `Pedido nº ${sale.numero} — recebimento parcial`,
+    documento: '', refType: 'sales', refId: sale.id, descricao: `Recebimento (${rec.forma})`
+  });
+
+  // A cobrança cheia da venda dá lugar ao saldo — senão o mesmo dinheiro
+  // apareceria duas vezes em Contas a receber (o total E o que falta).
+  for (const r of db.all('receivables').filter(r =>
+    r.refType === 'sales' && r.refId === sale.id && r.origem !== 'saldo' && r.status !== 'paga')) {
+    db.remove('receivables', r.id);
+  }
+
+  // O que ainda falta vira/atualiza a conta a receber do saldo.
+  const novoSaldo = Math.round((sale.valorTotal - lista.reduce((s, r) => s + r.valor, 0)) * 100) / 100;
+  const saldoAberto = db.all('receivables').find(r =>
+    r.refType === 'sales' && r.refId === sale.id && r.origem === 'saldo' && r.status !== 'paga');
+  if (novoSaldo > 0.005) {
+    const dados = {
+      clienteId: sale.clienteId, origem: 'saldo', refType: 'sales', refId: sale.id,
+      descricao: `Pedido nº ${sale.numero} — saldo em aberto`,
+      forma: b.forma || 'pix', valor: novoSaldo,
+      vencimento: b.vencimentoSaldo || sale.previsaoEntrega || domain.addDays(data, 30),
+      status: 'aberto', parcela: 1, parcelas: 1
+    };
+    if (saldoAberto) db.update('receivables', saldoAberto.id, { valor: novoSaldo, vencimento: dados.vencimento });
+    else db.insert('receivables', dados);
+  } else if (saldoAberto) {
+    db.update('receivables', saldoAberto.id, { status: 'paga', dataRecebimento: data });
+  }
+
+  audit(user, 'recebeu', 'sales', sale.id,
+    `Pedido nº ${sale.numero} — recebido R$ ${valor.toFixed(2)} (${rec.forma}); saldo R$ ${novoSaldo.toFixed(2)}`);
+  ok(res, { recebido: lista.reduce((s, r) => s + r.valor, 0), saldo: novoSaldo });
+});
+
+route('POST', '/api/sales/:id/unreceive', 'receivables', async (req, res, user, params) => {
+  const b = await readBody(req);
+  const sale = db.get('sales', params.id);
+  if (!sale) return notFound(res);
+  const idx = Number(b.index);
+  const lista = (sale.recebimentos || []).slice();
+  if (!lista[idx]) return bad(res, 'Recebimento não encontrado.');
+  const [removido] = lista.splice(idx, 1);
+  db.update('sales', sale.id, { recebimentos: lista });
+  // Estorna a entrada correspondente no caixa (mesma data e valor).
+  const cx = db.all('cashflow').find(c => c.refType === 'sales' && c.refId === sale.id &&
+    c.valor === removido.valor && c.data === removido.data && c.tipo === 'entrada');
+  if (cx) db.remove('cashflow', cx.id);
+  const novoSaldo = Math.round((sale.valorTotal - lista.reduce((s, r) => s + r.valor, 0)) * 100) / 100;
+  const saldoRec = db.all('receivables').find(r => r.refType === 'sales' && r.refId === sale.id && r.origem === 'saldo');
+  if (saldoRec) db.update('receivables', saldoRec.id, { valor: novoSaldo, status: 'aberto', dataRecebimento: null });
+  audit(user, 'estornou', 'sales', sale.id, `Recebimento de R$ ${removido.valor.toFixed(2)} desfeito — saldo R$ ${novoSaldo.toFixed(2)}`);
+  ok(res, { saldo: novoSaldo });
 });
 
 route('GET', '/api/sales/:id/result', 'finance_sensitive', async (req, res, user, params) => {
@@ -1989,6 +2419,69 @@ route('POST', '/api/purchases', 'purchases', async (req, res, user) => {
 });
 
 /** Leitura automática de NF-e (XML) — sempre com conferência antes de confirmar. */
+/* O que um fornecedor tem em aberto: as compras cujas contas a pagar ainda
+   não foram quitadas + os gastos diários do fechamento mensal. Calculado
+   sempre a partir dos lançamentos — nunca digitado à mão. */
+function abertoDoFornecedor(fornecedorId) {
+  const compras = db.all('purchases').filter(c => c.fornecedorId === Number(fornecedorId));
+  const itens = [];
+  for (const c of compras) {
+    const parcelas = db.all('payables').filter(p => p.refType === 'purchases' && p.refId === c.id);
+    // Sem conta a pagar gerada, a compra conta como aberta pelo próprio valor.
+    const emAberto = parcelas.length
+      ? parcelas.filter(p => p.status !== 'pago' && p.status !== 'cancelado')
+      : [{ valor: c.valor, vencimento: c.vencimento || '', status: 'aberto' }];
+    if (!emAberto.length) continue;
+    const vinc = c.vinculo || {};
+    itens.push({
+      origem: 'compra', id: c.id, data: c.data,
+      descricao: (c.itens || []).map(i => i.descricao).filter(Boolean).join(', ')
+        || App_categoriaNome(c.categoria),
+      vinculo: vinc.refNome || (vinc.tipo ? vinc.tipo : ''),
+      documento: c.documentoNumero ? `${(c.documentoTipo || '').toUpperCase()} ${c.documentoNumero}` : '',
+      valor: emAberto.reduce((s, p) => s + (Number(p.valor) || 0), 0),
+      parcelas: parcelas.length,
+      status: parcelas.length ? 'aguardando pagamento' : 'sem conta a pagar'
+    });
+  }
+  for (const e of db.all('supplierExpenses').filter(e => e.fornecedorId === Number(fornecedorId) && e.status === 'aberto')) {
+    itens.push({
+      origem: 'gasto', id: e.id, data: e.data, descricao: e.descricao,
+      vinculo: e.osRef || (e.clienteId ? (db.get('clients', e.clienteId) || {}).nome || '' : ''),
+      documento: '', valor: Number(e.valor) || 0, parcelas: 0, status: 'aberto'
+    });
+  }
+  itens.sort((a, b) => (a.data || '') < (b.data || '') ? -1 : 1);
+  return { total: itens.reduce((s, i) => s + i.valor, 0), itens };
+}
+
+/* Nome legível da categoria de compra, para a descrição da conferência. */
+function App_categoriaNome(k) {
+  const m = {
+    componentes: 'Componentes', materiais: 'Materiais', mao_obra_direta: 'Mão de obra direta',
+    terceirizacao: 'Terceirização', custo_producao: 'Outros custos de produção',
+    pos_operacao: 'Pós-operação', manutencao: 'Manutenção',
+    despesa_operacional: 'Despesas operacionais', outros: 'Outros', custo_direto: 'Custos diretos'
+  };
+  return m[k] || k || 'Compra';
+}
+
+/* Panorama de um fornecedor: total em aberto + o detalhamento que permite
+   conferir a cobrança do mês contra o que a empresa registrou. */
+route('GET', '/api/suppliers/:id/open', 'purchases', async (req, res, user, params) => {
+  const forn = db.get('suppliers', params.id);
+  if (!forn) return notFound(res);
+  const r = abertoDoFornecedor(forn.id);
+  ok(res, { fornecedor: { id: forn.id, nome: forn.nome }, total: r.total, itens: r.itens });
+});
+
+/* Totais de todos os fornecedores de uma vez (para a lista). */
+route('GET', '/api/suppliers/open-summary', 'purchases', async (req, res) => {
+  const out = {};
+  for (const f of db.all('suppliers')) out[f.id] = abertoDoFornecedor(f.id).total;
+  ok(res, out);
+});
+
 /* ---- edição de compra ----
    Regras inegociáveis do pedido:
    - editar ATUALIZA o lançamento, nunca cria outro;

@@ -473,13 +473,159 @@ App.registerView('os', async (view) => {
       { h: 'Status', cell: o => App.badge(o.status) },
       ...(verValores ? [{ h: 'Pagto', cell: o => App.badge(o.pagamentoStatus) }] : []),
       { h: 'Envio', cell: o => App.badge(o.envioStatus === 'na_empresa' ? 'na_empresa' : o.envioStatus) },
-      { h: '', class: 'num', cell: o => `<button class="btn sm" onclick="OS.open(${o.id})">Abrir</button>` }
+      { h: '', class: 'num', cell: o => `
+        <button class="btn sm" onclick="OS.open(${o.id})">Abrir</button>
+        ${App.can('finance_sensitive') ? `<button class="btn sm ghost" onclick="OS.custos(${o.id})" title="Custo estimado × custo real">💲</button>` : ''}
+        <button class="btn sm ghost" onclick="OS.editar(${o.id})" title="Editar OS">✏️</button>
+        <button class="btn sm ghost" onclick="OS.duplicar(${o.id})" title="Duplicar OS">📋</button>
+        ${o.status === 'cancelada' ? '' : `<button class="btn sm ghost" onclick="OS.cancelar(${o.id})" title="Cancelar OS">🚫</button>`}
+        <button class="btn sm ghost" onclick="OS.excluir(${o.id})" title="Excluir OS">🗑</button>` }
     ]);
   };
   render();
   document.getElementById('osf').addEventListener('change', render);
 
   window.OS = {
+    /* Custos do serviço: estimativa (custo-base) × o que foi gasto de verdade.
+       O resultado usa o real quando existe; senão, a estimativa. */
+    async custos(id) {
+      const o = oss.find(x => x.id === id);
+      const d = await App.get(`/os/${id}/custos`);
+      const TIPOS = { mao_obra: 'Mão de obra', materiais: 'Materiais', componentes: 'Componentes',
+                      terceirizacao: 'Terceirização', outros: 'Outros' };
+      const linhas = (lista, campo) => (lista.length ? lista : [{ tipo: 'mao_obra', descricao: '', valor: '' }])
+        .map((c, i) => `
+          <div style="display:flex;gap:6px;margin-bottom:5px" data-linha="${campo}">
+            <select style="max-width:150px" data-k="tipo">${Object.entries(TIPOS).map(([v, l]) =>
+              `<option value="${v}" ${c.tipo === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
+            <input placeholder="descrição" value="${App.esc(c.descricao || '')}" data-k="descricao" style="flex:1">
+            <input type="number" step="0.01" placeholder="R$" value="${c.valor}" data-k="valor" style="max-width:110px">
+            <button class="btn sm ghost" onclick="this.parentElement.remove();OS._somar()">✕</button>
+          </div>`).join('');
+      const m = App.modal(`
+        <h2>Custos da OS nº ${o.numero}</h2>
+        <p class="small muted">${App.esc(o.modelo || '')} — valor do serviço: <b>R$ ${App.money(d.resultado.bruto)}</b></p>
+        <div class="grid cols-2" style="align-items:start;margin-top:10px">
+          <div>
+            <div class="section-title">CUSTO-BASE (estimado)</div>
+            <div id="cb-lista">${linhas(d.custoBase, 'base')}</div>
+            <button class="btn sm" onclick="OS._addLinha('cb-lista','base')">+ linha</button>
+          </div>
+          <div>
+            <div class="section-title">CUSTO REAL (o que foi gasto)</div>
+            <div id="cr-lista">${linhas(d.custoReal, 'real')}</div>
+            <button class="btn sm" onclick="OS._addLinha('cr-lista','real')">+ linha</button>
+          </div>
+        </div>
+        <div id="os-custo-resumo" class="card" style="margin-top:12px;background:var(--bg-1)"></div>
+        <div class="actions">
+          <button class="btn" onclick="App.closeModal()">Fechar</button>
+          <button class="btn primary" id="os-custo-salvar">Salvar custos</button>
+        </div>`, { wide: true });
+      OS._modal = m;
+      OS._bruto = d.resultado.bruto;
+      OS._somar();
+      m.addEventListener('input', () => OS._somar());
+      m.querySelector('#os-custo-salvar').onclick = async () => {
+        const r = await App.put(`/os/${id}/custos`, { custoBase: OS._ler('cb-lista'), custoReal: OS._ler('cr-lista') });
+        App.closeModal();
+        App.toast(`Custos salvos — resultado ${r.resultado.usouReal ? 'real' : 'previsto'}: R$ ${App.money(r.resultado.resultado)}`, 'ok');
+        App.route();
+      };
+    },
+    _addLinha(alvo, campo) {
+      const d = document.createElement('div');
+      d.style.cssText = 'display:flex;gap:6px;margin-bottom:5px';
+      d.dataset.linha = campo;
+      d.innerHTML = `
+        <select style="max-width:150px" data-k="tipo">
+          <option value="mao_obra">Mão de obra</option><option value="materiais">Materiais</option>
+          <option value="componentes">Componentes</option><option value="terceirizacao">Terceirização</option>
+          <option value="outros">Outros</option></select>
+        <input placeholder="descrição" data-k="descricao" style="flex:1">
+        <input type="number" step="0.01" placeholder="R$" data-k="valor" style="max-width:110px">
+        <button class="btn sm ghost" onclick="this.parentElement.remove();OS._somar()">✕</button>`;
+      document.getElementById(alvo).appendChild(d);
+    },
+    _ler(alvo) {
+      return [...document.getElementById(alvo).children].map(l => ({
+        tipo: l.querySelector('[data-k=tipo]').value,
+        descricao: l.querySelector('[data-k=descricao]').value,
+        valor: Number(l.querySelector('[data-k=valor]').value) || 0
+      })).filter(c => c.descricao || c.valor);
+    },
+    _somar() {
+      const m = OS._modal;
+      if (!m) return;
+      const soma = alvo => OS._ler(alvo).reduce((s, c) => s + c.valor, 0);
+      const est = soma('cb-lista'), real = soma('cr-lista');
+      const bruto = Number(OS._bruto) || 0;
+      const usado = real > 0 ? real : est;
+      const res = bruto - usado;
+      m.querySelector('#os-custo-resumo').innerHTML = `
+        <div style="display:flex;gap:22px;flex-wrap:wrap;font-size:13.5px">
+          <span>Estimado: <b>R$ ${App.money(est)}</b></span>
+          <span>Real: <b>R$ ${App.money(real)}</b></span>
+          ${real > 0 ? `<span>Desvio: <b class="${real > est ? 'neg' : 'pos'}">R$ ${App.money(real - est)}</b></span>` : ''}
+          <span class="spacer"></span>
+          <span>Resultado ${real > 0 ? '(real)' : '(previsto)'}:
+            <b class="${res >= 0 ? 'pos' : 'neg'}">R$ ${App.money(res)}</b></span>
+        </div>`;
+    },
+
+    editar(id) {
+      const o = oss.find(x => x.id === id);
+      App.form(`✏️ Editar OS nº ${o.numero}`, [
+        { name: 'clienteId', label: 'Cliente', type: 'select', value: o.clienteId, full: true,
+          options: App.clientOptions(clients) },
+        { name: 'modelo', label: 'Modelo do cabeçote', value: o.modelo || '' },
+        { name: 'identificacao', label: 'Identificação', value: o.identificacao || '' },
+        { name: 'problema', label: 'Problema relatado', type: 'textarea', value: o.problema || '', full: true },
+        { name: 'descricaoServico', label: 'Descrição do serviço', type: 'textarea', value: o.descricaoServico || '', full: true },
+        { name: 'valorTotal', label: 'Valor total (R$)', type: 'number', step: '0.01', value: o.valorTotal },
+        { name: 'previsaoEntrega', label: 'Previsão de entrega', type: 'date', value: o.previsaoEntrega || '' },
+        { name: 'observacoes', label: 'Observações', type: 'textarea', value: o.observacoes || '', full: true }
+      ], async d => {
+        await App.put('/os/' + id, {
+          clienteId: Number(d.clienteId), modelo: d.modelo, identificacao: d.identificacao,
+          problema: d.problema, descricaoServico: d.descricaoServico,
+          valorTotal: Number(d.valorTotal), previsaoEntrega: d.previsaoEntrega, observacoes: d.observacoes
+        });
+        App.closeModal(); App.toast('OS atualizada — a alteração ficou no histórico', 'ok'); App.route();
+      });
+    },
+    duplicar(id) {
+      const o = oss.find(x => x.id === id);
+      App.form(`📋 Duplicar OS nº ${o.numero}`, [
+        { name: 'clienteId', label: 'Cliente da nova OS', type: 'select', required: true, full: true,
+          value: o.clienteId, options: App.clientOptions(clients) }
+      ], async d => {
+        const nova = await App.post(`/os/${id}/duplicate`, { clienteId: Number(d.clienteId) });
+        App.closeModal();
+        App.toast(`OS nº ${nova.numero} criada a partir da nº ${o.numero} — o custo estimado veio junto`, 'ok');
+        App.route();
+      }, { submitLabel: 'Duplicar' });
+    },
+    cancelar(id) {
+      const o = oss.find(x => x.id === id);
+      App.form(`🚫 Cancelar OS nº ${o.numero}`, [
+        { name: 'motivo', label: 'Motivo do cancelamento', type: 'textarea', full: true }
+      ], async d => {
+        await App.post(`/os/${id}/cancel`, { motivo: d.motivo });
+        App.closeModal();
+        App.toast('OS cancelada — parcelas em aberto canceladas, histórico preservado', 'ok');
+        App.route();
+      }, { submitLabel: 'Cancelar OS' });
+    },
+    async excluir(id) {
+      const o = oss.find(x => x.id === id);
+      if (!await App.confirm(`Excluir a OS nº ${o.numero}? Se já houver pagamento registrado, o sistema recusa e o caminho é Cancelar.`)) return;
+      try {
+        await App.del('/os/' + id);
+        App.toast('OS excluída', 'ok');
+        App.route();
+      } catch (e) { App.toast(e.message, 'err'); }
+    },
     open(id) {
       const o = oss.find(x => x.id === id);
       const users = App.meta.users.filter(u => u.active);

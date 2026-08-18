@@ -154,7 +154,7 @@ App.registerView('products', async (view) => {
 
 /* ================= VENDAS ================= */
 App.registerView('sales', async (view, args) => {
-  if (args[0] === 'nova') return saleEditor(view);
+  if (args[0] === 'nova') return saleEditor(view, args[1] ? Number(args[1]) : null);
 
   App.setTitle('Vendas / Pedidos', 'Cabeçotes vendidos — pipeline até a entrega');
   const [sales, clients] = await Promise.all([App.get('/sales'), App.get('/clients')]);
@@ -179,24 +179,123 @@ App.registerView('sales', async (view, args) => {
     document.getElementById('s-table').innerHTML = App.table(list, [
       { h: 'Pedido', cell: s => `<b>nº ${s.numero}</b><div class="small muted">${App.date(s.dataPedido)}</div>` },
       { h: 'Cliente', cell: s => `${App.esc(App.clientName(s.clienteId, clients))}<div class="small muted">${App.esc(s.cidade || '')}/${App.esc(s.estado || '')}</div>` },
-      { h: 'Itens', cell: s => s.itens.map(i =>
-          `${i.qtd}× ${App.esc(i.produto)}<div class="small muted">comando ${i.comando} · tucho ${i.tucho} mm</div>`).join('') },
+      { h: 'Itens', cell: s => s.itens.map(i => i.kind === 'peca'
+          ? `${i.qtd}× ${App.esc(i.produto)}<div class="small muted">peça do estoque</div>`
+          : `${i.qtd}× ${App.esc(i.produto)}<div class="small muted">comando ${i.comando} · tucho ${i.tucho} mm</div>`).join('') },
       ...(verValores ? [
         { h: 'Total', class: 'num', cell: s => App.moneyHtml(s.valorTotal) },
         { h: 'Pagamento', cell: s => `${App.esc((s.pagamento && s.pagamento.forma) || '—')}${s.pagamento && s.pagamento.parcelas > 1 ? ` ${s.pagamento.parcelas}x` : ''}` }] : []),
+      ...(verValores ? [{ h: 'Recebido', class: 'num', cell: s => {
+        const rec = (s.recebimentos || []).reduce((a, r) => a + r.valor, 0);
+        const saldo = Math.round((s.valorTotal - rec) * 100) / 100;
+        if (!rec) return '<span class="muted small">—</span>';
+        return `<span class="pos">R$ ${App.money(rec)}</span>` +
+          (saldo > 0.005 ? `<div class="small neg">falta R$ ${App.money(saldo)}</div>` : '<div class="small pos">quitado</div>');
+      } }] : []),
       { h: 'Previsão', cell: s => App.date(s.previsaoEntrega) },
       { h: 'Status', cell: s => App.badge(s.status) },
       { h: '', class: 'num', cell: s => `
         <button class="btn sm ghost" onclick="Sales.status(${s.id})">Status</button>
+        ${verValores ? `<button class="btn sm ghost" onclick="Sales.receber(${s.id})" title="Registrar recebimento (entrada / saldo)">💵</button>` : ''}
         <button class="btn sm ghost wa" onclick="Sales.wa(${s.id})" title="Avisar o cliente no WhatsApp">✆</button>
         <button class="btn sm ghost" onclick="Sales.etiqueta(${s.id})" title="Gerar etiqueta de envio">📦</button>
-        ${fin ? `<button class="btn sm ghost" onclick="Sales.result(${s.id})">Resultado</button>` : ''}` }
+        ${fin ? `<button class="btn sm ghost" onclick="Sales.result(${s.id})">Resultado</button>` : ''}
+        <button class="btn sm ghost" onclick="location.hash='#/sales/nova/${s.id}'" title="Editar venda">✏️</button>
+        <button class="btn sm ghost" onclick="Sales.duplicar(${s.id})" title="Duplicar venda">📋</button>
+        <button class="btn sm ghost" onclick="Sales.excluir(${s.id})" title="Excluir venda">🗑</button>` }
     ]);
   };
   render();
   document.getElementById('sf').addEventListener('change', render);
 
   window.Sales = {
+    /* Recebimento em etapas: entrada agora, saldo na entrega.
+       O que falta continua em Contas a receber e na projeção. */
+    receber(id) {
+      const s = sales.find(x => x.id === id);
+      const lista = s.recebimentos || [];
+      const recebido = lista.reduce((a, r) => a + r.valor, 0);
+      const saldo = Math.round((s.valorTotal - recebido) * 100) / 100;
+      const m = App.modal(`
+        <h2>Recebimentos — pedido nº ${s.numero}</h2>
+        <table style="font-size:13.5px;margin-bottom:10px">
+          <tr><td>Valor total da venda</td><td class="num"><b>R$ ${App.money(s.valorTotal)}</b></td></tr>
+          <tr><td>Já recebido</td><td class="num pos">R$ ${App.money(recebido)}</td></tr>
+          <tr><td><b>Saldo em aberto</b></td><td class="num"><b class="${saldo > 0.005 ? 'neg' : 'pos'}">R$ ${App.money(saldo)}</b></td></tr>
+        </table>
+        ${lista.length ? App.table(lista.map((r, i) => Object.assign({ _i: i }, r)), [
+          { h: 'Data', cell: r => App.date(r.data) },
+          { h: 'Forma', cell: r => App.esc(r.forma) },
+          { h: 'Valor', class: 'num', cell: r => 'R$ ' + App.money(r.valor) },
+          { h: '', class: 'num', cell: r => `<button class="btn sm ghost" onclick="Sales.desfazerRecebimento(${id}, ${r._i})" title="Estornar">↩</button>` }
+        ]) : '<p class="small muted">Nenhum recebimento registrado ainda.</p>'}
+        ${saldo > 0.005 ? `
+        <hr class="sep">
+        <div class="formgrid">
+          <label class="field"><span>Valor recebido agora (R$)</span>
+            <input type="number" step="0.01" id="rc-valor" value="${saldo.toFixed(2)}"></label>
+          <label class="field"><span>Data</span><input type="date" id="rc-data" value="${App.today()}"></label>
+          <label class="field"><span>Forma</span>
+            <select id="rc-forma">${['pix', 'dinheiro', 'cartao', 'boleto', 'cheque', 'link'].map(f => `<option value="${f}">${f}</option>`).join('')}</select></label>
+          <label class="field"><span>Vencimento do saldo restante</span>
+            <input type="date" id="rc-venc" value="${s.previsaoEntrega || ''}"></label>
+        </div>` : '<p class="small pos" style="margin-top:8px">✓ Venda totalmente recebida.</p>'}
+        <div class="actions">
+          <button class="btn" onclick="App.closeModal()">Fechar</button>
+          ${saldo > 0.005 ? '<button class="btn primary" id="rc-ok">Registrar recebimento</button>' : ''}
+        </div>`, { wide: true });
+      const btn = m.querySelector('#rc-ok');
+      if (btn) btn.onclick = async () => {
+        try {
+          const r = await App.post(`/sales/${id}/receive`, {
+            valor: Number(m.querySelector('#rc-valor').value),
+            data: m.querySelector('#rc-data').value,
+            forma: m.querySelector('#rc-forma').value,
+            vencimentoSaldo: m.querySelector('#rc-venc').value
+          });
+          App.closeModal();
+          App.toast(r.saldo > 0.005
+            ? `Recebido — falta R$ ${App.money(r.saldo)}, que segue em Contas a receber`
+            : 'Venda quitada', 'ok');
+          App.route();
+        } catch (e) { App.toast(e.message, 'err'); }
+      };
+    },
+    async desfazerRecebimento(id, index) {
+      if (!await App.confirm('Estornar este recebimento? A entrada correspondente sai do caixa e o saldo volta para Contas a receber.')) return;
+      try {
+        await App.post(`/sales/${id}/unreceive`, { index });
+        App.closeModal();
+        App.toast('Recebimento estornado', 'ok');
+        App.route();
+      } catch (e) { App.toast(e.message, 'err'); }
+    },
+    duplicar(id) {
+      const s = sales.find(x => x.id === id);
+      App.form(`📋 Duplicar pedido nº ${s.numero}`, [
+        { name: 'clienteId', label: 'Cliente do novo pedido', type: 'select', required: true, full: true,
+          value: s.clienteId, options: App.clientOptions(clients) },
+        { name: 'dataPedido', label: 'Data do novo pedido', type: 'date', value: App.today(), required: true }
+      ], async d => {
+        const novo = await App.post(`/sales/${id}/duplicate`, { clienteId: Number(d.clienteId), dataPedido: d.dataPedido });
+        App.closeModal();
+        App.toast(`Pedido nº ${novo.numero} criado a partir do nº ${s.numero} — revise antes de produzir`, 'ok');
+        location.hash = '#/sales/nova/' + novo.id;
+      }, { submitLabel: 'Duplicar' });
+    },
+    async excluir(id) {
+      const s = sales.find(x => x.id === id);
+      if (!await App.confirm(
+        `Excluir o pedido nº ${s.numero} (R$ ${App.money(s.valorTotal)})?<br><br>` +
+        'As ordens de produção que ainda não consumiram estoque, as parcelas em aberto e os lançamentos ' +
+        'de caixa desta venda são desfeitos, e as peças voltam ao estoque. Isto não pode ser desfeito.',
+        { html: true })) return;
+      try {
+        await App.del('/sales/' + id);
+        App.toast('Pedido excluído — estoque e financeiro estornados', 'ok');
+        App.route();
+      } catch (e) { App.toast(e.message, 'err'); }
+    },
     etiqueta(id) {
       const s = sales.find(x => x.id === id);
       const c = clients.find(x => x.id === s.clienteId) || {};
@@ -251,23 +350,33 @@ App.registerView('sales', async (view, args) => {
 });
 
 /* ---- Editor de nova venda ---- */
-async function saleEditor(view) {
-  const [clients, products] = await Promise.all([App.get('/clients'), App.get('/products')]);
-  App.setTitle('Nova venda', 'O sistema valida comando e tucho conforme o Stage e cria as ordens de produção automaticamente');
+async function saleEditor(view, editId) {
+  const [clients, products, estoque] = await Promise.all([
+    App.get('/clients'), App.get('/products'), App.get('/stockItems')]);
+  estoque.sort((a, b) => (a.nome || '').localeCompare(b.nome || '', 'pt-BR'));
+  const venda = editId ? await App.get('/sales/' + editId) : null;
+  App.setTitle(venda ? `Editar pedido nº ${venda.numero}` : 'Nova venda',
+    venda ? 'Alterar itens ou pagamento refaz produção, estoque e financeiro — sem duplicar'
+          : 'O sistema valida comando e tucho conforme o Stage e cria as ordens de produção automaticamente');
 
-  let itens = []; // {productId, qtd, comando, tucho, valorUnit}
-  let adicionais = []; // {desc, valor}
+  // itens: cabeçote {productId, comando, tucho, qtd, valorUnit}
+  //        peça     {kind:'peca', stockItemId, nome, qtd, valorUnit}
+  let itens = venda ? venda.itens.map(i => i.kind === 'peca'
+    ? { kind: 'peca', stockItemId: i.stockItemId, nome: i.produto, qtd: i.qtd, valorUnit: i.valorUnit }
+    : { productId: i.productId, comando: i.comando, tucho: i.tucho, qtd: i.qtd, valorUnit: i.valorUnit }) : [];
+  let adicionais = venda ? (venda.custosAdicionais || []).slice() : [];
 
   const total = () => itens.reduce((s, i) => s + i.qtd * i.valorUnit, 0);
 
   const renderItems = () => {
     document.getElementById('v-items').innerHTML = App.table(itens.map((i, idx) => {
+      if (i.kind === 'peca') return { _idx: idx, nome: i.nome, ...i };
       const p = products.find(x => x.id === i.productId);
       return { _idx: idx, nome: p.nome, stage: p.stage, ...i };
     }), [
-      { h: 'Produto', cell: i => `${App.esc(i.nome)}` },
-      { h: 'Comando', cell: i => i.comando },
-      { h: 'Tucho', cell: i => i.tucho + ' mm' },
+      { h: 'Item', cell: i => `${App.esc(i.nome)}${i.kind === 'peca' ? '<div class="small muted">peça do estoque</div>' : ''}` },
+      { h: 'Comando', cell: i => i.kind === 'peca' ? '—' : i.comando },
+      { h: 'Tucho', cell: i => i.kind === 'peca' ? '—' : i.tucho + ' mm' },
       { h: 'Qtd', class: 'num', cell: i => i.qtd },
       { h: 'Valor unit.', class: 'num', cell: i => 'R$ ' + App.money(i.valorUnit) },
       { h: 'Total', class: 'num', cell: i => '<b>R$ ' + App.money(i.qtd * i.valorUnit) + '</b>' },
@@ -312,6 +421,19 @@ async function saleEditor(view) {
         <div id="v-hint" class="small muted" style="margin-bottom:10px"></div>
         <button class="btn primary" onclick="VE.add()">+ Adicionar ao pedido</button>
         <button class="btn ghost" onclick="VE.addExtra()">+ Custo adicional (frete grátis, brinde…)</button>
+
+        <h3 style="margin-top:16px">ADICIONAR PEÇA DO ESTOQUE</h3>
+        <p class="small muted" style="margin-bottom:8px">Peças saem do estoque no momento da venda
+        (cabeçotes consomem componentes quando a produção fica pronta).</p>
+        <div class="formgrid">
+          <label class="field full"><span>Peça</span>
+            <select id="v-peca">${estoque.map(it =>
+              `<option value="${it.id}" data-qtd="${it.qtd}">${App.esc(it.nome)} — ${it.qtd} em estoque</option>`).join('')}</select></label>
+          <label class="field"><span>Quantidade</span><input type="number" id="v-peca-qtd" value="1" min="1"></label>
+          <label class="field"><span>Valor unitário (R$)</span><input type="number" step="0.01" id="v-peca-valor"></label>
+        </div>
+        <div id="v-peca-hint" class="small muted" style="margin-bottom:10px"></div>
+        <button class="btn" onclick="VE.addPeca()">+ Adicionar peça</button>
       </div>
       <div class="card">
         <h3>ITENS E PAGAMENTO</h3>
@@ -336,7 +458,7 @@ async function saleEditor(view) {
         <p style="margin:8px 0">Valor líquido estimado: <b id="v-liquido">R$ 0,00</b></p>
         <label class="field"><span>Observações de pagamento</span><input id="v-pgobs"></label>
         <div class="actions" style="border:none">
-          <button class="btn primary" onclick="VE.save()">Registrar venda</button>
+          <button class="btn primary" id="v-save" onclick="VE.save()">Registrar venda</button>
         </div>
       </div>
     </div>`;
@@ -360,11 +482,43 @@ async function saleEditor(view) {
     if (comando === '300x308') hints.push('Exceção permitida: comando 300x308 aceita tucho 35 ou 37 mm.');
     document.getElementById('v-hint').textContent = hints.join(' ');
   };
+  const hintPeca = () => {
+    const sel = document.getElementById('v-peca');
+    const op = sel.selectedOptions[0];
+    if (!op) return;
+    const disp = Number(op.dataset.qtd) || 0;
+    const q = Number(document.getElementById('v-peca-qtd').value) || 0;
+    const el = document.getElementById('v-peca-hint');
+    el.textContent = q > disp
+      ? `Atenção: só há ${disp} em estoque — o saldo vai ficar negativo.`
+      : `Disponível: ${disp}.`;
+    el.style.color = q > disp ? 'var(--warn,#d29922)' : '';
+  };
   document.getElementById('v-produto').addEventListener('change', refreshCombos);
   document.getElementById('v-comando').addEventListener('change', refreshTuchos);
   document.getElementById('v-forma').addEventListener('change', updatePayment);
   document.getElementById('v-taxa').addEventListener('input', updatePayment);
+  document.getElementById('v-peca').addEventListener('change', hintPeca);
+  document.getElementById('v-peca-qtd').addEventListener('input', hintPeca);
   refreshCombos();
+  hintPeca();
+
+  // Edição: traz os dados da venda para os campos.
+  if (venda) {
+    document.getElementById('v-cliente').value = venda.clienteId;
+    document.getElementById('v-data').value = venda.dataPedido || App.today();
+    document.getElementById('v-previsao').value = venda.previsaoEntrega || '';
+    document.getElementById('v-obs').value = venda.observacoes || '';
+    const pg = venda.pagamento || {};
+    document.getElementById('v-forma').value = pg.forma || 'pix';
+    document.getElementById('v-cond').value = pg.condicao || 'avista';
+    document.getElementById('v-parcelas').value = pg.parcelas || 1;
+    document.getElementById('v-intervalo').value = pg.intervaloDias || 30;
+    document.getElementById('v-taxa').value = pg.taxa || 0;
+    document.getElementById('v-recebimento').value = pg.dataPrevRecebimento || '';
+    document.getElementById('v-pgobs').value = pg.obs || '';
+    document.querySelector('#v-save').textContent = 'Salvar alterações';
+  }
   renderItems();
 
   window.VE = {
@@ -388,11 +542,24 @@ async function saleEditor(view) {
         App.closeModal(); renderItems();
       });
     },
+    addPeca() {
+      const sel = document.getElementById('v-peca');
+      const op = sel.selectedOptions[0];
+      if (!op) return App.toast('Nenhuma peça cadastrada no estoque', 'err');
+      itens.push({
+        kind: 'peca',
+        stockItemId: Number(sel.value),
+        nome: op.textContent.split(' — ')[0],
+        qtd: Math.max(1, Number(document.getElementById('v-peca-qtd').value) || 1),
+        valorUnit: Number(document.getElementById('v-peca-valor').value) || 0
+      });
+      renderItems();
+    },
     rm(i) { itens.splice(i, 1); renderItems(); },
     async save() {
       const clienteId = Number(document.getElementById('v-cliente').value);
       if (!clienteId) return App.toast('Selecione o cliente', 'err');
-      if (!itens.length) return App.toast('Adicione ao menos um cabeçote', 'err');
+      if (!itens.length) return App.toast('Adicione ao menos um cabeçote ou peça', 'err');
       const forma = document.getElementById('v-forma').value;
       const body = {
         clienteId,
@@ -412,9 +579,15 @@ async function saleEditor(view) {
         }
       };
       try {
-        const sale = await App.post('/sales', body);
-        App.toast(`Pedido nº ${sale.numero} registrado — ordens de produção e financeiro gerados automaticamente`, 'ok');
-        location.hash = '#/production';
+        if (editId) {
+          const sale = await App.put('/sales/' + editId, body);
+          App.toast(`Pedido nº ${sale.numero} atualizado — produção, estoque e financeiro acompanharam`, 'ok');
+          location.hash = '#/sales';
+        } else {
+          const sale = await App.post('/sales', body);
+          App.toast(`Pedido nº ${sale.numero} registrado — ordens de produção e financeiro gerados automaticamente`, 'ok');
+          location.hash = itens.some(i => i.kind !== 'peca') ? '#/production' : '#/sales';
+        }
       } catch (e) { App.toast(e.message, 'err'); }
     }
   };
