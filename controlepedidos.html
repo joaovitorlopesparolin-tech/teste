@@ -110,6 +110,9 @@
   .un{font-family:var(--mono);font-size:12px;text-align:center;color:var(--ink-2)}
   th.un{text-align:center}
   .desc{min-width:220px}
+  .lnk{display:inline-flex;vertical-align:middle;margin-left:7px;padding:2px;border-radius:2px;color:var(--ink-2)}
+  .lnk:hover{color:var(--accent);background:var(--accent-soft)}
+  .lnk svg{width:13px;height:13px;stroke:currentColor;fill:none;stroke-width:2;display:block}
   .data{font-family:var(--mono);font-size:13px;white-space:nowrap;text-align:center}
   th.data{text-align:center}
   .data.vazia{color:var(--ink-2)}
@@ -570,6 +573,10 @@
         <label for="fDesc">Descrição do material</label>
         <input id="fDesc" placeholder="ex: Cimento CP II-E-32 (saco 50 kg)" autocomplete="off">
       </div>
+      <div class="campo">
+        <label for="fLink">Link (opcional)</label>
+        <input id="fLink" type="url" placeholder="https://… página do produto, orçamento ou catálogo" autocomplete="off">
+      </div>
       <div class="grid-3">
         <div class="campo">
           <label for="fUn">Unidade</label>
@@ -672,8 +679,8 @@ async function api(caminho, opts = {}){
 }
 
 // colunas do banco <-> objeto usado na interface
-const toRow = d => ({ id:d.id, codigo:d.codigo, categoria:d.cat, descricao:d.desc, unidade:d.un, qtd:d.qtd, criado_em:d.criadoEm, data_pedido:d.dataPedido, data_entrega:d.dataEntrega, situacao:d.situacao, atualizado_em:new Date().toISOString() });
-const fromRow = r => ({ id:r.id, codigo:r.codigo, cat:r.categoria, desc:r.descricao, un:r.unidade, qtd:Number(r.qtd), criadoEm:r.criado_em, dataPedido:r.data_pedido, dataEntrega:r.data_entrega, situacao:r.situacao, atualizadoEm:r.atualizado_em });
+const toRow = d => ({ id:d.id, codigo:d.codigo, categoria:d.cat, descricao:d.desc, unidade:d.un, qtd:d.qtd, criado_em:d.criadoEm, data_pedido:d.dataPedido, data_entrega:d.dataEntrega, situacao:d.situacao, link:d.link || null, atualizado_em:new Date().toISOString() });
+const fromRow = r => ({ id:r.id, codigo:r.codigo, cat:r.categoria, desc:r.descricao, un:r.unidade, qtd:Number(r.qtd), criadoEm:r.criado_em, dataPedido:r.data_pedido, dataEntrega:r.data_entrega, situacao:r.situacao, link:r.link || "", atualizadoEm:r.atualizado_em });
 
 const upsertItens = itens => api("itens", { method:"POST", headers:{ Prefer:"resolution=merge-duplicates" }, body: JSON.stringify(itens.map(toRow)) });
 const apagarItemServidor = id => api("itens?id=eq." + encodeURIComponent(id), { method:"DELETE" });
@@ -770,6 +777,7 @@ async function gravarItens(itens){
 }
 function tratarErroGravar(err){
   if(err && err.conflito) toast(`${err.conflito.codigo} foi alterado por outra pessoa — a tabela foi recarregada. Confira e tente de novo.`, "erro");
+  else if(/column|PGRST204/i.test(String(err && err.message))) toast("O banco ainda não tem as colunas novas. Rode o script do arquivo atualizacao-banco.sql no SQL Editor do Supabase.", "erro");
   else toast("Falha ao salvar no servidor. Verifique a internet e tente de novo.", "erro");
 }
 
@@ -860,7 +868,7 @@ function filtrarBase(){
   const t = filtroTexto.trim().toLowerCase();
   return store.itens.filter(d =>
     (filtroCat === "Todos" || d.cat === filtroCat) &&
-    (!t || [d.codigo,d.cat,d.desc,d.un,d.situacao,fmtData(d.dataPedido),fmtData(d.criadoEm),fmtData(d.dataEntrega)].join(" ").toLowerCase().includes(t))
+    (!t || [d.codigo,d.cat,d.desc,d.un,d.situacao,d.link || "",fmtData(d.dataPedido),fmtData(d.criadoEm),fmtData(d.dataEntrega)].join(" ").toLowerCase().includes(t))
   );
 }
 function linhasVisiveis(){
@@ -887,7 +895,7 @@ function render(){
       <td class="chk"><input type="checkbox" data-sel="${d.id}" ${selecao.has(d.id)?"checked":""} aria-label="Selecionar ${escHtml(d.desc)}"></td>
       <td class="id">${escHtml(d.codigo)}</td>
       <td class="cat">${escHtml(d.cat)}</td>
-      <td class="desc">${escHtml(d.desc)}</td>
+      <td class="desc">${escHtml(d.desc)}${d.link ? `<a class="lnk" href="${escHtml(d.link)}" target="_blank" rel="noopener noreferrer" title="Abrir link do produto" aria-label="Abrir link de ${escHtml(d.desc)}"><svg viewBox="0 0 24 24"><path d="M18 13v6H5V6h6M14 4h6v6M20 4L10 14"/></svg></a>` : ""}</td>
       <td class="un">${escHtml(d.un)}</td>
       <td class="num" data-un="${escHtml(d.un)}">${fmtNum(d.qtd)}</td>
       <td class="data${d.criadoEm?"":" vazia"}">${fmtData(d.criadoEm)}</td>
@@ -1025,6 +1033,7 @@ function abrirForm(id){
   $("#fCodigo").value = d ? d.codigo : "";
   $("#fCodigo").placeholder = "gerado automaticamente";
   $("#fDesc").value = d ? d.desc : "";
+  $("#fLink").value = d && d.link ? d.link : "";
   $("#fUn").value = d ? d.un : "";
   $("#fQtd").value = d ? d.qtd : "";
   $("#fSituacao").value = d ? d.situacao : "A Pedir";
@@ -1054,6 +1063,7 @@ $("#formInsumo").addEventListener("submit", async e => {
   const cat = $("#fCat").value.trim();
   const desc = $("#fDesc").value.trim();
   const un = $("#fUn").value.trim();
+  let link = $("#fLink").value.trim();
   const qtd = parseFloat($("#fQtd").value);
   const situacao = $("#fSituacao").value;
   const dataPedido = situacao === "A Pedir" ? null : ($("#fData").value || hoje());
@@ -1065,6 +1075,8 @@ $("#formInsumo").addEventListener("submit", async e => {
   if(!desc) erros.push("Informe a descrição do material.");
   if(!un) erros.push("Informe a unidade.");
   if(!(qtd > 0)) erros.push("Quantidade deve ser maior que zero.");
+  if(link && !/^https?:\/\//i.test(link)) link = "https://" + link;
+  if(link){ try { new URL(link); } catch(e){ erros.push("O link informado não é um endereço válido."); } }
   if(!codigo) codigo = proximoCodigo(cat);
   if(store.itens.some(d => d.codigo === codigo && d.id !== editandoId))
     erros.push(`Já existe um insumo com o código ${codigo}.`);
@@ -1073,7 +1085,7 @@ $("#formInsumo").addEventListener("submit", async e => {
 
   // lançamento: preserva a data original ao editar; grava hoje ao cadastrar
   const criadoEm = editandoId ? (store.itens.find(x => x.id === editandoId).criadoEm || null) : hoje();
-  const objeto = { id: editandoId || novoId(), codigo, cat, desc, un, qtd, criadoEm, dataPedido, dataEntrega, situacao };
+  const objeto = { id: editandoId || novoId(), codigo, cat, desc, un, qtd, criadoEm, dataPedido, dataEntrega, situacao, link: link || null };
   const btn = $("#btnSalvar");
   btn.disabled = true; btn.textContent = "Salvando…";
   try {
@@ -1089,7 +1101,7 @@ $("#formInsumo").addEventListener("submit", async e => {
     mostrarErro(err.conflito
       ? `${err.conflito.codigo} foi alterado por outra pessoa enquanto você editava. A tabela foi recarregada — feche e confira antes de salvar.`
       : /column|PGRST204/i.test(err.message)
-      ? "O banco ainda não tem as colunas de datas novas. Cole o script de atualização no SQL Editor do Supabase e tente de novo."
+      ? "O banco ainda não tem as colunas novas. Rode o script do arquivo atualizacao-banco.sql no SQL Editor do Supabase e tente de novo."
       : "Falha ao salvar no servidor. Verifique a internet e tente de novo.");
   } finally {
     btn.disabled = false;
@@ -1233,8 +1245,8 @@ $("#btnCSV").addEventListener("click", () => {
   if(!rows.length) return;
   const esc = v => `"${String(v).replace(/"/g,'""')}"`;
   const linhas = [
-    ["Código","Categoria","Descrição","Un","Qtd","Lançado em","Data do Pedido","Data de Entrega","Situação"].join(";"),
-    ...rows.map(d => [esc(d.codigo),esc(d.cat),esc(d.desc),esc(d.un),String(d.qtd).replace(".",","),d.criadoEm?fmtData(d.criadoEm):"",d.dataPedido?fmtData(d.dataPedido):"",d.dataEntrega?fmtData(d.dataEntrega):"",esc(d.situacao)].join(";"))
+    ["Código","Categoria","Descrição","Un","Qtd","Lançado em","Data do Pedido","Data de Entrega","Situação","Link"].join(";"),
+    ...rows.map(d => [esc(d.codigo),esc(d.cat),esc(d.desc),esc(d.un),String(d.qtd).replace(".",","),d.criadoEm?fmtData(d.criadoEm):"",d.dataPedido?fmtData(d.dataPedido):"",d.dataEntrega?fmtData(d.dataEntrega):"",esc(d.situacao),esc(d.link||"")].join(";"))
   ];
   const blob = new Blob(["﻿" + linhas.join("\r\n")], { type:"text/csv;charset=utf-8" });
   const a = document.createElement("a");

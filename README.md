@@ -9,7 +9,9 @@ materiais e diário de obra (RDO), sincronizado entre computadores via Supabase.
   coluna, troca de situação direto na linha (badge clicável), ação em lote
   para os itens selecionados, filtro por situação nos contadores do rodapé,
   destaque de pedidos enviados há mais de 7 dias sem entrega, desfazer de
-  alterações, folha de pedido imprimível e exportação CSV.
+  alterações, link opcional por insumo (página do produto ou orçamento,
+  com ícone clicável na descrição), folha de pedido imprimível e
+  exportação CSV.
 - **Diário de obra**: registro diário (clima, efetivo, equipamentos,
   atividades, ocorrências, fotos), galeria com calendário e RDO imprimível.
 - **Sincronização**: estado compartilhado no Supabase com cópia local para
@@ -20,6 +22,10 @@ materiais e diário de obra (RDO), sincronizado entre computadores via Supabase.
 
 Abra `controlepedidos.html` no navegador. Não há build nem dependências de
 produção — o arquivo é autossuficiente.
+
+**Atualização do banco:** ao atualizar para a versão com campo de link nos
+insumos, rode uma vez o script `atualizacao-banco.sql` no SQL Editor do
+Supabase (o painel avisa com essa instrução se a coluna estiver faltando).
 
 ## Testes
 

@@ -28,6 +28,7 @@ const rows = Array.from({ length: 70 }, (_, i) => ({
   data_pedido: i % 3 === 0 ? null : dataRel(i % 2 ? 10 : 2),
   data_entrega: i % 3 === 2 ? dataRel(1) : null,
   situacao: SITS[i % 3],
+  link: i % 5 === 0 ? "https://fornecedor.exemplo.com/produto/" + (i + 1) : null,
   atualizado_em: T0,
 }));
 const conf = [{ chave: "obra", valor: "Obra Teste — Sede" }, { chave: "proxFolha", valor: "4" }];
@@ -106,11 +107,25 @@ function ok(cond, msg){
   console.log("— alerta de atraso —");
   ok(await page.locator("td.data.atraso").count() > 0, "pedidos enviados há mais de 7 dias aparecem destacados");
 
+  console.log("— link do insumo —");
+  ok(await page.locator("#corpo a.lnk").count() > 0, "itens com link mostram o ícone ao lado da descrição");
+  ok((await page.getAttribute('tr[data-id="i0"] a.lnk', "href")) === "https://fornecedor.exemplo.com/produto/1", "ícone aponta para o link cadastrado");
+  await page.click('[data-editar="i0"]');
+  await page.waitForSelector("#dlgForm[open]");
+  ok((await page.inputValue("#fLink")) === "https://fornecedor.exemplo.com/produto/1", "formulário carrega o link existente");
+  await page.fill("#fLink", "fornecedor.com/novo-produto");
+  await page.click("#btnSalvar");
+  await ate(page, async () => {
+    const p = estado.posts.flat().filter(r => r.id === "i0").pop();
+    return p && p.link === "https://fornecedor.com/novo-produto";
+  }, "salvou o link normalizado com https://");
+  await page.waitForFunction(() => !document.querySelector("#dlgForm").open);
+
   console.log("— troca de situação + desfazer —");
   const id1 = await page.evaluate(() => document.querySelector("select.sel-sit.pedir").dataset.sit);
   await page.selectOption(`select[data-sit="${id1}"]`, "Entregue");
   await ate(page, async () => {
-    const p = estado.posts.flat().find(r => r.id === id1);
+    const p = estado.posts.flat().filter(r => r.id === id1 && r.situacao !== undefined).pop();
     return p && p.situacao === "Entregue" && p.data_entrega;
   }, "gravou Entregue com data de entrega de hoje");
   await page.waitForSelector(".toast button");
