@@ -160,6 +160,7 @@ const REST = {
   productionOrders: { perm: 'production', label: 'Ordem de produção' },
   sales: { perm: 'sales', label: 'Venda' },
   purchases: { perm: 'purchases', label: 'Compra' },
+  freights: { perm: 'payables', label: 'Frete' },
   supplierInvoices: { perm: 'suppliers', label: 'Fatura de fornecedor' },
   payables: { perm: 'payables', label: 'Conta a pagar' },
   receivables: { perm: 'receivables', label: 'Conta a receber' },
@@ -1574,6 +1575,40 @@ route('PUT', '/api/quotes/:id', 'quotes', async (req, res, user, params) => {
 });
 
 /** Aprovação do orçamento → gera OS aproveitando todos os dados, sem recadastro. */
+/* Replica um orçamento como modelo: novo registro independente, com os
+   serviços, itens, valores e observações do original — e número novo, data
+   de hoje, status aberto, sem aprovação nem vínculo com a entrada original.
+   O orçamento de origem não é tocado. */
+route('POST', '/api/quotes/:id/replicate', 'quotes', async (req, res, user, params) => {
+  const b = await readBody(req);
+  const origem = db.get('quotes', params.id);
+  if (!origem) return notFound(res);
+  const cliente = db.get('clients', b.clienteId || origem.clienteId);
+  if (!cliente) return bad(res, 'Escolha o cliente do novo orçamento.');
+  const numero = db.nextNumber('orcamento', 1);
+  const rec = db.insert('quotes', {
+    numero,
+    clienteId: cliente.id, cpfCnpj: cliente.cpfCnpj || '',
+    entryId: null,                              // a entrada de cabeçote era do original
+    dataChegada: '',
+    dataOrcamento: domain.today(),
+    validadeDias: origem.validadeDias || db.settings.quoteValidityDays,
+    previsaoEntrega: '',
+    modelo: origem.modelo || '',
+    problema: origem.problema || '',
+    descricaoServico: origem.descricaoServico || '',
+    itens: JSON.parse(JSON.stringify(origem.itens || [])),
+    custosAdicionais: origem.custosAdicionais || 0,
+    observacoes: origem.observacoes || '',
+    total: origem.total,
+    status: 'aberto',
+    replicadoDe: origem.numero
+  });
+  audit(user, 'criou', 'quotes', rec.id,
+    `Orçamento nº ${numero} replicado do nº ${origem.numero} — ${cliente.nome} — R$ ${Number(origem.total || 0).toFixed(2)}`);
+  ok(res, rec);
+});
+
 route('POST', '/api/quotes/:id/approve', 'quotes', async (req, res, user, params) => {
   const q = db.get('quotes', params.id);
   if (!q) return notFound(res);
@@ -2062,6 +2097,78 @@ route('PUT', '/api/purchases/:id', 'purchases', async (req, res, user, params) =
   ok(res, rec);
 });
 
+/* ================= Fretes pagos pela empresa =================
+   Custo de logística das vendas em que a empresa banca o envio.
+   Vinculado à venda, entra no lucro real dela (venda − taxa − custo −
+   frete) e na DRE como "Frete de venda / Logística". */
+route('POST', '/api/freights', 'payables', async (req, res, user) => {
+  const b = await readBody(req);
+  const sale = b.saleId ? db.get('sales', b.saleId) : null;
+  const cliente = b.clienteId ? db.get('clients', b.clienteId) : (sale ? db.get('clients', sale.clienteId) : null);
+  const valor = Number(b.valor) || 0;
+  if (valor <= 0) return bad(res, 'Informe o valor do frete.');
+  const rec = db.insert('freights', {
+    clienteId: cliente ? cliente.id : null,
+    saleId: sale ? sale.id : null,
+    produto: b.produto || (sale ? (sale.itens || []).map(i => i.produto).join(', ') : ''),
+    dataEnvio: b.dataEnvio || domain.today(),
+    transportadora: b.transportadora || '',
+    conhecimento: b.conhecimento || '',
+    origem: b.origem || (db.settings.empresa && db.settings.empresa.cidade) || '',
+    destino: b.destino || (cliente ? [cliente.cidade, cliente.estado].filter(Boolean).join('/') : ''),
+    valor,
+    formaPagamento: b.formaPagamento || 'pix',
+    dataPagamento: b.dataPagamento || '',
+    observacoes: b.observacoes || '',
+    status: 'aberto'
+  });
+  if (b.pagoAgora) {
+    const data = b.dataPagamento || domain.today();
+    db.update('freights', rec.id, { status: 'pago', dataPagamento: data });
+    db.insert('cashflow', {
+      tipo: 'saida', valor, data, conta: b.conta || 'principal',
+      categoria: 'frete_venda',
+      origem: `Frete — ${rec.transportadora || 'envio'}${sale ? ` (Pedido nº ${sale.numero})` : ''}`,
+      documento: rec.conhecimento, refType: 'freights', refId: rec.id,
+      descricao: 'Frete pago pela empresa'
+    });
+  }
+  audit(user, 'criou', 'freights', rec.id,
+    `Frete ${rec.transportadora || ''} R$ ${valor.toFixed(2)}${sale ? ` — Pedido nº ${sale.numero}` : ''}${b.pagoAgora ? ' (pago)' : ''}`);
+  ok(res, db.get('freights', rec.id));
+});
+
+route('POST', '/api/freights/:id/pay', 'payables', async (req, res, user, params) => {
+  const b = await readBody(req);
+  const f = db.get('freights', params.id);
+  if (!f) return notFound(res);
+  if (f.status === 'pago') return bad(res, 'Este frete já está pago.');
+  const data = b.data || domain.today();
+  const sale = f.saleId ? db.get('sales', f.saleId) : null;
+  db.update('freights', f.id, { status: 'pago', dataPagamento: data });
+  db.insert('cashflow', {
+    tipo: 'saida', valor: f.valor, data, conta: b.conta || 'principal',
+    categoria: 'frete_venda',
+    origem: `Frete — ${f.transportadora || 'envio'}${sale ? ` (Pedido nº ${sale.numero})` : ''}`,
+    documento: f.conhecimento, refType: 'freights', refId: f.id,
+    descricao: 'Frete pago pela empresa'
+  });
+  audit(user, 'pagou', 'freights', f.id, `Frete R$ ${Number(f.valor).toFixed(2)} em ${data}`);
+  ok(res, { ok: true });
+});
+
+/* Desfaz o pagamento: estorna a saída de caixa e volta para aberto. */
+route('POST', '/api/freights/:id/unpay', 'payables', async (req, res, user, params) => {
+  const f = db.get('freights', params.id);
+  if (!f) return notFound(res);
+  if (f.status !== 'pago') return bad(res, 'Este frete não está pago.');
+  const lanc = db.all('cashflow').filter(c => c.refType === 'freights' && c.refId === f.id);
+  for (const c of lanc) db.remove('cashflow', c.id);
+  db.update('freights', f.id, { status: 'aberto', dataPagamento: '' });
+  audit(user, 'estornou', 'freights', f.id, `Pagamento de frete desfeito — ${lanc.length} lançamento(s) de caixa estornado(s)`);
+  ok(res, { ok: true, estornados: lanc.length });
+});
+
 route('POST', '/api/purchases/parse-nfe', 'purchases', async (req, res, user) => {
   const b = await readBody(req);
   if (!b.xml) return bad(res, 'Envie o conteúdo XML da NF-e');
@@ -2202,6 +2309,113 @@ route('POST', '/api/receivables/generate', 'receivables', async (req, res, user)
   }
   audit(user, 'gerou', 'receivables', null, `${parcels.length} parcela(s) de ${cliente.nome} — total R$ ${Number(b.valor).toFixed(2)}`);
   ok(res, out);
+});
+
+/* Edita uma parcela. Se ela já foi recebida, o dinheiro já entrou no caixa:
+   a alteração exige confirmação explícita (confirmar: true) e o lançamento
+   de caixa ligado acompanha o novo valor. Tudo fica no histórico. */
+route('PUT', '/api/receivables/:id', 'receivables', async (req, res, user, params) => {
+  const antes = db.get('receivables', params.id);
+  if (!antes) return notFound(res);
+  const b = await readBody(req);
+
+  const patch = {};
+  for (const k of ['descricao', 'forma', 'vencimento', 'observacoes']) {
+    if (b[k] !== undefined) patch[k] = b[k];
+  }
+  if (b.valor !== undefined) patch.valor = Number(b.valor) || 0;
+  if (b.clienteId !== undefined) {
+    const c = db.get('clients', b.clienteId);
+    if (!c) return bad(res, 'Cliente não encontrado.');
+    patch.clienteId = c.id;
+  }
+
+  const NOMES = { clienteId: 'Cliente', descricao: 'Descrição', forma: 'Forma', valor: 'Valor',
+                  vencimento: 'Vencimento', observacoes: 'Observações' };
+  const mudancas = Object.keys(patch)
+    .filter(k => JSON.stringify(antes[k] ?? '') !== JSON.stringify(patch[k] ?? ''))
+    .map(k => `${NOMES[k]}: ${antes[k] ?? '—'} → ${patch[k] === '' ? '—' : patch[k]}`);
+  if (!mudancas.length) return ok(res, antes);
+
+  const mexeuDinheiro = patch.valor !== undefined && patch.valor !== antes.valor;
+  if (antes.status === 'paga') {
+    if (!b.confirmar) {
+      return send(res, 409, {
+        error: 'Esta parcela já possui movimentação financeira (recebida). Deseja realmente alterar seus dados?',
+        precisaConfirmar: true
+      });
+    }
+    if (mexeuDinheiro) {
+      // O caixa acompanha, para os relatórios não divergirem do recebível.
+      for (const c of db.all('cashflow').filter(c => c.refType === 'receivables' && c.refId === antes.id)) {
+        db.update('cashflow', c.id, { valor: patch.valor });
+      }
+      mudancas.push('(entrada de caixa ligada ajustada junto)');
+    }
+  }
+
+  const rec = db.update('receivables', antes.id, patch);
+  audit(user, 'alterou', 'receivables', rec.id,
+    `${antes.descricao || 'Parcela'} editada — ${mudancas.join('; ')}${antes.status === 'paga' ? ' [parcela já recebida — alteração confirmada]' : ''}`);
+  ok(res, rec);
+});
+
+/* Recalcula as parcelas futuras de um grupo (os boletos de uma venda).
+   As já recebidas não são tocadas: o valor recebido é abatido do novo
+   total e o restante é redistribuído nas novas parcelas em aberto. */
+route('POST', '/api/receivables/replan', 'receivables', async (req, res, user) => {
+  const b = await readBody(req);
+  const ids = Array.isArray(b.ids) ? b.ids.map(Number) : [];
+  const grupo = ids.map(id => db.get('receivables', id)).filter(Boolean);
+  if (!grupo.length) return bad(res, 'Nenhuma parcela informada.');
+
+  const pagas = grupo.filter(r => r.status === 'paga');
+  const abertas = grupo.filter(r => r.status !== 'paga' && r.status !== 'cancelada');
+  if (!abertas.length) return bad(res, 'Todas as parcelas deste grupo já foram recebidas ou canceladas.');
+
+  const totalNovo = Number(b.valorTotal) || grupo.reduce((s, r) => s + r.valor, 0);
+  const jaRecebido = pagas.reduce((s, r) => s + r.valor, 0);
+  const restante = Math.round((totalNovo - jaRecebido) * 100) / 100;
+  if (restante <= 0) return bad(res, `O novo total (R$ ${totalNovo.toFixed(2)}) é menor ou igual ao já recebido (R$ ${jaRecebido.toFixed(2)}). Nada sobraria para as parcelas futuras.`);
+
+  const totalParcelas = Math.max(pagas.length + 1, Number(b.parcelas) || grupo.length);
+  const futuras = totalParcelas - pagas.length;
+  const intervalo = Number(b.intervaloDias) || 30;
+
+  const modelo = abertas[0];
+  const base = (modelo.descricao || 'Boleto').replace(/ — parcela \d+\/\d+$/, '');
+
+  // Datas: a partir da primeira data informada, ou recalculadas da data-base.
+  const parcels = domain.generateInstallments(
+    b.primeiraData ? domain.addDays(b.primeiraData, -intervalo) : (b.dataVenda || domain.today()),
+    restante, futuras, intervalo);
+
+  for (const r of abertas) db.remove('receivables', r.id);
+  const criadas = [];
+  for (const p of parcels) {
+    const n = pagas.length + p.parcela;
+    criadas.push(db.insert('receivables', {
+      clienteId: modelo.clienteId, origem: modelo.origem || 'venda',
+      refType: modelo.refType || null, refId: modelo.refId || null,
+      descricao: `${base} — parcela ${n}/${totalParcelas}`,
+      forma: b.forma || modelo.forma || 'boleto',
+      valor: p.valor, vencimento: p.vencimento,
+      status: 'aberto', parcela: n, parcelas: totalParcelas
+    }));
+  }
+  // Renumera as pagas para o novo total de parcelas, sem tocar em valor/data.
+  for (const r of pagas) {
+    db.update('receivables', r.id, {
+      parcelas: totalParcelas,
+      descricao: `${base} — parcela ${r.parcela}/${totalParcelas}`
+    });
+  }
+
+  audit(user, 'alterou', 'receivables', null,
+    `Parcelas recalculadas: ${grupo.length} → ${totalParcelas} (${pagas.length} já recebida(s) preservada(s)); ` +
+    `total R$ ${totalNovo.toFixed(2)}, restante R$ ${restante.toFixed(2)} em ${futuras}x; ` +
+    `vencimentos ${criadas.map(c => c.vencimento).join(', ')}`);
+  ok(res, { pagas: pagas.length, criadas });
 });
 
 route('POST', '/api/receivables/:id/receive', 'receivables', async (req, res, user, params) => {
@@ -2465,7 +2679,7 @@ async function handleRest(req, res, user, collection, id) {
   /* Um lançamento de RH já pago gerou uma saída no caixa. Alterar o valor ou
      apagar o lançamento deixaria essa saída órfã ou com valor divergente —
      primeiro se desfaz o pagamento (que estorna o caixa), depois se edita. */
-  if (collection === 'hrPayments' && (method === 'PUT' || method === 'DELETE')) {
+  if ((collection === 'hrPayments' || collection === 'freights') && (method === 'PUT' || method === 'DELETE')) {
     const atual = db.get(collection, id);
     if (atual && atual.status === 'pago') {
       return bad(res, 'Este lançamento já foi pago e gerou uma saída no caixa. Use “Desfazer pagamento” antes de editar ou excluir.');

@@ -78,7 +78,17 @@ App.registerView('clients', async (view, args) => {
   const clients = await App.get('/clients');
   App.cache.clients = clients;
 
+  /* Ordenação: alfabética por padrão; o seletor oferece as demais. */
+  const ORDENS = {
+    nome: (a, b) => (a.nome || '').localeCompare(b.nome || '', 'pt-BR'),
+    recentes: (a, b) => b.id - a.id,
+    cidade: (a, b) => (a.cidade || '').localeCompare(b.cidade || '', 'pt-BR') || (a.nome || '').localeCompare(b.nome || '', 'pt-BR'),
+    estado: (a, b) => (a.estado || '').localeCompare(b.estado || '', 'pt-BR') || (a.nome || '').localeCompare(b.nome || '', 'pt-BR')
+  };
+  let ordem = 'nome';
+
   const render = (filter) => {
+    clients.sort(ORDENS[ordem] || ORDENS.nome);
     const f = (filter || '').toLowerCase().trim();
     const fd = App.digits(f); // busca por documento ignora pontos, barras e traços
     const list = clients.filter(c =>
@@ -99,12 +109,22 @@ App.registerView('clients', async (view, args) => {
     <div class="toolbar">
       <button class="btn primary" onclick="Clients.edit()">+ Novo cliente</button>
       <input class="search" id="client-search" placeholder="Buscar por nome, cidade, UF ou CPF/CNPJ…">
+      <select id="client-sort" style="max-width:170px" title="Ordenar por">
+        <option value="nome">A–Z por nome</option>
+        <option value="recentes">Mais recentes</option>
+        <option value="cidade">Por cidade</option>
+        <option value="estado">Por estado</option>
+      </select>
       <div class="spacer"></div>
       <span class="muted small">${clients.length} cliente(s)</span>
     </div>
     <div id="clients-table"></div>`;
   render();
   document.getElementById('client-search').addEventListener('input', e => render(e.target.value));
+  document.getElementById('client-sort').addEventListener('change', e => {
+    ordem = e.target.value;
+    render(document.getElementById('client-search').value);
+  });
 
   window.Clients = {
     edit(id) {

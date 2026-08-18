@@ -221,6 +221,7 @@ App.registerView('suppliers', async (view) => {
   const [suppliers, expenses, invoices, clients] = await Promise.all([
     App.get('/suppliers'), App.get('/supplierExpenses'), App.get('/supplierInvoices'), App.get('/clients')]);
 
+  suppliers.sort((a, b) => (a.nome || '').localeCompare(b.nome || '', 'pt-BR'));
   const openBySupplier = id => expenses.filter(e => e.fornecedorId === id && e.status === 'aberto');
 
   view.innerHTML = `
@@ -348,6 +349,130 @@ App.registerView('suppliers', async (view) => {
         App.toast('Fatura confirmada — conta a pagar criada na agenda de sexta-feira', 'ok');
         App.route();
       });
+    }
+  };
+});
+
+/* ================= FRETES PAGOS PELA EMPRESA ================= */
+App.registerView('freights', async (view) => {
+  App.setTitle('Fretes', 'Envios pagos pela empresa — cada frete vinculado à venda entra no lucro real dela');
+  const [freights, sales, clients] = await Promise.all([
+    App.get('/freights'), App.get('/sales'), App.get('/clients')]);
+  freights.sort((a, b) => b.id - a.id);
+
+  const mes = App.today().slice(0, 7);
+  const noMes = freights.filter(f => (f.dataEnvio || '').slice(0, 7) === mes && f.status !== 'cancelado');
+  const abertos = freights.filter(f => f.status === 'aberto');
+
+  view.innerHTML = `
+    <div class="grid cols-3" style="margin-bottom:14px">
+      <div class="card kpi"><div class="label">Fretes no mês</div>
+        <div class="value">${noMes.length}</div>
+        <div class="hint">enviados em ${mes.split('-').reverse().join('/')}</div></div>
+      <div class="card kpi"><div class="label">Custo de frete no mês</div>
+        <div class="value money">${App.money(noMes.reduce((s, f) => s + (f.valor || 0), 0))}</div>
+        <div class="hint">reduz o lucro das vendas vinculadas</div></div>
+      <div class="card kpi ${abertos.length ? 'k-warn' : 'k-ok'}"><div class="label">A pagar</div>
+        <div class="value money">${App.money(abertos.reduce((s, f) => s + (f.valor || 0), 0))}</div>
+        <div class="hint">${abertos.length ? abertos.length + ' frete(s) aguardando pagamento' : 'nenhum pendente'}</div></div>
+    </div>
+    <div class="toolbar">
+      <button class="btn primary" onclick="Frete.novo()">+ Registrar frete</button>
+      <div class="spacer"></div>
+    </div>
+    ${freights.length ? App.table(freights, [
+      { h: 'Envio', cell: f => App.date(f.dataEnvio) },
+      { h: 'Cliente', cell: f => `<b>${App.esc(App.clientName(f.clienteId, clients))}</b>` },
+      { h: 'Pedido', cell: f => {
+        const v = sales.find(x => x.id === f.saleId);
+        return v ? `nº ${v.numero}` : '<span class="muted">—</span>'; } },
+      { h: 'Transportadora', cell: f => `${App.esc(f.transportadora || '—')}${f.conhecimento ? `<div class="small muted">${App.esc(f.conhecimento)}</div>` : ''}` },
+      { h: 'Trajeto', cell: f => `<span class="small">${App.esc(f.origem || '—')} → ${App.esc(f.destino || '—')}</span>` },
+      { h: 'Valor', class: 'num', cell: f => App.moneyHtml(f.valor) },
+      { h: 'Status', cell: f => App.badge(f.status) },
+      { h: '', class: 'num', cell: f => f.status === 'pago'
+          ? `<button class="btn sm ghost" onclick="Frete.desfazer(${f.id})" title="Estorna a saída do caixa">↩ Desfazer</button>`
+          : `<button class="btn sm primary" onclick="Frete.pagar(${f.id})">✓ Pagar</button>
+             <button class="btn sm ghost" onclick="Frete.editar(${f.id})" title="Editar">✎</button>
+             <button class="btn sm ghost" onclick="Frete.excluir(${f.id})" title="Excluir">🗑</button>` }
+    ]) : App.emptyState('🚚', 'Nenhum frete registrado',
+      'Quando a empresa paga o envio de um cabeçote, registre aqui e vincule à venda: o custo entra no lucro real daquela venda e na DRE como Frete de venda / Logística.',
+      '<button class="btn primary" onclick="Frete.novo()">+ Registrar o primeiro frete</button>')}`;
+
+  const formFrete = (f, editId) => {
+    f = f || {};
+    const m = App.form(editId ? 'Editar frete' : 'Registrar frete', [
+      { name: 'saleId', label: 'Pedido / venda (recomendado — liga o custo ao lucro da venda)', type: 'select',
+        value: f.saleId || '', full: true,
+        options: [{ value: '', label: '— sem pedido específico —' }].concat(
+          sales.slice().sort((a, b) => b.numero - a.numero)
+            .map(v => ({ value: v.id, label: `Pedido nº ${v.numero} — ${App.clientName(v.clienteId, clients)}` }))) },
+      { name: 'clienteId', label: 'Cliente', type: 'select', value: f.clienteId || '',
+        options: App.clientOptions(clients) },
+      { name: 'produto', label: 'Produto / cabeçote enviado', value: f.produto || '' },
+      { name: 'dataEnvio', label: 'Data do envio', type: 'date', value: f.dataEnvio || App.today(), required: true },
+      { name: 'transportadora', label: 'Transportadora', value: f.transportadora || '' },
+      { name: 'conhecimento', label: 'Conhecimento / etiqueta (nº)', value: f.conhecimento || '' },
+      { name: 'origem', label: 'Origem', value: f.origem || ((App.meta.settings.empresa || {}).cidade || '') },
+      { name: 'destino', label: 'Destino', value: f.destino || '' },
+      { name: 'valor', label: 'Valor do frete (R$)', type: 'number', step: '0.01', value: f.valor, required: true },
+      { name: 'formaPagamento', label: 'Forma de pagamento', type: 'select', value: f.formaPagamento || 'pix',
+        options: ['pix', 'boleto', 'cartao', 'dinheiro'].map(v => ({ value: v, label: v })) },
+      ...(editId ? [] : [{ name: 'pagoAgora', label: 'Já foi pago (lança a saída no caixa agora)', type: 'checkbox', value: false, full: true }]),
+      { name: 'observacoes', label: 'Observações / comprovante', type: 'textarea', value: f.observacoes || '', full: true }
+    ], async d => {
+      const corpo = {
+        saleId: d.saleId ? Number(d.saleId) : null,
+        clienteId: d.clienteId ? Number(d.clienteId) : null,
+        produto: d.produto, dataEnvio: d.dataEnvio, transportadora: d.transportadora,
+        conhecimento: d.conhecimento, origem: d.origem, destino: d.destino,
+        valor: Number(d.valor), formaPagamento: d.formaPagamento,
+        observacoes: d.observacoes, pagoAgora: !!d.pagoAgora
+      };
+      if (editId) await App.put('/freights/' + editId, corpo);
+      else await App.post('/freights', corpo);
+      App.closeModal();
+      App.toast(editId ? 'Frete atualizado' : 'Frete registrado — o lucro da venda vinculada já considera este custo', 'ok');
+      App.route();
+    }, { wide: true });
+
+    // Escolheu o pedido? Cliente e destino vêm sozinhos do cadastro.
+    const selVenda = m.querySelector('[name=saleId]');
+    selVenda.addEventListener('change', () => {
+      const v = sales.find(x => x.id === Number(selVenda.value));
+      if (!v) return;
+      m.querySelector('[name=clienteId]').value = v.clienteId;
+      const c = clients.find(x => x.id === v.clienteId);
+      if (c && !m.querySelector('[name=destino]').value) {
+        m.querySelector('[name=destino]').value = [c.cidade, c.estado].filter(Boolean).join('/');
+      }
+      if (!m.querySelector('[name=produto]').value) {
+        m.querySelector('[name=produto]').value = (v.itens || []).map(i => i.produto).join(', ');
+      }
+    });
+  };
+
+  window.Frete = {
+    novo() { formFrete(null, null); },
+    editar(id) { formFrete(freights.find(x => x.id === id), id); },
+    async pagar(id) {
+      const f = freights.find(x => x.id === id);
+      if (!await App.confirm(`Pagar o frete de R$ ${App.money(f.valor)} (${f.transportadora || 'envio'})? A saída entra no caixa como Frete de venda / Logística.`)) return;
+      await App.post(`/freights/${id}/pay`, {});
+      App.toast('Frete pago — saída lançada no caixa', 'ok');
+      App.route();
+    },
+    async desfazer(id) {
+      if (!await App.confirm('Desfazer o pagamento deste frete? A saída correspondente sai do caixa e ele volta para "aberto".')) return;
+      await App.post(`/freights/${id}/unpay`, {});
+      App.toast('Pagamento desfeito — caixa estornado', 'ok');
+      App.route();
+    },
+    async excluir(id) {
+      if (!await App.confirm('Excluir este frete? O lucro da venda vinculada volta a subir. Isto não pode ser desfeito.')) return;
+      await App.del('/freights/' + id);
+      App.toast('Frete excluído', 'ok');
+      App.route();
     }
   };
 });

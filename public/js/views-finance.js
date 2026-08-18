@@ -6,7 +6,8 @@ const CATS_PAG = [
   ['agua', 'Água'], ['energia', 'Energia'], ['telefone', 'Telefone'], ['internet', 'Internet'],
   ['aluguel', 'Aluguel'], ['componentes', 'Fornecedores / componentes'], ['materiais', 'Materiais'],
   ['mao_obra_direta', 'Mão de obra direta'], ['terceirizacao', 'Terceirização'],
-  ['custo_producao', 'Outros custos de produção'], ['pos_operacao', 'Pós-operação'], ['outros', 'Outros'],
+  ['custo_producao', 'Outros custos de produção'], ['pos_operacao', 'Pós-operação'],
+  ['frete_venda', 'Frete de venda / Logística'], ['outros', 'Outros'],
   ['consorcio', 'Consórcio (veículos da empresa)'], ['impostos', 'Impostos'], ['salarios', 'Salários'],
   ['beneficios', 'Benefícios'], ['manutencao', 'Manutenção'], ['sistemas', 'Sistemas'],
   ['marketing', 'Marketing'], ['tarifas', 'Tarifas bancárias'], ['juros', 'Juros'],
@@ -193,16 +194,95 @@ App.registerView('receivables', async (view) => {
       { h: 'Vencimento', cell: r => App.date(r.vencimento) },
       { h: 'Valor', class: 'num', cell: r => App.moneyHtml(r.valor) },
       { h: 'Status', cell: r => App.badge(r.status) },
-      { h: '', class: 'num', cell: r => (r.status === 'aberto' || r.status === 'vencida') ? `
-        <button class="btn sm primary" onclick="Recv.receive(${r.id})">✓ Receber</button>
-        <button class="btn sm ghost wa" onclick="Recv.wa(${r.id})" title="Cobrar no WhatsApp">✆</button>
-        <button class="btn sm ghost" onclick="Recv.cancel(${r.id})">✕</button>` : '' }
+      { h: '', class: 'num', cell: r => `
+        ${(r.status === 'aberto' || r.status === 'vencida') ? `
+          <button class="btn sm primary" onclick="Recv.receive(${r.id})">✓ Receber</button>
+          <button class="btn sm ghost wa" onclick="Recv.wa(${r.id})" title="Cobrar no WhatsApp">✆</button>` : ''}
+        ${r.status !== 'cancelada' ? `<button class="btn sm ghost" onclick="Recv.edit(${r.id})" title="Editar parcela">✏️</button>` : ''}
+        ${r.parcelas > 1 && (r.status === 'aberto' || r.status === 'vencida') ? `
+          <button class="btn sm ghost" onclick="Recv.replan(${r.id})" title="Recalcular as parcelas futuras deste grupo">🔁</button>` : ''}
+        ${(r.status === 'aberto' || r.status === 'vencida') ? `<button class="btn sm ghost" onclick="Recv.cancel(${r.id})">✕</button>` : ''}` }
     ], { emptyMsg: 'Nenhum recebível' });
   };
   render();
   document.getElementById('rf').addEventListener('change', render);
 
+  /* Parcelas irmãs: mesma venda (refType/refId) ou, nos boletos avulsos,
+     mesmo cliente e mesma descrição-base. */
+  const grupoDe = (r) => receivables.filter(x =>
+    x.id === r.id ||
+    (r.refType && x.refType === r.refType && x.refId === r.refId) ||
+    (!r.refType && !x.refType && x.clienteId === r.clienteId &&
+      String(x.descricao || '').replace(/ — parcela .*$/, '') === String(r.descricao || '').replace(/ — parcela .*$/, '')));
+
   window.Recv = {
+    edit(id) {
+      const r = receivables.find(x => x.id === id);
+      if (!r) return;
+      const recebida = r.status === 'paga';
+      const m = App.form(`✏️ Editar parcela${r.parcelas > 1 ? ` ${r.parcela}/${r.parcelas}` : ''}`, [
+        { name: 'clienteId', label: 'Cliente', type: 'select', value: r.clienteId, full: true,
+          options: App.clientOptions(clients) },
+        { name: 'descricao', label: 'Descrição', value: r.descricao, full: true },
+        { name: 'valor', label: 'Valor (R$)', type: 'number', step: '0.01', value: r.valor, required: true },
+        { name: 'vencimento', label: 'Vencimento', type: 'date', value: r.vencimento, required: true },
+        { name: 'forma', label: 'Forma', type: 'select', value: r.forma || 'boleto',
+          options: ['boleto', 'pix', 'cartao', 'cheque', 'dinheiro', 'outro'].map(v => ({ value: v, label: v })) },
+        { name: 'observacoes', label: 'Observações', type: 'textarea', value: r.observacoes || '', full: true }
+      ], async d => {
+        const corpo = {
+          clienteId: Number(d.clienteId), descricao: d.descricao, valor: Number(d.valor),
+          vencimento: d.vencimento, forma: d.forma, observacoes: d.observacoes
+        };
+        const grava = async (confirmar) => {
+          await App.put('/receivables/' + id, confirmar ? Object.assign({ confirmar: true }, corpo) : corpo);
+          App.closeModal();
+          App.toast('Parcela atualizada — agenda e projeção acompanharam', 'ok');
+          App.route();
+        };
+        try {
+          await grava(false);
+        } catch (e) {
+          if (!/movimentação financeira/.test(e.message)) throw e;
+          // Recebida: a regra de segurança pede confirmação explícita.
+          if (await App.confirm(e.message + '<br><br>A entrada correspondente no caixa será ajustada junto, e a alteração fica registrada no histórico.', { html: true })) {
+            await grava(true);
+          }
+        }
+      });
+      if (recebida) {
+        m.querySelector('.actions').insertAdjacentHTML('afterbegin',
+          `<p class="small" style="margin-right:auto;color:var(--warn,#d29922)">⚠ Parcela já recebida em ${App.date(r.dataRecebimento)} — alterações pedem confirmação.</p>`);
+      }
+    },
+
+    replan(id) {
+      const r = receivables.find(x => x.id === id);
+      if (!r) return;
+      const grupo = grupoDe(r).filter(x => x.status !== 'cancelada');
+      const pagas = grupo.filter(x => x.status === 'paga');
+      const total = grupo.reduce((s, x) => s + x.valor, 0);
+      const m = App.form(`🔁 Recalcular parcelas — ${App.clientName(r.clienteId, clients)}`, [
+        { name: 'valorTotal', label: 'Valor total (R$)', type: 'number', step: '0.01', value: total.toFixed(2), required: true },
+        { name: 'parcelas', label: 'Nº total de parcelas', type: 'number', value: grupo.length, required: true },
+        { name: 'intervaloDias', label: 'Intervalo entre parcelas (dias)', type: 'number', value: 30, required: true },
+        { name: 'primeiraData', label: 'Vencimento da próxima parcela', type: 'date',
+          value: (grupo.find(x => x.status !== 'paga') || {}).vencimento || App.today(), required: true }
+      ], async d => {
+        const out = await App.post('/receivables/replan', {
+          ids: grupo.map(x => x.id), valorTotal: Number(d.valorTotal), parcelas: Number(d.parcelas),
+          intervaloDias: Number(d.intervaloDias), primeiraData: d.primeiraData
+        });
+        App.closeModal();
+        App.toast(`Recalculado: ${out.pagas} recebida(s) preservada(s) + ${out.criadas.length} futura(s): `
+          + out.criadas.map(c => App.date(c.vencimento)).join(', '), 'ok');
+        App.route();
+      }, { submitLabel: 'Recalcular futuras' });
+      m.querySelector('.actions').insertAdjacentHTML('afterbegin',
+        `<p class="small muted" style="margin-right:auto">${grupo.length} parcela(s) no grupo · ${pagas.length} já recebida(s)
+         ${pagas.length ? '(não serão tocadas — só as futuras mudam)' : ''}</p>`);
+    },
+
     wa(id) {
       const r = receivables.find(x => x.id === id);
       const c = clients.find(x => x.id === r.clienteId);

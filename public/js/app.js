@@ -669,6 +669,7 @@ const App = {
     ]],
     ['Financeiro', [
       ['payables', 'Contas a pagar', '↥', 'payables'],
+      ['freights', 'Fretes', '🚚', 'payables'],
       ['receivables', 'Contas a receber', '↧', 'receivables'],
       ['cashflow', 'Fluxo de caixa', '≋', 'cashflow'],
       ['projection', 'Projeção', '📈', 'projection'],
@@ -918,6 +919,7 @@ const App = {
   },
   clientOptions(clients, selected) {
     return [{ value: '', label: '— selecione —' }].concat(
-      clients.map(c => ({ value: c.id, label: c.nome })));
+      clients.slice().sort((a, b) => (a.nome || '').localeCompare(b.nome || '', 'pt-BR'))
+        .map(c => ({ value: c.id, label: c.nome })));
   }
 };

@@ -8,7 +8,8 @@ App.registerView('products', async (view) => {
   const fin = App.can('finance_sensitive');
   const modelOf = pid => models.find(m => m.produtoId === pid);
 
-  const group = tipo => products.filter(p => p.tipo === tipo).sort((a, b) => a.stage - b.stage);
+  const group = tipo => products.filter(p => p.tipo === tipo)
+    .sort((a, b) => (a.stage - b.stage) || (a.nome || '').localeCompare(b.nome || '', 'pt-BR'));
   const cols = [
     { h: 'Configuração', cell: p => `<b>${App.esc(p.nome)}</b>` },
     { h: 'Stage', cell: p => `<span class="badge accent">Stage ${p.stage}</span>` },
@@ -228,6 +229,7 @@ App.registerView('sales', async (view, args) => {
           <tr><td><b>Valor líquido</b></td><td class="num"><b>R$ ${App.money(r.liquido)}</b></td></tr>
           <tr><td>Custo-base</td><td class="num neg">− R$ ${App.money(r.custoBase)}</td></tr>
           <tr><td>Custos adicionais da venda</td><td class="num neg">− R$ ${App.money(r.custosAdicionais)}</td></tr>
+          ${r.frete ? `<tr><td>Frete pago pela empresa</td><td class="num neg">− R$ ${App.money(r.frete)}</td></tr>` : ''}
           <tr><td><b>Resultado</b></td><td class="num"><b class="${r.resultado >= 0 ? 'pos' : 'neg'}">R$ ${App.money(r.resultado)}</b></td></tr>
           <tr><td>Margem</td><td class="num ${r.margem >= 0 ? 'pos' : 'neg'}"><b>${r.margem.toFixed(1)}%</b></td></tr>
         </table>
