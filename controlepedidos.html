@@ -580,8 +580,8 @@
         <input id="fDesc" placeholder="ex: Cimento CP II-E-32 (saco 50 kg)" autocomplete="off">
       </div>
       <div class="campo">
-        <label for="fLink">Link (opcional)</label>
-        <input id="fLink" type="url" placeholder="https://… página do produto, orçamento ou catálogo" autocomplete="off">
+        <label for="fLink">Link de exemplo (opcional)</label>
+        <input id="fLink" type="url" placeholder="https://… exemplo/referência do produto que deve ser comprado" autocomplete="off">
       </div>
       <div class="grid-3">
         <div class="campo">
@@ -901,7 +901,7 @@ function render(){
       <td class="chk"><input type="checkbox" data-sel="${d.id}" ${selecao.has(d.id)?"checked":""} aria-label="Selecionar ${escHtml(d.desc)}"></td>
       <td class="id">${escHtml(d.codigo)}</td>
       <td class="cat">${escHtml(d.cat)}</td>
-      <td class="desc">${escHtml(d.desc)}${d.link ? `<a class="lnk" href="${escHtml(d.link)}" target="_blank" rel="noopener noreferrer" title="Abrir link do produto" aria-label="Abrir link de ${escHtml(d.desc)}"><svg viewBox="0 0 24 24"><path d="M18 13v6H5V6h6M14 4h6v6M20 4L10 14"/></svg></a>` : ""}</td>
+      <td class="desc">${escHtml(d.desc)}${d.link ? `<a class="lnk" href="${escHtml(d.link)}" target="_blank" rel="noopener noreferrer" title="Ver exemplo do que deve ser comprado" aria-label="Ver exemplo de compra de ${escHtml(d.desc)}"><svg viewBox="0 0 24 24"><path d="M18 13v6H5V6h6M14 4h6v6M20 4L10 14"/></svg></a>` : ""}</td>
       <td class="un">${escHtml(d.un)}</td>
       <td class="num" data-un="${escHtml(d.un)}">${fmtNum(d.qtd)}</td>
       <td class="data${d.criadoEm?"":" vazia"}">${fmtData(d.criadoEm)}</td>
@@ -1251,7 +1251,7 @@ $("#btnCSV").addEventListener("click", () => {
   if(!rows.length) return;
   const esc = v => `"${String(v).replace(/"/g,'""')}"`;
   const linhas = [
-    ["Código","Categoria","Descrição","Un","Qtd","Lançado em","Data do Pedido","Data de Entrega","Situação","Link"].join(";"),
+    ["Código","Categoria","Descrição","Un","Qtd","Lançado em","Data do Pedido","Data de Entrega","Situação","Link de exemplo"].join(";"),
     ...rows.map(d => [esc(d.codigo),esc(d.cat),esc(d.desc),esc(d.un),String(d.qtd).replace(".",","),d.criadoEm?fmtData(d.criadoEm):"",d.dataPedido?fmtData(d.dataPedido):"",d.dataEntrega?fmtData(d.dataEntrega):"",esc(d.situacao),esc(d.link||"")].join(";"))
   ];
   const blob = new Blob(["﻿" + linhas.join("\r\n")], { type:"text/csv;charset=utf-8" });
