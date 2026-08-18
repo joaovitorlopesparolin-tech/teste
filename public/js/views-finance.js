@@ -5,6 +5,8 @@
 const CATS_PAG = [
   ['agua', 'Água'], ['energia', 'Energia'], ['telefone', 'Telefone'], ['internet', 'Internet'],
   ['aluguel', 'Aluguel'], ['componentes', 'Fornecedores / componentes'], ['materiais', 'Materiais'],
+  ['mao_obra_direta', 'Mão de obra direta'], ['terceirizacao', 'Terceirização'],
+  ['custo_producao', 'Outros custos de produção'], ['pos_operacao', 'Pós-operação'], ['outros', 'Outros'],
   ['consorcio', 'Consórcio (veículos da empresa)'], ['impostos', 'Impostos'], ['salarios', 'Salários'],
   ['beneficios', 'Benefícios'], ['manutencao', 'Manutenção'], ['sistemas', 'Sistemas'],
   ['marketing', 'Marketing'], ['tarifas', 'Tarifas bancárias'], ['juros', 'Juros'],
