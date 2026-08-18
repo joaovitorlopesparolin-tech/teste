@@ -1877,43 +1877,69 @@ route('POST', '/api/stock/:id/move', 'stock', async (req, res, user, params) => 
 });
 
 /* ---- compras ---- */
+/**
+ * Gera as contas a pagar de uma compra, respeitando o agendamento escolhido
+ * (sexta anterior, imediato, a cada 30 dias, início do mês, data combinada).
+ * Usada na criação e na edição — a edição apaga as parcelas em aberto e
+ * chama isto de novo, o que garante que nunca exista obrigação duplicada.
+ */
+function gerarContasPagarDaCompra(rec, { intervaloDias } = {}) {
+  const tipo = rec.tipoPagamento || 'programado';
+  const base = domain.programarPagamento(tipo, rec.data, rec.vencimento || '', {
+    diaMes: rec.agendamentoDia, dataManual: rec.agendamentoData
+  });
+  const parcels = rec.parcelas > 1
+    ? domain.generateInstallments(rec.data, rec.valor, rec.parcelas, intervaloDias || 30)
+    : [{ parcela: 1, parcelas: 1, vencimento: base.vencimento, valor: rec.valor }];
+  for (const p of parcels) {
+    // Com várias parcelas, cada uma agenda pela própria data de vencimento;
+    // com uma só, vale o cálculo base (que já partiu do vencimento certo).
+    const prog = rec.parcelas > 1
+      ? domain.programarPagamento(tipo, rec.data, p.vencimento,
+          { diaMes: rec.agendamentoDia, dataManual: rec.agendamentoData })
+      : base;
+    db.insert('payables', {
+      descricao: `Compra ${rec.fornecedorNome || ''} ${rec.documentoNumero ? 'NF ' + rec.documentoNumero : ''}`.trim()
+        + (p.parcelas > 1 ? ` — parcela ${p.parcela}/${p.parcelas}` : ''),
+      categoria: rec.categoria, fornecedorId: rec.fornecedorId,
+      valor: p.valor, vencimento: p.vencimento,
+      tipoPagamento: tipo,
+      dataProgramada: prog.dataProgramada,
+      status: 'aberto', refType: 'purchases', refId: rec.id, documento: rec.documentoNumero
+    });
+  }
+}
+
 route('POST', '/api/purchases', 'purchases', async (req, res, user) => {
   const b = await readBody(req);
   const forn = b.fornecedorId ? db.get('suppliers', b.fornecedorId) : null;
   const valor = Number(b.valor) || (b.itens || []).reduce((s, i) => s + (Number(i.total) || 0), 0);
-  const rec = db.insert('purchases', {
-    fornecedorId: forn ? forn.id : null, fornecedorNome: forn ? forn.nome : (b.fornecedorNome || ''),
-    data: b.data || domain.today(),
-    itens: b.itens || [], valor,
-    formaPagamento: b.formaPagamento || '',
-    vencimento: b.vencimento || '',
-    parcelas: Number(b.parcelas) || 1,
-    documentoTipo: b.documentoTipo || 'sem_documento', // nf | recibo | comprovante | sem_documento | outro
-    documentoNumero: b.documentoNumero || '',
-    categoria: b.categoria || 'componentes',
-    observacoes: b.observacoes || '',
-    vinculo: b.vinculo || { tipo: 'uso_interno', refId: null }, // cliente | orcamento | os | pedido | producao | uso_interno
-    status: 'registrada'
-  });
-
-  // Contas a pagar (parceladas se necessário), com agenda de sexta-feira.
-  if (b.gerarContasPagar !== false && valor > 0) {
-    const venc = b.vencimento || domain.addDays(rec.data, 30);
-    const parcels = rec.parcelas > 1
-      ? domain.generateInstallments(rec.data, valor, rec.parcelas, b.intervaloDias || 30)
-      : [{ parcela: 1, parcelas: 1, vencimento: venc, valor }];
-    for (const p of parcels) {
-      const imediato = b.tipoPagamento === 'imediato';
-      db.insert('payables', {
-        descricao: `Compra ${rec.fornecedorNome || ''} ${rec.documentoNumero ? 'NF ' + rec.documentoNumero : ''}`.trim()
-          + (p.parcelas > 1 ? ` — parcela ${p.parcela}/${p.parcelas}` : ''),
-        categoria: rec.categoria, fornecedorId: rec.fornecedorId,
-        valor: p.valor, vencimento: p.vencimento,
-        tipoPagamento: imediato ? 'imediato' : 'programado',
-        dataProgramada: imediato ? rec.data : domain.previousFriday(p.vencimento),
-        status: 'aberto', refType: 'purchases', refId: rec.id, documento: rec.documentoNumero
-      });
+  let rec;
+  try {
+    rec = db.insert('purchases', {
+      fornecedorId: forn ? forn.id : null, fornecedorNome: forn ? forn.nome : (b.fornecedorNome || ''),
+      data: b.data || domain.today(),
+      itens: b.itens || [], valor,
+      formaPagamento: b.formaPagamento || '',
+      vencimento: b.vencimento || '',
+      parcelas: Number(b.parcelas) || 1,
+      documentoTipo: b.documentoTipo || 'sem_documento', // nf | recibo | comprovante | sem_documento | outro
+      documentoNumero: b.documentoNumero || '',
+      categoria: b.categoria || 'componentes',
+      observacoes: b.observacoes || '',
+      // programado | imediato | a_cada_30 | inicio_mes | outro
+      tipoPagamento: b.tipoPagamento || 'programado',
+      agendamentoDia: b.agendamentoDia ? Number(b.agendamentoDia) : null,
+      agendamentoData: b.agendamentoData || '',
+      vinculo: b.vinculo || { tipo: 'sem_vinculo', refId: null },
+      status: 'registrada'
+    });
+    if (b.gerarContasPagar !== false && valor > 0) {
+      gerarContasPagarDaCompra(rec, { intervaloDias: b.intervaloDias });
     }
+  } catch (e) {
+    if (rec) db.remove('purchases', rec.id);
+    return bad(res, e.message);
   }
 
   // Entrada opcional no estoque próprio.
@@ -1928,6 +1954,114 @@ route('POST', '/api/purchases', 'purchases', async (req, res, user) => {
 });
 
 /** Leitura automática de NF-e (XML) — sempre com conferência antes de confirmar. */
+/* ---- edição de compra ----
+   Regras inegociáveis do pedido:
+   - editar ATUALIZA o lançamento, nunca cria outro;
+   - as contas a pagar ligadas são atualizadas, nunca duplicadas;
+   - o histórico guarda quem alterou, quando e cada valor antes → depois. */
+route('PUT', '/api/purchases/:id', 'purchases', async (req, res, user, params) => {
+  const antes = db.get('purchases', params.id);
+  if (!antes) return notFound(res);
+  const b = await readBody(req);
+
+  const ligadas = db.all('payables').filter(p => p.refType === 'purchases' && p.refId === antes.id);
+  const pagas = ligadas.filter(p => p.status === 'pago');
+
+  const forn = b.fornecedorId ? db.get('suppliers', b.fornecedorId) : null;
+  const valor = b.valor !== undefined
+    ? (Number(b.valor) || (b.itens || []).reduce((s, i) => s + (Number(i.total) || 0), 0))
+    : antes.valor;
+
+  const patch = {
+    fornecedorId: forn ? forn.id : (b.fornecedorId === null ? null : antes.fornecedorId),
+    fornecedorNome: forn ? forn.nome : (b.fornecedorNome !== undefined ? b.fornecedorNome : antes.fornecedorNome),
+    data: b.data || antes.data,
+    itens: b.itens !== undefined ? b.itens : antes.itens,
+    valor,
+    formaPagamento: b.formaPagamento !== undefined ? b.formaPagamento : antes.formaPagamento,
+    vencimento: b.vencimento !== undefined ? b.vencimento : antes.vencimento,
+    parcelas: b.parcelas !== undefined ? (Number(b.parcelas) || 1) : antes.parcelas,
+    documentoTipo: b.documentoTipo || antes.documentoTipo,
+    documentoNumero: b.documentoNumero !== undefined ? b.documentoNumero : antes.documentoNumero,
+    categoria: b.categoria || antes.categoria,
+    observacoes: b.observacoes !== undefined ? b.observacoes : antes.observacoes,
+    tipoPagamento: b.tipoPagamento || antes.tipoPagamento || 'programado',
+    agendamentoDia: b.agendamentoDia !== undefined ? (b.agendamentoDia ? Number(b.agendamentoDia) : null) : antes.agendamentoDia,
+    agendamentoData: b.agendamentoData !== undefined ? b.agendamentoData : antes.agendamentoData,
+    vinculo: b.vinculo !== undefined ? b.vinculo : antes.vinculo
+  };
+
+  // O que muda o dinheiro (valor, parcelas, vencimento, agendamento) só pode
+  // mudar enquanto nenhuma parcela foi paga — senão o caixa já registrado
+  // divergiria do lançamento. O caminho é desfazer o pagamento antes.
+  const mudouFinanceiro =
+    patch.valor !== antes.valor ||
+    patch.parcelas !== antes.parcelas ||
+    patch.vencimento !== antes.vencimento ||
+    patch.tipoPagamento !== (antes.tipoPagamento || 'programado') ||
+    patch.agendamentoDia !== (antes.agendamentoDia || null) ||
+    (patch.agendamentoData || '') !== (antes.agendamentoData || '') ||
+    patch.data !== antes.data;
+  if (mudouFinanceiro && pagas.length) {
+    return bad(res, `Esta compra já tem ${pagas.length} parcela(s) paga(s). Valor, parcelas, vencimento e agendamento não podem mudar depois do pagamento — desfaça o pagamento na tela de Contas a pagar e edite em seguida. Os demais campos (categoria, vínculo, descrição…) podem ser editados normalmente.`);
+  }
+
+  // Histórico antes → depois, campo a campo, só do que mudou.
+  const NOMES = {
+    fornecedorNome: 'Fornecedor', data: 'Data', valor: 'Valor', formaPagamento: 'Forma de pagamento',
+    vencimento: 'Vencimento', parcelas: 'Parcelas', documentoTipo: 'Tipo de documento',
+    documentoNumero: 'Nº do documento', categoria: 'Categoria', observacoes: 'Observações',
+    tipoPagamento: 'Agendamento', agendamentoDia: 'Dia do pagamento', agendamentoData: 'Data combinada'
+  };
+  const mudancas = [];
+  for (const k of Object.keys(NOMES)) {
+    const a = antes[k], d = patch[k];
+    if (JSON.stringify(a ?? '') !== JSON.stringify(d ?? '')) {
+      mudancas.push(`${NOMES[k]}: ${a === undefined || a === null || a === '' ? '—' : a} → ${d === '' || d == null ? '—' : d}`);
+    }
+  }
+  const vincAntes = JSON.stringify(antes.vinculo || {}), vincDepois = JSON.stringify(patch.vinculo || {});
+  if (vincAntes !== vincDepois) {
+    const nome = v => v && v.tipo ? `${v.tipo}${v.refNome ? ' (' + v.refNome + ')' : ''}` : '—';
+    mudancas.push(`Vínculo: ${nome(antes.vinculo)} → ${nome(patch.vinculo)}`);
+  }
+  if (JSON.stringify(antes.itens || []) !== JSON.stringify(patch.itens || [])) {
+    mudancas.push(`Itens: ${(antes.itens || []).length} → ${(patch.itens || []).length} linha(s)`);
+  }
+
+  let rec;
+  try {
+    // Valida o agendamento ANTES de gravar qualquer coisa.
+    domain.programarPagamento(patch.tipoPagamento, patch.data, patch.vencimento || '',
+      { diaMes: patch.agendamentoDia, dataManual: patch.agendamentoData });
+
+    rec = db.update('purchases', antes.id, patch);
+
+    if (mudouFinanceiro) {
+      // Regenera as parcelas em aberto a partir do zero: apagar + recriar é o
+      // que garante que nunca fique obrigação duplicada nem órfã.
+      for (const p of ligadas.filter(p => p.status !== 'pago')) db.remove('payables', p.id);
+      gerarContasPagarDaCompra(rec, { intervaloDias: b.intervaloDias });
+    } else {
+      // Só metadados: propaga aos lançamentos ligados (inclusive pagos —
+      // categoria e documento são classificação, não dinheiro).
+      for (const p of ligadas) {
+        const sufixo = (String(p.descricao || '').match(/ — parcela \d+\/\d+$/) || [''])[0];
+        db.update('payables', p.id, {
+          categoria: rec.categoria, fornecedorId: rec.fornecedorId, documento: rec.documentoNumero,
+          descricao: `Compra ${rec.fornecedorNome || ''} ${rec.documentoNumero ? 'NF ' + rec.documentoNumero : ''}`.trim() + sufixo
+        });
+      }
+    }
+  } catch (e) {
+    return bad(res, e.message);
+  }
+
+  audit(user, 'alterou', 'purchases', rec.id,
+    `Compra editada${mudancas.length ? ' — ' + mudancas.join('; ') : ''}`);
+  ok(res, rec);
+});
+
 route('POST', '/api/purchases/parse-nfe', 'purchases', async (req, res, user) => {
   const b = await readBody(req);
   if (!b.xml) return bad(res, 'Envie o conteúdo XML da NF-e');

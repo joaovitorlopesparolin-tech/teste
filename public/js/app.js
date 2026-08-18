@@ -32,6 +32,65 @@ const App = {
       style="height:${altura}px" alt="Jaques Motorsport" draggable="false">`;
   },
 
+  /* ---------------- Catálogos de compras ----------------
+     Compartilhados entre Compras, Contas a pagar e relatórios, para os nomes
+     e as explicações serem os mesmos em todo lugar. [chave, nome, explicação] */
+  CATCOMPRA: [
+    ['componentes', 'Componentes', 'Peças usadas diretamente no produto: válvulas, molas, pratos, travas, tuchos, comandos…'],
+    ['materiais', 'Materiais', 'Consumo da produção e dos serviços: insumos, abrasivos, materiais de usinagem'],
+    ['mao_obra_direta', 'Mão de obra direta', 'Custos ligados diretamente à execução do produto ou serviço'],
+    ['terceirizacao', 'Terceirização', 'Serviços de terceiros para a produção: retífica, usinagem externa, solda…'],
+    ['custo_producao', 'Outros custos de produção', 'Ligado à produção, mas que não é componente, material, mão de obra nem terceirização'],
+    ['pos_operacao', 'Pós-operação', 'Depois da produção: embalagem, preparação de envio, expedição, brindes'],
+    ['manutencao', 'Manutenção', 'Máquinas, equipamentos, ferramentas e estrutura operacional'],
+    ['despesa_operacional', 'Despesas operacionais', 'Funcionamento diário da empresa: limpeza, água dos colaboradores, escritório'],
+    ['outros', 'Outros', 'Só quando realmente não couber em nenhuma das categorias acima']
+  ],
+  /* Rótulos de categorias antigas que ainda existem em lançamentos gravados. */
+  CATCOMPRA_LEGADO: { custo_direto: 'Custos diretos' },
+
+  VINCCOMPRA: [
+    ['producao', 'Produção', 'Usada diretamente na fabricação ou montagem de um produto'],
+    ['os', 'Serviço / OS', 'Usada na execução de um serviço específico de cliente'],
+    ['pedido', 'Pedido de venda', 'Relacionada a um pedido específico de produto'],
+    ['cliente', 'Cliente', 'Feita especificamente para atender determinado cliente'],
+    ['manutencao', 'Manutenção', 'Manutenção da estrutura, máquinas ou equipamentos da empresa'],
+    ['operacao_interna', 'Operação interna', 'Funcionamento diário da empresa'],
+    ['administrativo', 'Administrativo', 'Atividades administrativas da empresa'],
+    ['sem_vinculo', 'Sem vínculo específico', 'Compra geral, sem relação direta com produção, serviço ou cliente']
+  ],
+  VINCCOMPRA_LEGADO: { uso_interno: 'Uso interno', orcamento: 'Orçamento' },
+
+  catCompraNome(chave) {
+    const c = this.CATCOMPRA.find(x => x[0] === chave);
+    return c ? c[1] : (this.CATCOMPRA_LEGADO[chave] || chave || '—');
+  },
+  vincCompraNome(chave) {
+    const v = this.VINCCOMPRA.find(x => x[0] === chave);
+    return v ? v[1] : (this.VINCCOMPRA_LEGADO[chave] || chave || '—');
+  },
+
+  /**
+   * Explicação viva embaixo de um <select>: mostra a descrição da opção
+   * escolhida, discreta, e atualiza quando o usuário troca.
+   * catalogo: [[valor, nome, descricao], …]
+   */
+  explicarSelect(modal, nomeCampo, catalogo, aoTrocar) {
+    const sel = modal.querySelector(`[name="${nomeCampo}"]`);
+    if (!sel) return;
+    const d = document.createElement('div');
+    d.className = 'small';
+    d.style.cssText = 'color:var(--text-3);margin-top:3px;font-size:11.5px;line-height:1.35';
+    sel.insertAdjacentElement('afterend', d);
+    const atualiza = () => {
+      const op = catalogo.find(x => String(x[0]) === sel.value);
+      d.textContent = op && op[2] ? `(${op[2]})` : '';
+      if (aoTrocar) aoTrocar(sel.value);
+    };
+    sel.addEventListener('change', atualiza);
+    atualiza();
+  },
+
   /* ---------------- API ---------------- */
   /* O token fica no localStorage quando o usuário marca "manter conectado"
      (login permanece mesmo fechando o navegador) ou no sessionStorage quando

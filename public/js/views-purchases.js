@@ -4,12 +4,27 @@
 /* ================= COMPRAS ================= */
 App.registerView('purchases', async (view) => {
   App.setTitle('Compras', 'Com ou sem nota fiscal — sempre no controle gerencial');
-  const [purchases, suppliers, clients] = await Promise.all([
-    App.get('/purchases'), App.get('/suppliers'), App.get('/clients')]);
+  const [purchases, suppliers, clients, serviceOrders, sales] = await Promise.all([
+    App.get('/purchases'), App.get('/suppliers'), App.get('/clients'),
+    App.get('/serviceOrders'), App.get('/sales')]);
   purchases.sort((a, b) => b.id - a.id);
 
   const DOCS = { nf: 'NF', recibo: 'Recibo', comprovante: 'Comprovante', sem_documento: 'Sem documento', outro: 'Outro' };
-  const VINC = { cliente: 'Cliente', orcamento: 'Orçamento', os: 'OS', pedido: 'Pedido', producao: 'Produção', uso_interno: 'Uso interno' };
+
+  /* Agendamentos de pagamento: [chave, nome, explicação] */
+  const AGEND = [
+    ['programado', 'Sexta-feira anterior ao vencimento',
+      'Regra da casa: o sistema acha sozinho a sexta anterior — venc. qui 20/08 paga sex 14/08'],
+    ['imediato', 'Imediato',
+      'Pago na hora da compra: mercado, limpeza, água, emergências, despesas do dia a dia'],
+    ['a_cada_30', 'A cada 30 dias',
+      'Fornecedor de acumulado (Jaú, Retifoz, Ferragens, Mangopar…): cada compra registrada, pagamento consolidado depois'],
+    ['inicio_mes', 'Início do mês seguinte',
+      'Fornecedor de fechamento mensal: compras de agosto pagam no início de setembro, no dia escolhido abaixo'],
+    ['outro', 'Outro (data combinada)',
+      'Condição negociada com o fornecedor: dia 10, dia 15, uma data específica — você define abaixo']
+  ];
+  const agendNome = v => (AGEND.find(x => x[0] === v) || ['', v || '—'])[1];
 
   view.innerHTML = `
     <div class="toolbar">
@@ -26,15 +41,30 @@ App.registerView('purchases', async (view) => {
       { h: 'Documento', cell: p => p.documentoTipo === 'sem_documento'
           ? '<span class="badge warn">sem documento</span>'
           : `${DOCS[p.documentoTipo] || p.documentoTipo} ${App.esc(p.documentoNumero || '')}` },
-      { h: 'Vínculo', cell: p => `<span class="small muted">${VINC[(p.vinculo || {}).tipo] || 'Uso interno'}${p.vinculo && p.vinculo.refNome ? ': ' + App.esc(p.vinculo.refNome) : ''}</span>` },
-      { h: 'Pagamento', cell: p => `${App.esc(p.formaPagamento || '—')}${p.parcelas > 1 ? ` ${p.parcelas}x` : ''}` },
-      { h: 'Status', cell: p => App.badge(p.status) }
+      { h: 'Categoria', cell: p => `<span class="small">${App.esc(App.catCompraNome(p.categoria))}</span>` },
+      { h: 'Vínculo', cell: p => `<span class="small muted">${App.esc(App.vincCompraNome((p.vinculo || {}).tipo))}${p.vinculo && p.vinculo.refNome ? ': ' + App.esc(p.vinculo.refNome) : ''}</span>` },
+      { h: 'Pagamento', cell: p => `<span class="small">${App.esc(agendNome(p.tipoPagamento))}${p.parcelas > 1 ? ` · ${p.parcelas}x` : ''}</span>` },
+      { h: '', class: 'num', cell: p => `<button class="btn sm ghost" onclick="Purch.edit(${p.id})">✏️ Editar</button>` }
     ], { emptyMsg: 'Nenhuma compra registrada' })}`;
 
   window.Purch = {
-    create(prefill) {
-      const pf = prefill || {};
-      App.form('Nova compra', [
+    create(prefill) { Purch.openForm(prefill || {}, null); },
+    edit(id) {
+      const c = purchases.find(x => x.id === id);
+      if (!c) return;
+      Purch.openForm({
+        fornecedorId: c.fornecedorId, fornecedorNome: c.fornecedorNome, data: c.data,
+        valor: c.valor, documentoTipo: c.documentoTipo, documentoNumero: c.documentoNumero,
+        categoria: c.categoria, formaPagamento: c.formaPagamento, vencimento: c.vencimento,
+        parcelas: c.parcelas, tipoPagamento: c.tipoPagamento || 'programado',
+        agendamentoDia: c.agendamentoDia, agendamentoData: c.agendamentoData,
+        vinculo: c.vinculo || {}, itens: c.itens, observacoes: c.observacoes
+      }, id);
+    },
+
+    openForm(pf, editId) {
+      const vinc = pf.vinculo || {};
+      const m = App.form(editId ? 'Editar compra' : 'Nova compra', [
         { name: 'fornecedorId', label: 'Fornecedor', type: 'select', value: pf.fornecedorId || '',
           options: [{ value: '', label: '— avulso / outro —' }].concat(suppliers.map(s => ({ value: s.id, label: s.nome }))) },
         { name: 'fornecedorNome', label: 'Fornecedor avulso (se não cadastrado)', value: pf.fornecedorNome || '' },
@@ -43,31 +73,42 @@ App.registerView('purchases', async (view) => {
         { name: 'documentoTipo', label: 'Documento', type: 'select', value: pf.documentoTipo || 'nf',
           options: Object.entries(DOCS).map(([v, l]) => ({ value: v, label: l })) },
         { name: 'documentoNumero', label: 'Número do documento', value: pf.documentoNumero || '' },
-        { name: 'categoria', label: 'Categoria (para DRE)', type: 'select', value: pf.categoria || 'componentes', options: [
-          { value: 'componentes', label: 'Componentes' }, { value: 'materiais', label: 'Materiais' },
-          { value: 'custo_direto', label: 'Custo direto' }, { value: 'terceirizacao', label: 'Terceirização' },
-          { value: 'custo_producao', label: 'Custo de produção' }, { value: 'despesa_operacional', label: 'Despesa operacional' },
-          { value: 'manutencao', label: 'Manutenção' }] },
-        { name: 'formaPagamento', label: 'Forma de pagamento', type: 'select', value: 'boleto',
+        { name: 'categoria', label: 'Categoria (para custos e DRE)', type: 'select', value: pf.categoria || 'componentes',
+          options: App.CATCOMPRA.map(([v, l]) => ({ value: v, label: l })) },
+        { name: 'formaPagamento', label: 'Forma de pagamento', type: 'select', value: pf.formaPagamento || 'boleto',
           options: ['boleto', 'pix', 'cartao', 'dinheiro', 'cheque'].map(v => ({ value: v, label: v })) },
+        { name: 'tipoPagamento', label: 'Agendamento do pagamento', type: 'select', value: pf.tipoPagamento || 'programado',
+          options: AGEND.map(([v, l]) => ({ value: v, label: l })) },
         { name: 'vencimento', label: 'Vencimento', type: 'date', value: pf.vencimento || '' },
+        { name: 'agendamentoDia', label: 'Dia do pagamento no mês seguinte (1 a 28)', type: 'number', value: pf.agendamentoDia || 5 },
+        { name: 'agendamentoData', label: 'Data de pagamento combinada', type: 'date', value: pf.agendamentoData || '' },
         { name: 'parcelas', label: 'Parcelas', type: 'number', value: pf.parcelas || 1 },
-        { name: 'tipoPagamento', label: 'Agendamento', type: 'select', value: 'programado', options: [
-          { value: 'programado', label: 'Programado (sexta-feira anterior ao vencimento)' },
-          { value: 'imediato', label: 'Imediato (pago na data da compra)' }] },
-        { name: 'vinculoTipo', label: 'Vincular a', type: 'select', value: 'uso_interno',
-          options: Object.entries(VINC).map(([v, l]) => ({ value: v, label: l })) },
-        { name: 'vinculoRef', label: 'Referência do vínculo (nº OS / pedido / cliente)' },
+        { name: 'vinculoTipo', label: 'Vincular a', type: 'select',
+          value: vinc.tipo && App.VINCCOMPRA.some(x => x[0] === vinc.tipo) ? vinc.tipo : (vinc.tipo || 'sem_vinculo'),
+          options: App.VINCCOMPRA.map(([v, l]) => ({ value: v, label: l }))
+            .concat(vinc.tipo && !App.VINCCOMPRA.some(x => x[0] === vinc.tipo)
+              ? [{ value: vinc.tipo, label: App.vincCompraNome(vinc.tipo) + ' (antigo)' }] : []) },
+        { name: 'vinculoRefSel', label: 'Qual registro?', type: 'select', value: vinc.refId || '',
+          options: [{ value: '', label: '— selecione —' }] },
+        { name: 'vinculoRef', label: 'Referência do vínculo (texto livre)', value: vinc.refNome || '' },
         { name: 'itensTexto', label: 'Itens (um por linha: descrição ; qtd ; valor)', type: 'textarea',
           value: (pf.itens || []).map(i => `${i.descricao} ; ${i.qtd} ; ${i.valorUnit}`).join('\n'), full: true },
-        { name: 'observacoes', label: 'Observações', type: 'textarea', full: true }
+        { name: 'observacoes', label: 'Observações', type: 'textarea', value: pf.observacoes || '', full: true }
       ], async d => {
         const itens = (d.itensTexto || '').split('\n').map(l => l.trim()).filter(Boolean).map(l => {
           const [descricao, qtd, valorUnit] = l.split(';').map(x => x.trim());
           const q = Number(qtd) || 1, v = Number(valorUnit) || 0;
           return { descricao, qtd: q, valorUnit: v, total: q * v };
         });
-        await App.post('/purchases', {
+        // Vínculo: com registro escolhido, guarda o id e o nome do registro.
+        const tipoV = d.vinculoTipo;
+        const listaV = Purch._listaVinculo(tipoV);
+        let refId = null, refNome = d.vinculoRef || null;
+        if (listaV && d.vinculoRefSel) {
+          const escolhido = listaV.find(x => String(x.value) === String(d.vinculoRefSel));
+          if (escolhido) { refId = escolhido.value; refNome = escolhido.label; }
+        }
+        const corpo = {
           fornecedorId: d.fornecedorId ? Number(d.fornecedorId) : null,
           fornecedorNome: d.fornecedorNome,
           data: d.data, valor: Number(d.valor), itens,
@@ -75,14 +116,55 @@ App.registerView('purchases', async (view) => {
           categoria: d.categoria, formaPagamento: d.formaPagamento,
           vencimento: d.vencimento, parcelas: Number(d.parcelas) || 1,
           tipoPagamento: d.tipoPagamento,
-          vinculo: { tipo: d.vinculoTipo, refNome: d.vinculoRef || null },
+          agendamentoDia: d.tipoPagamento === 'inicio_mes' ? Number(d.agendamentoDia) || 5 : null,
+          agendamentoData: d.tipoPagamento === 'outro' ? d.agendamentoData : '',
+          vinculo: { tipo: tipoV, refId, refNome },
           observacoes: d.observacoes
-        });
-        App.closeModal();
-        App.toast('Compra registrada — contas a pagar geradas na agenda', 'ok');
+        };
+        if (editId) {
+          await App.put('/purchases/' + editId, corpo);
+          App.closeModal();
+          App.toast('Compra atualizada — contas a pagar e projeções acompanharam a mudança', 'ok');
+        } else {
+          await App.post('/purchases', corpo);
+          App.closeModal();
+          App.toast('Compra registrada — contas a pagar geradas na agenda', 'ok');
+        }
         App.route();
       }, { wide: true });
+
+      /* Explicações discretas embaixo dos seletores + campos condicionais. */
+      const campo = nome => { const el = m.querySelector(`[name="${nome}"]`); return el ? el.closest('label') : null; };
+      const mostra = (nome, sim) => { const l = campo(nome); if (l) l.style.display = sim ? '' : 'none'; };
+
+      App.explicarSelect(m, 'categoria', App.CATCOMPRA);
+      App.explicarSelect(m, 'tipoPagamento', AGEND, tipo => {
+        mostra('agendamentoDia', tipo === 'inicio_mes');
+        mostra('agendamentoData', tipo === 'outro');
+        mostra('vencimento', tipo !== 'imediato');
+      });
+      App.explicarSelect(m, 'vinculoTipo', App.VINCCOMPRA, tipo => {
+        const lista = Purch._listaVinculo(tipo);
+        mostra('vinculoRefSel', !!lista);
+        mostra('vinculoRef', !lista && tipo !== 'sem_vinculo');
+        if (lista) {
+          const sel = m.querySelector('[name="vinculoRefSel"]');
+          sel.innerHTML = '<option value="">— selecione —</option>' +
+            lista.map(o => `<option value="${o.value}" ${String(o.value) === String(vinc.refId || '') ? 'selected' : ''}>${App.esc(o.label)}</option>`).join('');
+        }
+      });
     },
+
+    /* Listas pesquisáveis do vínculo: cliente, OS ou pedido de venda. */
+    _listaVinculo(tipo) {
+      if (tipo === 'cliente') return clients.map(c => ({ value: c.id, label: c.nome }));
+      if (tipo === 'os') return serviceOrders.map(o => ({
+        value: o.id, label: `OS ${o.numero} — ${App.clientName(o.clienteId, clients)}${o.modelo ? ' · ' + o.modelo : ''}` }));
+      if (tipo === 'pedido') return sales.map(v => ({
+        value: v.id, label: `Pedido ${v.numero} — ${App.clientName(v.clienteId, clients)}` }));
+      return null;
+    },
+
     importNfe() {
       const m = App.modal(`
         <h2>Importar NF-e (XML)</h2>
