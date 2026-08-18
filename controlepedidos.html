@@ -1,0 +1,1493 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Martins Notari · Gestão de Obra</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --paper:#242528;          /* grafite da marca */
+    --surface:#2F3134;
+    --chrome:#1B1C1E;         /* faixas escuras (cabeçalhos) */
+    --ink:#F4F4F2;
+    --ink-2:#B6BABE;
+    --line:#3F4246;
+    --line-strong:#585C61;
+    --accent:#FFC629;         /* amarelo Martins Notari */
+    --accent-soft:rgba(255,198,41,.16);
+    --zebra:#33353A;
+    --hover:#3B3E44;
+    --sel:#463F1D;
+    --ok-fg:#6FDE9C; --ok-bg:#17402A;      /* Entregue */
+    --ped-fg:#82BFF0; --ped-bg:#1A3A55;    /* Pedido enviado */
+    --pen-fg:#F6CD57; --pen-bg:#4A3A10;    /* A pedir */
+    --danger:#F07A6C;
+    --danger-bg:#48221E;
+    --mono:'IBM Plex Mono',Consolas,monospace;
+    --sans:'IBM Plex Sans',Segoe UI,system-ui,sans-serif;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html{color-scheme:dark}
+  body{background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:14px;line-height:1.5;height:100vh;height:100dvh;overflow:hidden;padding:0}
+  /* app ocupa a tela inteira: só a área da tabela rola, o restante fica fixo */
+  .sheet{width:100%;height:100vh;height:100dvh;display:flex;flex-direction:column;background:var(--surface)}
+  [hidden]{display:none !important}
+  .carimbo,.banner-off,.modulos,.toolbar,.tabs{flex:none}
+  #modPedidos{display:flex;flex-direction:column;flex:1;min-height:0}
+  #modDiario,#modEditor{flex:1;min-height:0;overflow-y:auto}
+  #modEditor{padding:16px 18px 22px}
+
+  /* ── Marca ─────────────────────────────────────────── */
+  .brand{display:flex;align-items:center;gap:12px;min-width:0}
+  .brand .logo{width:54px;height:auto;flex:none}
+  .b-nome{display:block;font-weight:700;font-size:14px;letter-spacing:.08em;white-space:nowrap}
+  .b-sub{display:block;font-family:var(--mono);font-size:9px;letter-spacing:.32em;color:var(--ink-2);margin-top:2px}
+
+  /* ── Carimbo ───────────────────────────────────────── */
+  .carimbo{display:grid;grid-template-columns:auto 1fr auto auto auto;border-bottom:1.5px solid var(--chrome)}
+  .carimbo>div{padding:14px 18px;border-right:1px solid var(--line-strong)}
+  .carimbo>div:last-child{border-right:none}
+  .c-label{font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-2);display:block;margin-bottom:3px}
+  .c-value{font-weight:600;font-size:15px;white-space:nowrap}
+  .c-title .c-value{font-size:19px;letter-spacing:-.01em}
+  .c-title .c-value b{color:var(--accent)}
+  #obraNome{border:none;background:none;font:600 15px var(--sans);color:var(--ink);border-bottom:1px dashed var(--line-strong);min-width:160px;padding:0 2px;outline:none}
+  #obraNome:focus{border-bottom-color:var(--accent)}
+  .sync{display:inline-flex;align-items:center;gap:7px;font-size:13px}
+  .sync::before{content:"";width:9px;height:9px;border-radius:50%;background:var(--line-strong)}
+  .sync.ok::before{background:#58C97F}
+  .sync.off::before{background:var(--danger)}
+  .sync.conectando::before{background:var(--accent)}
+
+  /* ── Banner offline ────────────────────────────────── */
+  .banner-off{display:flex;gap:14px;align-items:center;justify-content:center;flex-wrap:wrap;background:var(--danger-bg);color:var(--danger);padding:10px 18px;font-size:13px;font-weight:500;border-bottom:1px solid var(--danger)}
+  .banner-off[hidden]{display:none}
+  .banner-off .btn{padding:6px 12px;border-color:var(--danger);color:var(--danger)}
+
+  /* ── Toolbar ───────────────────────────────────────── */
+  .toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:14px 18px;border-bottom:1px solid var(--line)}
+  .search{flex:1;min-width:200px;position:relative}
+  .search svg{position:absolute;left:11px;top:50%;transform:translateY(-50%);width:15px;height:15px;stroke:var(--ink-2)}
+  .search input{width:100%;padding:9px 12px 9px 34px;border:1px solid var(--line-strong);background:#26282B;font:inherit;color:var(--ink);border-radius:2px;outline:none}
+  .search input:focus{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-soft)}
+  .btn{display:inline-flex;align-items:center;gap:7px;padding:9px 15px;font:600 13px var(--sans);letter-spacing:.02em;cursor:pointer;border-radius:2px;border:1px solid var(--accent);background:var(--surface);color:var(--accent);white-space:nowrap}
+  .btn:hover{background:var(--accent-soft)}
+  .btn.primary{background:var(--accent);color:#1F2022}
+  .btn.primary:hover{background:#E6B01F}
+  .btn:disabled{opacity:.45;cursor:not-allowed}
+  .btn svg{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:2}
+  :is(.btn,.search input,.tab,th,.row-btn,input,select):focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+  /* ── Tabs ──────────────────────────────────────────── */
+  .tabs{display:flex;gap:0;flex-wrap:wrap;padding:0 18px;border-bottom:1.5px solid var(--chrome);background:var(--surface)}
+  .tab{padding:10px 16px 11px;border:none;background:none;font:500 13px var(--sans);color:var(--ink-2);cursor:pointer;border-bottom:3px solid transparent;margin-bottom:-1.5px;display:inline-flex;gap:7px;align-items:center}
+  .tab .n{font-family:var(--mono);font-size:11px;background:var(--paper);border:1px solid var(--line);padding:0 6px;border-radius:9px;color:var(--ink-2)}
+  .tab:hover{color:var(--ink)}
+  .tab.active{color:var(--accent);font-weight:600;border-bottom-color:var(--accent)}
+  .tab.active .n{background:var(--accent-soft);border-color:var(--accent);color:var(--accent)}
+
+  /* ── Tabela ────────────────────────────────────────── */
+  .table-wrap{flex:1;min-height:0;overflow:auto}
+  table{width:100%;border-collapse:separate;border-spacing:0;min-width:1080px}
+  thead th{position:sticky;top:0;z-index:2;background:var(--chrome);color:#fff;font:600 11px var(--mono);letter-spacing:.1em;text-transform:uppercase;text-align:left;padding:12px 14px;user-select:none;white-space:nowrap;border-bottom:2px solid var(--accent)}
+  thead th[data-col]{cursor:pointer}
+  thead th[data-col]:hover{background:#26282C}
+  thead th .arrow{display:inline-block;width:1em;opacity:.45;margin-left:4px}
+  thead th.sorted .arrow{opacity:1;color:var(--accent)}
+  td{padding:12px 14px;border-bottom:1px solid var(--line);vertical-align:middle}
+  tbody tr:nth-child(even) td{background:var(--zebra)}
+  tbody tr:hover td{background:var(--hover)}
+  tbody tr:hover td:first-child{box-shadow:inset 3px 0 0 var(--accent)}
+  tbody tr.selecionada td{background:var(--sel)}
+  .chk{width:34px;text-align:center}
+  .chk input{width:15px;height:15px;accent-color:var(--accent);cursor:pointer}
+  .num{text-align:right;font-family:var(--mono);font-size:13px;white-space:nowrap}
+  th.num{text-align:right}
+  .id{font-family:var(--mono);font-size:12px;color:var(--ink-2);white-space:nowrap}
+  .cat{font-size:12px;font-weight:500;color:var(--accent);white-space:nowrap}
+  .un{font-family:var(--mono);font-size:12px;text-align:center;color:var(--ink-2)}
+  th.un{text-align:center}
+  .desc{min-width:220px}
+  .data{font-family:var(--mono);font-size:13px;white-space:nowrap;text-align:center}
+  th.data{text-align:center}
+  .data.vazia{color:var(--ink-2)}
+  .pill{display:inline-block;padding:3px 10px;border-radius:2px;font:600 11px var(--mono);letter-spacing:.05em;text-transform:uppercase;white-space:nowrap}
+  .pill.pedir{background:var(--pen-bg);color:var(--pen-fg)}
+  .pill.enviado{background:var(--ped-bg);color:var(--ped-fg)}
+  .pill.entregue{background:var(--ok-bg);color:var(--ok-fg)}
+  /* select-badge: troca a situação direto na linha, sem abrir o modal */
+  .sel-sit{appearance:none;-webkit-appearance:none;border:1px solid transparent;border-radius:2px;font:600 11px var(--mono);letter-spacing:.05em;text-transform:uppercase;padding:5px 24px 5px 10px;cursor:pointer;white-space:nowrap;background-repeat:no-repeat;background-position:right 8px center;background-size:9px 6px}
+  .sel-sit:hover{border-color:currentColor}
+  .sel-sit:disabled{opacity:.55;cursor:progress}
+  .sel-sit option{background:var(--surface);color:var(--ink);text-transform:none;font-family:var(--sans)}
+  .sel-sit.pedir{background-color:var(--pen-bg);color:var(--pen-fg);background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23F6CD57' stroke-width='1.8'/%3E%3C/svg%3E")}
+  .sel-sit.enviado{background-color:var(--ped-bg);color:var(--ped-fg);background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%2382BFF0' stroke-width='1.8'/%3E%3C/svg%3E")}
+  .sel-sit.entregue{background-color:var(--ok-bg);color:var(--ok-fg);background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%236FDE9C' stroke-width='1.8'/%3E%3C/svg%3E")}
+  .acoes{white-space:nowrap;text-align:right;width:76px}
+  .row-btn{border:none;background:none;cursor:pointer;padding:5px;border-radius:2px;color:var(--ink-2);vertical-align:middle}
+  .row-btn:hover{background:var(--accent-soft);color:var(--accent)}
+  .row-btn.del:hover{background:var(--danger-bg);color:var(--danger)}
+  .row-btn svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:1.8;display:block}
+  .empty-cell td{text-align:center;padding:48px 20px;color:var(--ink-2)}
+  .empty-cell .btn{margin:14px 6px 0}
+
+  /* ── Rodapé ────────────────────────────────────────── */
+  tfoot td{position:sticky;bottom:0;background:var(--chrome);color:#fff;font-family:var(--mono);padding:12px 14px;border-top:2px solid var(--accent);white-space:nowrap}
+  tfoot .lbl{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:#9FA3A7}
+  tfoot .resumo{font-size:12px;text-align:right}
+  tfoot .resumo b{color:var(--accent);font-weight:600}
+
+  /* ── Dialogs ───────────────────────────────────────── */
+  dialog{border:1.5px solid var(--chrome);border-radius:0;box-shadow:8px 8px 0 rgba(0,0,0,.4);padding:0;max-width:520px;width:calc(100vw - 40px);font-family:var(--sans);color:var(--ink);background:var(--surface)}
+  dialog::backdrop{background:rgba(0,0,0,.6)}
+  .dlg-head{background:var(--chrome);color:#fff;padding:12px 18px;font:600 12px var(--mono);letter-spacing:.12em;text-transform:uppercase;display:flex;justify-content:space-between;align-items:center}
+  .dlg-head button{background:none;border:none;color:#9FA3A7;font-size:18px;cursor:pointer;line-height:1}
+  .dlg-body{padding:18px}
+  .campo{margin-bottom:14px}
+  .campo label{display:block;font-family:var(--mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-2);margin-bottom:4px}
+  .campo input,.campo select{width:100%;padding:8px 10px;border:1px solid var(--line-strong);font:inherit;color:var(--ink);background:#26282B;border-radius:2px;outline:none}
+  .campo input:focus,.campo select:focus{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-soft)}
+  .campo input:disabled{background:var(--paper);color:var(--ink-2)}
+  .grid-2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .grid-3{display:grid;grid-template-columns:1.2fr .8fr 1fr;gap:12px}
+  .dlg-erro{display:none;background:var(--danger-bg);color:var(--danger);font-size:13px;padding:8px 12px;margin-bottom:12px;border-left:3px solid var(--danger)}
+  .dlg-erro.on{display:block}
+  .dlg-foot{display:flex;justify-content:flex-end;gap:10px;padding:14px 18px;border-top:1px solid var(--line);background:var(--paper)}
+  .btn.danger{border-color:var(--danger);color:var(--danger)}
+  .btn.danger:hover{background:var(--danger-bg)}
+  #dlgConfirma p{font-size:14px}
+  #dlgConfirma .dlg-body b{font-weight:600}
+
+  /* ── Módulos (Pedidos | Diário) ────────────────────── */
+  .modulos{display:flex;border-bottom:1.5px solid var(--chrome);background:var(--chrome)}
+  .mod{flex:none;padding:12px 22px;border:none;background:none;color:#9FA3A7;font:600 13px var(--sans);letter-spacing:.04em;cursor:pointer;border-bottom:3px solid transparent}
+  .mod:hover{color:#fff}
+  .mod.active{color:var(--accent);border-bottom-color:var(--accent)}
+
+  /* ── Diário de Obra ────────────────────────────────── */
+  #modDiario{padding:16px 18px 22px}
+  .d-aviso{background:var(--danger-bg);color:var(--danger);padding:10px 14px;font-size:13px;margin-bottom:14px;border-left:3px solid var(--danger)}
+  .d-topo{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
+  .d-topo input[type=date]{padding:8px 10px;border:1px solid var(--line-strong);background:#26282B;color:var(--ink);font:inherit;border-radius:2px}
+  .d-topo .btn{padding:8px 12px}
+  .d-rdo{font-family:var(--mono);font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-2)}
+  .d-rdo b{color:var(--accent);font-size:14px}
+  .d-dias{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px}
+  .chip-dia{font-family:var(--mono);font-size:11px;padding:4px 9px;border:1px solid var(--line-strong);background:none;color:var(--ink-2);cursor:pointer;border-radius:2px}
+  .chip-dia:hover{color:var(--ink)}
+  .chip-dia.active{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
+  .d-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .card{border:1px solid var(--line);background:#2A2C30;padding:14px}
+  .card.full{grid-column:1/-1}
+  .card h3{font:600 11px var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin-bottom:12px;display:flex;justify-content:space-between;align-items:baseline;gap:10px}
+  .total-efetivo{font-family:var(--mono);font-size:10px;letter-spacing:.05em;color:var(--ink-2);text-transform:none}
+  .linha-din{display:grid;gap:8px;margin-bottom:8px;align-items:center}
+  .linha-din input,.linha-din select,.card textarea,.card input[type=text],.card input[type=number],.card select{padding:7px 9px;border:1px solid var(--line-strong);background:#26282B;color:var(--ink);font:inherit;font-size:13px;border-radius:2px;width:100%}
+  .card textarea{min-height:64px;resize:vertical}
+  .lbl-min{display:block;font-family:var(--mono);font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-2);margin-bottom:4px}
+  .clima-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .btn-mini{border:1px dashed var(--line-strong);background:none;color:var(--ink-2);font:500 12px var(--sans);padding:7px 10px;cursor:pointer;border-radius:2px;width:100%}
+  .btn-mini:hover{color:var(--accent);border-color:var(--accent)}
+  .x-lin{border:none;background:none;color:var(--ink-2);cursor:pointer;font-size:14px;padding:4px;line-height:1}
+  .x-lin:hover{color:var(--danger)}
+  .fotos-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:10px;margin-top:10px}
+  .foto{position:relative;border:1px solid var(--line);background:#26282B}
+  .foto img{width:100%;height:84px;object-fit:cover;display:block}
+  .foto button{position:absolute;top:3px;right:3px;background:rgba(0,0,0,.7);border:none;color:#fff;cursor:pointer;font-size:11px;padding:2px 7px;border-radius:2px}
+  .foto .nomef{display:block;font-size:9px;font-family:var(--mono);color:var(--ink-2);padding:3px 6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .d-rodape{display:flex;justify-content:flex-end;margin-top:14px}
+  .d-status{font-size:12px;color:var(--ink-2);font-family:var(--mono)}
+  .d-status.dirty{color:var(--pen-fg)}
+  /* ── Galeria de diários ────────────────────────────── */
+  .h-topo{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px}
+  .d-layout{display:grid;grid-template-columns:264px 1fr;gap:18px;align-items:start}
+  .cal{border:1px solid var(--line);background:#2A2C30;padding:12px;position:sticky;top:12px}
+  .cal-topo{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px}
+  .cal-topo .btn{padding:5px 10px}
+  .cal-mes{font:600 12px var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--ink);text-align:center;flex:1}
+  .cal-semana{display:grid;grid-template-columns:repeat(7,1fr);gap:3px;margin-bottom:4px}
+  .cal-semana span{text-align:center;font:600 10px var(--mono);color:var(--ink-2)}
+  .cal-grade{display:grid;grid-template-columns:repeat(7,1fr);gap:3px}
+  .cal-dia{aspect-ratio:1;border:1px solid transparent;background:none;color:var(--ink-2);font-family:var(--mono);font-size:12px;cursor:pointer;border-radius:3px;position:relative;display:flex;align-items:center;justify-content:center}
+  .cal-dia.vazio-cel{cursor:default}
+  .cal-dia.domes{color:var(--ink)}
+  .cal-dia.domes:hover{background:var(--hover)}
+  .cal-dia.hoje{border-color:var(--line-strong)}
+  .cal-dia.tem{background:var(--accent-soft);color:var(--accent);font-weight:600}
+  .cal-dia.tem::after{content:"";position:absolute;bottom:3px;left:50%;transform:translateX(-50%);width:4px;height:4px;border-radius:50%;background:var(--accent)}
+  .cal-dia.sel{outline:2px solid var(--accent);outline-offset:-1px}
+  .cal-legenda{display:flex;align-items:center;gap:7px;margin-top:10px;font-size:11px;color:var(--ink-2)}
+  .cal-legenda .pt{width:9px;height:9px;border-radius:50%;background:var(--accent);flex:none}
+  .h-titulo{font:600 11px var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--ink-2)}
+  .h-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:14px}
+  .h-card{border:1px solid var(--line);background:#2A2C30;cursor:pointer;transition:border-color .12s,transform .12s}
+  .h-card:hover{border-color:var(--accent);transform:translateY(-2px)}
+  .h-capa{height:128px;background-color:#26282B;background-size:cover;background-position:center}
+  .h-capa.sem{display:flex;align-items:center;justify-content:center;font:500 10px var(--mono);letter-spacing:.14em;text-transform:uppercase;color:#5A5D61}
+  .h-info{padding:10px 12px 12px}
+  .h-linha1{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+  .h-data{font-weight:700;font-size:15px}
+  .h-rdo{font-family:var(--mono);font-size:10px;letter-spacing:.08em;color:var(--accent);white-space:nowrap}
+  .h-sem{font-size:12px;color:var(--ink-2);margin-top:2px}
+  .h-sem::first-letter{text-transform:uppercase}
+  .h-tags{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+  .h-tags span{font-family:var(--mono);font-size:10px;padding:2px 7px;border:1px solid var(--line);color:var(--ink-2);border-radius:2px}
+  .h-ocorr{margin-top:8px;font:600 11px var(--mono);color:var(--pen-fg)}
+  .h-vazio{grid-column:1/-1;text-align:center;padding:44px 20px;color:var(--ink-2)}
+  .intel-lista{display:flex;flex-direction:column;gap:8px;max-height:44vh;overflow:auto}
+  .intel-item{display:flex;gap:10px;align-items:center;border:1px solid var(--line);padding:8px 10px;background:#26282B}
+  .intel-item input{width:16px;height:16px;accent-color:var(--accent);flex:none}
+  .intel-item .cod{font-family:var(--mono);font-size:11px;color:var(--accent)}
+  .intel-item .ds{font-size:13px}
+  .intel-item .sit{font-family:var(--mono);font-size:10px;color:var(--ink-2);margin-left:auto;white-space:nowrap}
+
+  /* RDO impresso */
+  .rdo-h{width:calc(100% - 36px);margin:16px auto 0;font:600 10px var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--ink-2)}
+  .folha .rdo-h + table{margin-top:6px}
+  .rdo-texto{width:calc(100% - 36px);margin:4px auto 0;font-size:13px;white-space:pre-wrap}
+  .rdo-fotos{display:grid;grid-template-columns:1fr 1fr;gap:10px;width:calc(100% - 36px);margin:8px auto 0}
+  .rdo-fotos figure{break-inside:avoid;margin:0}
+  .rdo-fotos img{width:100%;border:1px solid var(--line-strong);display:block}
+
+  /* ── Folha de Pedido (overlay + impressão) ─────────── */
+  .overlay{position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:50;overflow:auto;padding:24px}
+  .overlay[hidden]{display:none}
+  .overlay-bar{max-width:800px;margin:0 auto 14px;display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap}
+  .overlay-bar .btn{background:var(--surface)}
+  .overlay-bar .btn.primary{background:var(--accent);color:#1F2022}
+  /* a folha de pedido é um documento impresso: continua clara, com o dourado legível no papel */
+  .folha{--ink:#20211F;--ink-2:#5F625E;--line:#D9DAD6;--line-strong:#A3A59F;--chrome:#20211F;--accent-folha:#8A6D00;
+    max-width:800px;margin:0 auto;background:#fff;border:1.5px solid var(--ink);padding:0 0 28px;color:var(--ink)}
+  .folha .c-title .c-value b{color:var(--accent-folha)}
+  .f-brand{display:flex;align-items:center;gap:12px;padding:14px 18px;border-bottom:1.5px solid var(--ink)}
+  .f-brand .logo{width:46px;height:auto}
+  .f-carimbo{display:grid;grid-template-columns:1fr auto auto;border-bottom:1.5px solid var(--ink)}
+  .f-carimbo>div{padding:13px 18px;border-right:1px solid var(--line-strong)}
+  .f-carimbo>div:last-child{border-right:none}
+  .f-sub{display:grid;grid-template-columns:1fr 1fr;border-bottom:1.5px solid var(--ink)}
+  .f-sub>div{padding:11px 18px;border-right:1px solid var(--line-strong)}
+  .f-sub>div:last-child{border-right:none}
+  .folha table{min-width:0;width:calc(100% - 36px);margin:18px auto 0;border:1px solid var(--line-strong)}
+  .folha thead th{position:static;background:var(--ink);border-bottom:2px solid var(--accent);cursor:default}
+  .folha td{border-bottom:1px solid var(--line)}
+  .folha .obs{width:26%;color:var(--ink-2)}
+  .f-total{width:calc(100% - 36px);margin:10px auto 0;font:600 12px var(--mono);letter-spacing:.08em;text-transform:uppercase;text-align:right;color:var(--ink-2)}
+  .f-assin{display:flex;gap:40px;width:calc(100% - 36px);margin:44px auto 0}
+  .f-assin div{flex:1;border-top:1px solid var(--ink);padding-top:6px;font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-2);text-align:center}
+  @media print{
+    body{padding:0;background:#fff;height:auto;overflow:visible}
+    .sheet,.overlay-bar,.banner-off{display:none !important}
+    .overlay{position:static;padding:0;background:none;overflow:visible}
+    .folha{border:none;max-width:none}
+    .folha thead th{background:#fff !important;color:var(--ink) !important;border-bottom:2px solid var(--ink)}
+    .pill{border:1px solid currentColor}
+  }
+
+  @media (max-width:720px){
+    .carimbo{grid-template-columns:1fr 1fr}
+    .brand{grid-column:1/-1}
+    .carimbo>div{border-bottom:1px solid var(--line)}
+    .toolbar{padding:12px}
+    .tabs{padding:0 8px}
+    .grid-2,.grid-3{grid-template-columns:1fr}
+    .d-grid,.clima-grid{grid-template-columns:1fr}
+    #modDiario{padding:12px}
+    .d-layout{grid-template-columns:1fr}
+    .cal{position:static}
+  }
+  @media (prefers-reduced-motion:no-preference){
+    tbody tr td{transition:background .12s}
+  }
+</style>
+</head>
+<body>
+
+<div class="sheet">
+
+  <div class="carimbo">
+    <div class="brand">
+      <svg class="logo" viewBox="0 0 100 56" aria-hidden="true"><g transform="skewX(-12) translate(12 4)"><polyline points="1,26 9,41 22,7 35,41 48,7 61,41 74,7 87,41" fill="none" stroke="#FFC629" stroke-width="12" stroke-linejoin="bevel"/></g></svg>
+      <div><span class="b-nome">MARTINS NOTARI</span><span class="b-sub">CONSTRUTORA</span></div>
+    </div>
+    <div class="c-title">
+      <span class="c-label">Documento</span>
+      <span class="c-value"><b>MN</b> · Gestão de Obra</span>
+    </div>
+    <div>
+      <span class="c-label">Obra</span>
+      <input id="obraNome" placeholder="clique para nomear" aria-label="Nome da obra">
+    </div>
+    <div><span class="c-label">Data</span><span class="c-value" id="dataHoje"></span></div>
+    <div><span class="c-label">Sincronização</span><span class="c-value sync conectando" id="sync">Conectando…</span></div>
+  </div>
+
+  <div class="banner-off" id="bannerOff" hidden>
+    <span>Sem conexão com o servidor — mostrando a última cópia salva neste computador. Edições estão bloqueadas para não haver perda de dados.</span>
+    <button class="btn" id="btnReconectar">Reconectar</button>
+  </div>
+
+  <nav class="modulos">
+    <button class="mod active" data-mod="pedidos">Pedidos de Materiais</button>
+    <button class="mod" data-mod="diario">Diário de Obra</button>
+  </nav>
+
+  <section id="modPedidos">
+
+  <div class="toolbar">
+    <div class="search">
+      <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg>
+      <input type="search" id="busca" placeholder="Buscar por código, descrição, categoria ou situação…" aria-label="Buscar materiais">
+    </div>
+    <button class="btn primary" id="btnNovo">
+      <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+      Novo insumo
+    </button>
+    <button class="btn" id="btnFolha" title="Gera uma folha de pedido imprimível com os itens selecionados">
+      <svg viewBox="0 0 24 24"><path d="M6 9V3h12v6M6 18H4v-7h16v7h-2"/><path d="M6 14h12v7H6z"/></svg>
+      Folha de pedido <span id="selCount"></span>
+    </button>
+    <button class="btn" id="btnCSV">
+      <svg viewBox="0 0 24 24"><path d="M12 3v12m0 0l-4-4m4 4l4-4"/><path d="M4 17v3h16v-3"/></svg>
+      CSV
+    </button>
+  </div>
+
+  <div class="tabs" id="tabs" role="tablist"></div>
+
+  <div class="table-wrap">
+    <table id="tabela">
+      <thead>
+        <tr>
+          <th class="chk"><input type="checkbox" id="chkTodos" aria-label="Selecionar todos os itens visíveis"></th>
+          <th data-col="codigo">Código<span class="arrow"></span></th>
+          <th data-col="cat">Categoria<span class="arrow"></span></th>
+          <th data-col="desc">Descrição do Material<span class="arrow"></span></th>
+          <th data-col="un" class="un">Un<span class="arrow"></span></th>
+          <th data-col="qtd" class="num">Qtd.<span class="arrow"></span></th>
+          <th data-col="criadoEm" class="data">Lançado em<span class="arrow"></span></th>
+          <th data-col="dataPedido" class="data">Data do Pedido<span class="arrow"></span></th>
+          <th data-col="dataEntrega" class="data">Entrega<span class="arrow"></span></th>
+          <th data-col="situacao">Situação<span class="arrow"></span></th>
+          <th class="acoes">Ações</th>
+        </tr>
+      </thead>
+      <tbody id="corpo"><tr class="empty-cell"><td colspan="11">Conectando ao servidor…</td></tr></tbody>
+      <tfoot>
+        <tr>
+          <td colspan="5"><span class="lbl" id="contagem"></span></td>
+          <td colspan="6" class="resumo" id="resumo"></td>
+        </tr>
+      </tfoot>
+    </table>
+  </div>
+
+  </section>
+
+  <!-- ── Diário de Obra: galeria ────────────────────── -->
+  <section id="modDiario" hidden>
+    <div class="h-topo">
+      <span class="h-titulo">Diários registrados — clique num cartão para ver o RDO</span>
+      <span style="flex:1"></span>
+      <button class="btn" id="hAtualizar">Atualizar</button>
+      <button class="btn primary" id="hNovo">+ Registrar diário</button>
+    </div>
+    <div class="d-layout">
+      <aside class="cal">
+        <div class="cal-topo">
+          <button class="btn" id="calAnt" title="Mês anterior">◀</button>
+          <span class="cal-mes" id="calMes"></span>
+          <button class="btn" id="calProx" title="Mês seguinte">▶</button>
+        </div>
+        <div class="cal-semana"><span>D</span><span>S</span><span>T</span><span>Q</span><span>Q</span><span>S</span><span>S</span></div>
+        <div class="cal-grade" id="calGrade"></div>
+        <div class="cal-legenda"><span class="pt"></span> dia com registro</div>
+      </aside>
+      <div class="h-grid" id="hGrid"></div>
+    </div>
+  </section>
+
+  <!-- ── Diário de Obra: editor de um dia ───────────── -->
+  <section id="modEditor" hidden>
+    <div class="d-aviso" id="dAviso" hidden></div>
+    <div class="d-topo">
+      <button class="btn" id="dVoltar">◀ Diários</button>
+      <button class="btn" id="dAnt" title="Dia anterior">◀</button>
+      <input type="date" id="dData" aria-label="Data do diário">
+      <button class="btn" id="dProx" title="Dia seguinte">▶</button>
+      <span class="d-rdo" id="dRdoInfo"></span>
+      <span style="flex:1"></span>
+      <button class="btn danger" id="dExcluir">Excluir dia</button>
+      <button class="btn" id="dImprimir">Imprimir RDO</button>
+      <button class="btn primary" id="dSalvar">Salvar diário</button>
+    </div>
+    <div class="d-dias" id="dChips"></div>
+    <div class="d-grid">
+      <div class="card">
+        <h3>Condições do dia</h3>
+        <div class="clima-grid">
+          <div><span class="lbl-min">Clima — manhã</span>
+            <select id="dClimaM"><option value=""></option><option>Claro</option><option>Nublado</option><option>Chuvoso</option></select></div>
+          <div><span class="lbl-min">Clima — tarde</span>
+            <select id="dClimaT"><option value=""></option><option>Claro</option><option>Nublado</option><option>Chuvoso</option></select></div>
+          <div><span class="lbl-min">Praticabilidade</span>
+            <select id="dPratic"><option value=""></option><option>Praticável</option><option>Parcialmente praticável</option><option>Impraticável</option></select></div>
+          <div><span class="lbl-min">Chuva (mm)</span><input type="number" id="dChuva" min="0" step="any" placeholder="0"></div>
+        </div>
+      </div>
+      <div class="card">
+        <h3>Mão de obra <span class="total-efetivo" id="dTotEfetivo"></span></h3>
+        <div id="dEfetivo"></div>
+        <button class="btn-mini" data-add="efetivo">+ adicionar função</button>
+      </div>
+      <div class="card">
+        <h3>Equipamentos</h3>
+        <div id="dEquip"></div>
+        <button class="btn-mini" data-add="equip">+ adicionar equipamento</button>
+      </div>
+      <div class="card">
+        <h3>Atividades executadas</h3>
+        <div id="dAtiv"></div>
+        <button class="btn-mini" data-add="ativ">+ adicionar atividade</button>
+      </div>
+      <div class="card">
+        <h3>Ocorrências / paralisações</h3>
+        <textarea id="dOcorr" placeholder="Paralisações, retrabalhos, faltas, condições que afetaram o serviço… (em branco = sem ocorrências)"></textarea>
+        <span class="lbl-min" style="margin-top:10px">Acidentes de trabalho</span>
+        <input type="text" id="dAcid" placeholder="Nenhum">
+      </div>
+      <div class="card">
+        <h3>Visitas e recebimentos</h3>
+        <span class="lbl-min">Visitas à obra (fiscalização, projetista, cliente…)</span>
+        <textarea id="dVisitas" style="min-height:44px"></textarea>
+        <span class="lbl-min" style="margin-top:10px">Materiais recebidos no dia</span>
+        <textarea id="dReceb" style="min-height:44px"></textarea>
+      </div>
+      <div class="card full">
+        <h3>Fotos do dia</h3>
+        <input type="file" id="dFotosInput" accept="image/*" multiple hidden>
+        <button class="btn-mini" id="dAddFotos" type="button">+ adicionar fotos (comprimidas automaticamente)</button>
+        <div class="fotos-grid" id="dFotos"></div>
+      </div>
+      <div class="card full">
+        <h3>Fechamento</h3>
+        <div class="clima-grid">
+          <div><span class="lbl-min">Responsável pelo preenchimento</span>
+            <select id="dResp"><option value=""></option><option>João Vitor</option><option>Jessica Ribeiro</option></select></div>
+          <div><span class="lbl-min">Observações gerais</span><input type="text" id="dObs"></div>
+        </div>
+      </div>
+    </div>
+    <div class="d-rodape"><span class="d-status" id="dStatus"></span></div>
+  </section>
+
+</div>
+
+<!-- ── Modal de cadastro/edição ─────────────────────────────────────── -->
+<dialog id="dlgForm">
+  <form method="dialog" id="formInsumo" novalidate>
+    <div class="dlg-head"><span id="dlgTitulo">Novo insumo</span><button type="button" data-fecha aria-label="Fechar">✕</button></div>
+    <div class="dlg-body">
+      <div class="dlg-erro" id="dlgErro"></div>
+      <div class="grid-2">
+        <div class="campo">
+          <label for="fCat">Categoria</label>
+          <input id="fCat" list="listaCats" placeholder="ex: Elétrica" autocomplete="off">
+          <datalist id="listaCats"></datalist>
+        </div>
+        <div class="campo">
+          <label for="fCodigo">Código</label>
+          <input id="fCodigo" placeholder="gerado automaticamente" autocomplete="off" style="font-family:var(--mono)">
+        </div>
+      </div>
+      <div class="campo">
+        <label for="fDesc">Descrição do material</label>
+        <input id="fDesc" placeholder="ex: Cimento CP II-E-32 (saco 50 kg)" autocomplete="off">
+      </div>
+      <div class="grid-3">
+        <div class="campo">
+          <label for="fUn">Unidade</label>
+          <input id="fUn" list="listaUn" placeholder="Un" autocomplete="off">
+          <datalist id="listaUn">
+            <option value="Un"><option value="Kg"><option value="M"><option value="M²"><option value="M³">
+            <option value="L"><option value="Br"><option value="Rl"><option value="Sc"><option value="Cx">
+            <option value="Bd"><option value="Mi"><option value="Pç"><option value="Jg">
+          </datalist>
+        </div>
+        <div class="campo">
+          <label for="fQtd">Quantidade</label>
+          <input id="fQtd" type="number" min="0.01" step="any" inputmode="decimal">
+        </div>
+        <div class="campo">
+          <label for="fSituacao">Situação</label>
+          <select id="fSituacao">
+            <option>A Pedir</option>
+            <option>Pedido Enviado</option>
+            <option>Entregue</option>
+          </select>
+        </div>
+      </div>
+      <div class="grid-2">
+        <div class="campo">
+          <label for="fData">Data do pedido</label>
+          <input id="fData" type="date">
+        </div>
+        <div class="campo">
+          <label for="fEntrega">Data de entrega</label>
+          <input id="fEntrega" type="date">
+        </div>
+      </div>
+    </div>
+    <div class="dlg-foot">
+      <button type="button" class="btn" data-fecha>Cancelar</button>
+      <button type="submit" class="btn primary" id="btnSalvar">Salvar</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- ── Modal de confirmação de exclusão ─────────────────────────────── -->
+<dialog id="dlgConfirma">
+  <div class="dlg-head"><span>Excluir insumo</span><button type="button" data-fecha aria-label="Fechar">✕</button></div>
+  <div class="dlg-body"><p id="confirmaTexto"></p></div>
+  <div class="dlg-foot">
+    <button type="button" class="btn" data-fecha>Cancelar</button>
+    <button type="button" class="btn danger" id="btnExcluir">Excluir</button>
+  </div>
+</dialog>
+
+<!-- ── Modal de inteligência (materiais citados x pedidos) ──────────── -->
+<dialog id="dlgIntel">
+  <div class="dlg-head"><span>Materiais citados no diário</span><button type="button" data-fecha aria-label="Fechar">✕</button></div>
+  <div class="dlg-body">
+    <p style="font-size:13px;margin-bottom:12px">Você citou no diário de <b id="intelData"></b> materiais que ainda <b>não estão marcados como Entregues</b> no controle de pedidos:</p>
+    <div id="intelLista" class="intel-lista"></div>
+    <p style="font-size:12px;color:var(--ink-2);margin-top:12px">Marcar os selecionados como <b>Entregue</b> com a data deste diário?</p>
+  </div>
+  <div class="dlg-foot">
+    <button type="button" class="btn" data-fecha>Agora não</button>
+    <button type="button" class="btn primary" id="btnIntelMarcar">Marcar como entregue</button>
+  </div>
+</dialog>
+
+<!-- ── Folha de Pedido / RDO ────────────────────────────────────────── -->
+<div class="overlay" id="overlay" hidden>
+  <div class="overlay-bar">
+    <button class="btn" id="btnFecharFolha">Fechar</button>
+    <button class="btn" id="btnEditarRdo" hidden>✎ Editar diário</button>
+    <button class="btn" id="btnMarcarEnviado" title="Marca os itens da folha como Pedido Enviado com a data de hoje">Marcar itens como enviados</button>
+    <button class="btn primary" id="btnImprimir">Imprimir / Salvar PDF</button>
+  </div>
+  <div class="folha" id="folha"></div>
+</div>
+
+<script>
+"use strict";
+// ═══ Servidor compartilhado (Supabase) ════════════════════════════════
+const SUPA = {
+  url: "https://hqntweowmufyppvawohv.supabase.co",
+  key: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhxbnR3ZW93bXVmeXBwdmF3b2h2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQxMzYxOTYsImV4cCI6MjA5OTcxMjE5Nn0.8bMJsv24JjPCshdsvWC0cC3dTNrgKcBpeh7ISTWeVX0"
+};
+const CACHE = "controlePedidos.v1";   // cópia local p/ visualização offline
+const INTERVALO_SYNC = 10000;         // ms entre verificações de novidades
+
+async function api(caminho, opts = {}){
+  const r = await fetch(SUPA.url + "/rest/v1/" + caminho, Object.assign({}, opts, {
+    headers: Object.assign({
+      apikey: SUPA.key,
+      Authorization: "Bearer " + SUPA.key,
+      "Content-Type": "application/json"
+    }, opts.headers || {})
+  }));
+  if(!r.ok) throw new Error("HTTP " + r.status + ": " + await r.text());
+  const txt = await r.text();
+  return txt ? JSON.parse(txt) : null;
+}
+
+// colunas do banco <-> objeto usado na interface
+const toRow = d => ({ id:d.id, codigo:d.codigo, categoria:d.cat, descricao:d.desc, unidade:d.un, qtd:d.qtd, criado_em:d.criadoEm, data_pedido:d.dataPedido, data_entrega:d.dataEntrega, situacao:d.situacao, atualizado_em:new Date().toISOString() });
+const fromRow = r => ({ id:r.id, codigo:r.codigo, cat:r.categoria, desc:r.descricao, un:r.unidade, qtd:Number(r.qtd), criadoEm:r.criado_em, dataPedido:r.data_pedido, dataEntrega:r.data_entrega, situacao:r.situacao });
+
+const upsertItens = itens => api("itens", { method:"POST", headers:{ Prefer:"resolution=merge-duplicates" }, body: JSON.stringify(itens.map(toRow)) });
+const apagarItemServidor = id => api("itens?id=eq." + encodeURIComponent(id), { method:"DELETE" });
+const salvarConfigServidor = () => api("config", { method:"POST", headers:{ Prefer:"resolution=merge-duplicates" },
+  body: JSON.stringify([{ chave:"obra", valor: store.obra }, { chave:"proxFolha", valor: String(store.proxFolha) }]) });
+
+// ═══ Estado ═══════════════════════════════════════════════════════════
+let store = { itens: [], obra: "", proxFolha: 1 };
+let online = false;
+let fotoServidor = "";               // p/ detectar mudanças vindas da outra pessoa
+
+let filtroTexto = "";
+let filtroCat = "Todos";
+let sortCol = "codigo", sortDir = 1;
+let selecao = new Set();
+let editandoId = null;
+let excluindoId = null;
+let itensFolha = [];
+
+const $ = s => document.querySelector(s);
+const $$ = s => [...document.querySelectorAll(s)];
+const escHtml = s => String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const fmtNum = v => Number(v).toLocaleString("pt-BR");
+const fmtData = iso => iso ? iso.split("-").reverse().join("/") : "—";
+const hoje = () => { const d = new Date(); return d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0") + "-" + String(d.getDate()).padStart(2,"0"); };
+const novoId = () => "i" + Date.now().toString(36) + Math.random().toString(36).slice(2,7);
+const SITUACOES = ["A Pedir", "Pedido Enviado", "Entregue"];
+const PESO_SITUACAO = { "A Pedir":0, "Pedido Enviado":1, "Entregue":2 };
+const CLS_SITUACAO = { "A Pedir":"pedir", "Pedido Enviado":"enviado", "Entregue":"entregue" };
+const MSG_OFFLINE = "Sem conexão com o servidor. Use o botão Reconectar no topo da página.";
+
+function salvarCache(){ localStorage.setItem(CACHE, JSON.stringify(store)); }
+function lerCache(){ try { const c = JSON.parse(localStorage.getItem(CACHE)); if(c && Array.isArray(c.itens)) return c; } catch(e){} return null; }
+
+function setSync(estado){
+  const el = $("#sync");
+  el.className = "c-value sync " + estado;
+  el.textContent = estado === "ok" ? "Sincronizado" : estado === "off" ? "Offline" : "Conectando…";
+  $("#bannerOff").hidden = estado !== "off";
+  $("#btnNovo").disabled = estado !== "ok";
+}
+function exigirOnline(){ if(!online){ alert(MSG_OFFLINE); return false; } return true; }
+
+// ═══ Carga inicial + sincronização ════════════════════════════════════
+async function baixarEstado(){
+  const [rows, conf] = await Promise.all([ api("itens?select=*"), api("config?select=*") ]);
+  return { rows, conf };
+}
+function aplicarEstado(rows, conf){
+  store.itens = rows.map(fromRow);
+  const c = Object.fromEntries((conf || []).map(x => [x.chave, x.valor]));
+  store.obra = c.obra || "";
+  store.proxFolha = parseInt(c.proxFolha, 10) || 1;
+  fotoServidor = JSON.stringify(rows) + JSON.stringify(conf);
+  salvarCache();
+}
+
+async function iniciar(){
+  setSync("conectando");
+  try {
+    let { rows, conf } = await baixarEstado();
+    const cache = lerCache();
+    if(!rows.length && cache && cache.itens.length){
+      // primeira conexão: sobe o que existia salvo neste computador
+      store.obra = cache.obra || ""; store.proxFolha = cache.proxFolha || 1;
+      await upsertItens(cache.itens);
+      await salvarConfigServidor();
+      ({ rows, conf } = await baixarEstado());
+    }
+    aplicarEstado(rows, conf);
+    online = true; setSync("ok");
+  } catch(e) {
+    const cache = lerCache();
+    if(cache) store = cache;
+    online = false; setSync("off");
+  }
+  if(document.activeElement !== $("#obraNome")) $("#obraNome").value = store.obra;
+  montarTabs(); render();
+}
+$("#btnReconectar").addEventListener("click", iniciar);
+
+// verifica novidades da outra pessoa e reconecta sozinho se a conexão cair
+// (só com a tela "parada": sem modal/folha abertos)
+setInterval(async () => {
+  if(document.querySelector("dialog[open]") || !$("#overlay").hidden) return;
+  try {
+    const { rows, conf } = await baixarEstado();
+    const foto = JSON.stringify(rows) + JSON.stringify(conf);
+    if(foto !== fotoServidor){
+      aplicarEstado(rows, conf);
+      if(document.activeElement !== $("#obraNome")) $("#obraNome").value = store.obra;
+      montarTabs(); render();
+    }
+    online = true; setSync("ok");
+  } catch(e) { online = false; setSync("off"); }
+}, INTERVALO_SYNC);
+
+// ═══ Tabs ═════════════════════════════════════════════════════════════
+function montarTabs(){
+  const cats = ["Todos", ...new Set(store.itens.map(d => d.cat))];
+  if(!cats.includes(filtroCat)) filtroCat = "Todos";
+  $("#tabs").innerHTML = cats.map(c => {
+    const n = c === "Todos" ? store.itens.length : store.itens.filter(d => d.cat === c).length;
+    return `<button class="tab${c===filtroCat?" active":""}" role="tab" data-cat="${escHtml(c)}">${c === "Todos" ? "Mostrar tudo" : escHtml(c)}<span class="n">${n}</span></button>`;
+  }).join("");
+}
+$("#tabs").addEventListener("click", e => {
+  const tab = e.target.closest(".tab");
+  if(!tab) return;
+  filtroCat = tab.dataset.cat;
+  montarTabs(); render();
+});
+
+// ═══ Filtro + ordenação ═══════════════════════════════════════════════
+function linhasVisiveis(){
+  const t = filtroTexto.trim().toLowerCase();
+  const rows = store.itens.filter(d =>
+    (filtroCat === "Todos" || d.cat === filtroCat) &&
+    (!t || [d.codigo,d.cat,d.desc,d.un,d.situacao,fmtData(d.dataPedido),fmtData(d.criadoEm),fmtData(d.dataEntrega)].join(" ").toLowerCase().includes(t))
+  );
+  rows.sort((a,b) => {
+    let va = a[sortCol], vb = b[sortCol];
+    if(sortCol === "situacao"){ va = PESO_SITUACAO[va]; vb = PESO_SITUACAO[vb]; }
+    if(["dataPedido","criadoEm","dataEntrega"].includes(sortCol)){ va = va || ""; vb = vb || ""; }
+    const cmp = typeof va === "number" ? va - vb : String(va).localeCompare(String(vb), "pt-BR");
+    return cmp * sortDir;
+  });
+  return rows;
+}
+
+// ═══ Render ═══════════════════════════════════════════════════════════
+function render(){
+  const rows = linhasVisiveis();
+  selecao.forEach(id => { if(!store.itens.some(d => d.id === id)) selecao.delete(id); });
+
+  $("#corpo").innerHTML = rows.length ? rows.map(d => `<tr class="${selecao.has(d.id)?"selecionada":""}" data-id="${d.id}">
+      <td class="chk"><input type="checkbox" data-sel="${d.id}" ${selecao.has(d.id)?"checked":""} aria-label="Selecionar ${escHtml(d.desc)}"></td>
+      <td class="id">${escHtml(d.codigo)}</td>
+      <td class="cat">${escHtml(d.cat)}</td>
+      <td class="desc">${escHtml(d.desc)}</td>
+      <td class="un">${escHtml(d.un)}</td>
+      <td class="num">${fmtNum(d.qtd)}</td>
+      <td class="data${d.criadoEm?"":" vazia"}">${fmtData(d.criadoEm)}</td>
+      <td class="data${d.dataPedido?"":" vazia"}">${fmtData(d.dataPedido)}</td>
+      <td class="data${d.dataEntrega?"":" vazia"}">${fmtData(d.dataEntrega)}</td>
+      <td><select class="sel-sit ${CLS_SITUACAO[d.situacao]}" data-sit="${d.id}" title="Alterar situação" aria-label="Situação de ${escHtml(d.desc)}">${SITUACOES.map(s => `<option${s === d.situacao ? " selected" : ""}>${s}</option>`).join("")}</select></td>
+      <td class="acoes">
+        <button class="row-btn" data-editar="${d.id}" title="Editar" aria-label="Editar ${escHtml(d.desc)}"><svg viewBox="0 0 24 24"><path d="M17 3l4 4L8 20l-5 1 1-5L17 3z"/></svg></button>
+        <button class="row-btn del" data-excluir="${d.id}" title="Excluir" aria-label="Excluir ${escHtml(d.desc)}"><svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3m-8 0l1 13h8l1-13"/></svg></button>
+      </td>
+    </tr>`).join("")
+    : store.itens.length
+      ? `<tr class="empty-cell"><td colspan="11">Nenhum material corresponde à busca.</td></tr>`
+      : `<tr class="empty-cell"><td colspan="11">Nenhum insumo cadastrado ainda.<br>
+          <button class="btn primary" id="vazioNovo">+ Adicionar primeiro insumo</button></td></tr>`;
+
+  const conta = s => rows.filter(d => d.situacao === s).length;
+  $("#resumo").innerHTML = store.itens.length
+    ? `<b>${conta("A Pedir")}</b> a pedir &nbsp;·&nbsp; <b>${conta("Pedido Enviado")}</b> enviados &nbsp;·&nbsp; <b>${conta("Entregue")}</b> entregues`
+    : "";
+  atualizarSelecaoUI(rows);
+
+  $$("thead th[data-col]").forEach(th => {
+    const ativo = th.dataset.col === sortCol;
+    th.classList.toggle("sorted", ativo);
+    th.querySelector(".arrow").textContent = ativo ? (sortDir === 1 ? "▲" : "▼") : "↕";
+    th.setAttribute("aria-sort", ativo ? (sortDir === 1 ? "ascending" : "descending") : "none");
+  });
+
+  const vazioNovo = $("#vazioNovo");
+  if(vazioNovo) vazioNovo.addEventListener("click", () => { if(exigirOnline()) abrirForm(null); });
+}
+
+// ═══ Seleção ══════════════════════════════════════════════════════════
+// atualiza contadores e botões sem reconstruir a tabela (preserva o foco)
+function atualizarSelecaoUI(rows){
+  if(!rows) rows = linhasVisiveis();
+  const visSel = rows.filter(d => selecao.has(d.id)).length;
+  $("#contagem").textContent = `${rows.length} de ${store.itens.length} itens` + (selecao.size ? ` · ${selecao.size} selecionado(s)` : "");
+  $("#chkTodos").checked = rows.length > 0 && visSel === rows.length;
+  $("#chkTodos").indeterminate = visSel > 0 && visSel < rows.length;
+  $("#selCount").textContent = selecao.size ? `(${selecao.size})` : "";
+  $("#btnFolha").disabled = selecao.size === 0;
+}
+
+$("#corpo").addEventListener("change", async e => {
+  const idSel = e.target.dataset.sel;
+  if(idSel){
+    e.target.checked ? selecao.add(idSel) : selecao.delete(idSel);
+    e.target.closest("tr").classList.toggle("selecionada", e.target.checked);
+    atualizarSelecaoUI();
+    return;
+  }
+  // troca rápida de situação pelo select-badge da linha
+  const idSit = e.target.dataset.sit;
+  if(!idSit) return;
+  const sel = e.target;
+  const d = store.itens.find(x => x.id === idSit);
+  const nova = sel.value;
+  if(!d || nova === d.situacao) return;
+  if(!online){ sel.value = d.situacao; alert(MSG_OFFLINE); return; }
+  // mesmas regras de datas do formulário: enviado ganha data do pedido, entregue ganha data de entrega
+  const objeto = Object.assign({}, d, {
+    situacao: nova,
+    dataPedido: nova === "A Pedir" ? null : (d.dataPedido || hoje()),
+    dataEntrega: nova === "Entregue" ? (d.dataEntrega || hoje()) : null
+  });
+  sel.disabled = true;
+  sel.className = "sel-sit " + CLS_SITUACAO[nova];
+  try {
+    await upsertItens([objeto]);
+    Object.assign(d, objeto);
+    salvarCache(); render();
+  } catch(err){
+    sel.value = d.situacao;
+    sel.className = "sel-sit " + CLS_SITUACAO[d.situacao];
+    sel.disabled = false;
+    alert("Falha ao salvar a situação no servidor. Verifique a internet e tente de novo.");
+  }
+});
+$("#chkTodos").addEventListener("change", e => {
+  linhasVisiveis().forEach(d => e.target.checked ? selecao.add(d.id) : selecao.delete(d.id));
+  render();
+});
+
+// ═══ Formulário (novo / editar) ═══════════════════════════════════════
+const dlg = $("#dlgForm");
+
+function proximoCodigo(cat){
+  const prefixo = (cat || "GER").normalize("NFD").replace(/[̀-ͯ]/g,"").replace(/[^A-Za-z]/g,"").slice(0,3).toUpperCase() || "GER";
+  const usados = store.itens
+    .filter(d => d.codigo.startsWith(prefixo + "-"))
+    .map(d => parseInt(d.codigo.slice(prefixo.length + 1), 10))
+    .filter(n => !isNaN(n));
+  return prefixo + "-" + String((usados.length ? Math.max(...usados) : 0) + 1).padStart(3,"0");
+}
+
+function abrirForm(id){
+  editandoId = id;
+  const d = id ? store.itens.find(x => x.id === id) : null;
+  $("#dlgTitulo").textContent = d ? "Editar insumo" : "Novo insumo";
+  $("#btnSalvar").textContent = d ? "Salvar alterações" : "Adicionar";
+  $("#btnSalvar").disabled = false;
+  $("#dlgErro").classList.remove("on");
+  $("#listaCats").innerHTML = [...new Set(store.itens.map(x => x.cat))].map(c => `<option value="${escHtml(c)}">`).join("");
+  $("#fCat").value = d ? d.cat : "";
+  $("#fCodigo").value = d ? d.codigo : "";
+  $("#fCodigo").placeholder = "gerado automaticamente";
+  $("#fDesc").value = d ? d.desc : "";
+  $("#fUn").value = d ? d.un : "";
+  $("#fQtd").value = d ? d.qtd : "";
+  $("#fSituacao").value = d ? d.situacao : "A Pedir";
+  $("#fData").value = d && d.dataPedido ? d.dataPedido : "";
+  $("#fEntrega").value = d && d.dataEntrega ? d.dataEntrega : "";
+  ajustarCampoData();
+  dlg.showModal();
+  $("#fCat").focus();
+}
+
+function ajustarCampoData(){
+  const sit = $("#fSituacao").value;
+  const aPedir = sit === "A Pedir";
+  $("#fData").disabled = aPedir;
+  if(aPedir) $("#fData").value = "";
+  else if(!$("#fData").value) $("#fData").value = hoje();
+  const entregue = sit === "Entregue";
+  $("#fEntrega").disabled = !entregue;
+  if(!entregue) $("#fEntrega").value = "";
+  else if(!$("#fEntrega").value) $("#fEntrega").value = hoje();
+}
+$("#fSituacao").addEventListener("change", ajustarCampoData);
+
+$("#formInsumo").addEventListener("submit", async e => {
+  e.preventDefault();
+  if(!exigirOnline()) return;
+  const cat = $("#fCat").value.trim();
+  const desc = $("#fDesc").value.trim();
+  const un = $("#fUn").value.trim();
+  const qtd = parseFloat($("#fQtd").value);
+  const situacao = $("#fSituacao").value;
+  const dataPedido = situacao === "A Pedir" ? null : ($("#fData").value || hoje());
+  const dataEntrega = situacao === "Entregue" ? ($("#fEntrega").value || hoje()) : null;
+  let codigo = $("#fCodigo").value.trim().toUpperCase();
+
+  const erros = [];
+  if(!cat) erros.push("Informe a categoria.");
+  if(!desc) erros.push("Informe a descrição do material.");
+  if(!un) erros.push("Informe a unidade.");
+  if(!(qtd > 0)) erros.push("Quantidade deve ser maior que zero.");
+  if(!codigo) codigo = proximoCodigo(cat);
+  if(store.itens.some(d => d.codigo === codigo && d.id !== editandoId))
+    erros.push(`Já existe um insumo com o código ${codigo}.`);
+  const mostrarErro = msg => { const el = $("#dlgErro"); el.textContent = msg; el.classList.add("on"); };
+  if(erros.length) return mostrarErro(erros.join(" "));
+
+  // lançamento: preserva a data original ao editar; grava hoje ao cadastrar
+  const criadoEm = editandoId ? (store.itens.find(x => x.id === editandoId).criadoEm || null) : hoje();
+  const objeto = { id: editandoId || novoId(), codigo, cat, desc, un, qtd, criadoEm, dataPedido, dataEntrega, situacao };
+  const btn = $("#btnSalvar");
+  btn.disabled = true; btn.textContent = "Salvando…";
+  try {
+    await upsertItens([objeto]);
+    if(editandoId){
+      const d = store.itens.find(x => x.id === editandoId);
+      Object.assign(d, objeto);
+    } else {
+      store.itens.push(objeto);
+    }
+    salvarCache(); dlg.close(); montarTabs(); render();
+  } catch(err) {
+    mostrarErro(/column|PGRST204/i.test(err.message)
+      ? "O banco ainda não tem as colunas de datas novas. Cole o script de atualização no SQL Editor do Supabase e tente de novo."
+      : "Falha ao salvar no servidor. Verifique a internet e tente de novo.");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = editandoId ? "Salvar alterações" : "Adicionar";
+  }
+});
+
+$("#btnNovo").addEventListener("click", () => { if(exigirOnline()) abrirForm(null); });
+
+$("#fCat").addEventListener("change", () => {
+  if(!editandoId && !$("#fCodigo").value.trim())
+    $("#fCodigo").placeholder = proximoCodigo($("#fCat").value.trim()) + " (automático)";
+});
+
+// ═══ Editar / Excluir ═════════════════════════════════════════════════
+const dlgConf = $("#dlgConfirma");
+let acaoExcluir = null; // definida por quem abre o dlgConfirma (item ou dia do diário)
+
+$("#corpo").addEventListener("click", e => {
+  const btnE = e.target.closest("[data-editar]");
+  if(btnE){ if(exigirOnline()) abrirForm(btnE.dataset.editar); return; }
+  const btnX = e.target.closest("[data-excluir]");
+  if(btnX){
+    if(!exigirOnline()) return;
+    excluindoId = btnX.dataset.excluir;
+    const d = store.itens.find(x => x.id === excluindoId);
+    $("#confirmaTexto").innerHTML = `Excluir <b>${escHtml(d.codigo)} — ${escHtml(d.desc)}</b>?<br>Essa ação não pode ser desfeita.`;
+    acaoExcluir = async () => {
+      await apagarItemServidor(excluindoId);
+      store.itens = store.itens.filter(x => x.id !== excluindoId);
+      selecao.delete(excluindoId);
+      excluindoId = null;
+      salvarCache(); montarTabs(); render();
+    };
+    dlgConf.showModal();
+  }
+});
+$("#btnExcluir").addEventListener("click", async () => {
+  if(!exigirOnline() || !acaoExcluir) return;
+  const btn = $("#btnExcluir");
+  btn.disabled = true;
+  try {
+    await acaoExcluir();
+    dlgConf.close();
+  } catch(err) {
+    alert("Falha ao excluir no servidor. Verifique a internet e tente de novo.");
+  } finally { btn.disabled = false; }
+});
+
+$$("dialog [data-fecha]").forEach(b => b.addEventListener("click", () => b.closest("dialog").close()));
+
+// ═══ Busca + ordenação ════════════════════════════════════════════════
+$("#busca").addEventListener("input", e => { filtroTexto = e.target.value; render(); });
+
+$$("thead th[data-col]").forEach(th => {
+  th.tabIndex = 0;
+  const ordenar = () => {
+    const col = th.dataset.col;
+    if(sortCol === col) sortDir *= -1; else { sortCol = col; sortDir = 1; }
+    render();
+  };
+  th.addEventListener("click", ordenar);
+  th.addEventListener("keydown", e => { if(e.key === "Enter" || e.key === " "){ e.preventDefault(); ordenar(); } });
+});
+
+// ═══ Obra + data do carimbo ═══════════════════════════════════════════
+$("#obraNome").addEventListener("change", e => {
+  store.obra = e.target.value.trim();
+  salvarCache();
+  if(online) salvarConfigServidor().catch(() => alert("Falha ao salvar o nome da obra no servidor."));
+});
+$("#dataHoje").textContent = fmtData(hoje());
+
+// ═══ Folha de Pedido ══════════════════════════════════════════════════
+$("#btnFolha").addEventListener("click", () => {
+  itensFolha = store.itens.filter(d => selecao.has(d.id));
+  if(!itensFolha.length) return;
+  const num = `PED-${new Date().getFullYear()}-${String(store.proxFolha).padStart(3,"0")}`;
+  $("#folha").innerHTML = `
+    <div class="f-brand">
+      <svg class="logo" viewBox="0 0 100 56" aria-hidden="true"><g transform="skewX(-12) translate(12 4)"><polyline points="1,26 9,41 22,7 35,41 48,7 61,41 74,7 87,41" fill="none" stroke="#FFC629" stroke-width="12" stroke-linejoin="bevel"/></g></svg>
+      <div><span class="b-nome">MARTINS NOTARI</span><span class="b-sub">CONSTRUTORA</span></div>
+    </div>
+    <div class="f-carimbo">
+      <div class="c-title"><span class="c-label">Documento</span><span class="c-value"><b>${num}</b> · Folha de Pedido de Materiais</span></div>
+      <div><span class="c-label">Data do pedido</span><span class="c-value">${fmtData(hoje())}</span></div>
+      <div><span class="c-label">Itens</span><span class="c-value">${itensFolha.length}</span></div>
+    </div>
+    <div class="f-sub">
+      <div><span class="c-label">Obra</span><span class="c-value">${escHtml(store.obra) || "—"}</span></div>
+      <div><span class="c-label">Solicitante</span><span class="c-value">&nbsp;</span></div>
+    </div>
+    <table>
+      <thead><tr>
+        <th style="width:38px">Item</th><th>Código</th><th>Descrição do Material</th>
+        <th class="un">Un</th><th class="num">Qtd.</th><th class="obs">Observações</th>
+      </tr></thead>
+      <tbody>${itensFolha.map((d,i) => `<tr>
+        <td class="num">${String(i+1).padStart(2,"0")}</td>
+        <td class="id">${escHtml(d.codigo)}</td>
+        <td>${escHtml(d.desc)}</td>
+        <td class="un">${escHtml(d.un)}</td>
+        <td class="num">${fmtNum(d.qtd)}</td>
+        <td class="obs">&nbsp;</td>
+      </tr>`).join("")}</tbody>
+    </table>
+    <div class="f-total">Total de itens: ${itensFolha.length}</div>
+    <div class="f-assin"><div>Solicitante</div><div>Aprovação / Compras</div></div>`;
+  const temAPedir = itensFolha.some(d => d.situacao === "A Pedir");
+  $("#btnMarcarEnviado").style.display = "";
+  $("#btnMarcarEnviado").disabled = !temAPedir || !online;
+  $("#btnMarcarEnviado").textContent = "Marcar itens como enviados";
+  $("#overlay").hidden = false;
+});
+
+$("#btnFecharFolha").addEventListener("click", () => { $("#overlay").hidden = true; });
+$("#btnImprimir").addEventListener("click", () => window.print());
+$("#btnMarcarEnviado").addEventListener("click", async () => {
+  if(!exigirOnline()) return;
+  const d0 = hoje();
+  const atualizados = itensFolha.filter(d => d.situacao === "A Pedir").map(d => Object.assign({}, d, { situacao:"Pedido Enviado", dataPedido:d0 }));
+  const btn = $("#btnMarcarEnviado");
+  btn.disabled = true; btn.textContent = "Salvando…";
+  try {
+    store.proxFolha++;
+    await upsertItens(atualizados);
+    await salvarConfigServidor();
+    atualizados.forEach(a => Object.assign(store.itens.find(d => d.id === a.id), a));
+    salvarCache(); render();
+    btn.textContent = "Itens marcados como enviados ✓";
+  } catch(err) {
+    store.proxFolha--;
+    btn.disabled = false; btn.textContent = "Marcar itens como enviados";
+    alert("Falha ao salvar no servidor. Verifique a internet e tente de novo.");
+  }
+});
+
+// ═══ Export CSV (selecionados; senão, visíveis) ═══════════════════════
+$("#btnCSV").addEventListener("click", () => {
+  const rows = selecao.size ? store.itens.filter(d => selecao.has(d.id)) : linhasVisiveis();
+  if(!rows.length) return;
+  const esc = v => `"${String(v).replace(/"/g,'""')}"`;
+  const linhas = [
+    ["Código","Categoria","Descrição","Un","Qtd","Lançado em","Data do Pedido","Data de Entrega","Situação"].join(";"),
+    ...rows.map(d => [esc(d.codigo),esc(d.cat),esc(d.desc),esc(d.un),String(d.qtd).replace(".",","),d.criadoEm?fmtData(d.criadoEm):"",d.dataPedido?fmtData(d.dataPedido):"",d.dataEntrega?fmtData(d.dataEntrega):"",esc(d.situacao)].join(";"))
+  ];
+  const blob = new Blob(["﻿" + linhas.join("\r\n")], { type:"text/csv;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "controle-pedidos-materiais.csv";
+  a.click();
+  URL.revokeObjectURL(a.href);
+});
+
+// ═══ Diário de Obra (RDO) ═════════════════════════════════════════════
+const LOGO_SVG = document.querySelector(".brand .logo").outerHTML;
+let diaSel = hoje();
+let datasDiario = [];
+let fotosDia = [];
+let diarioDirty = false;
+
+const diaSemana = d => new Date(d + "T12:00:00").toLocaleDateString("pt-BR", { weekday: "long" });
+const addDias = (d, n) => { const t = new Date(d + "T12:00:00"); t.setDate(t.getDate() + n); return t.toISOString().slice(0, 10); };
+
+const listarDias = () => api("diario?select=data&order=data.asc").then(r => r.map(x => x.data));
+const lerDia = d => api(`diario?data=eq.${d}&select=*`).then(r => r[0] || null);
+const salvarDiaServidor = (d, dados, fotos) => api("diario", { method:"POST", headers:{ Prefer:"resolution=merge-duplicates" },
+  body: JSON.stringify([{ data: d, dados, fotos, atualizado_em: new Date().toISOString() }]) });
+const excluirDiaServidor = d => api(`diario?data=eq.${d}`, { method:"DELETE" });
+
+const tabelaDiarioFalta = err => /diario|PGRST205|42P01|Could not find the table/i.test(String(err && err.message));
+function avisoDiario(msg){ const el = $("#dAviso"); el.hidden = !msg; if(msg) el.textContent = msg; }
+const AVISO_SCRIPT = "O banco ainda não tem a tabela do diário. Cole o script de atualização no SQL Editor do Supabase (está no chat) e depois troque de dia ou salve de novo.";
+
+function setDirtyD(v){
+  diarioDirty = v;
+  const s = $("#dStatus");
+  s.classList.toggle("dirty", v);
+  s.textContent = v ? "● alterações não salvas" : (s.dataset.ok || "");
+}
+
+// ── linhas dinâmicas ──
+function linDin(html, cols){
+  const div = document.createElement("div");
+  div.className = "linha-din";
+  div.style.gridTemplateColumns = cols;
+  div.innerHTML = html + `<button class="x-lin" type="button" title="Remover linha">✕</button>`;
+  return div;
+}
+const selOpts = (ops, v) => ops.map(o => `<option${o === v ? " selected" : ""}>${o}</option>`).join("");
+function addEfetivo(v = {}){
+  $("#dEfetivo").appendChild(linDin(`
+    <input type="text" placeholder="Função (ex: Pedreiro)" value="${escHtml(v.funcao || "")}" data-f="funcao">
+    <input type="number" min="0" value="${v.qtd != null ? v.qtd : 1}" data-f="qtd">
+    <select data-f="tipo">${selOpts(["Próprio","Terceirizado"], v.tipo || "Próprio")}</select>`, "2fr 64px 130px 26px"));
+}
+function addEquip(v = {}){
+  $("#dEquip").appendChild(linDin(`
+    <input type="text" placeholder="Equipamento (ex: Betoneira)" value="${escHtml(v.nome || "")}" data-f="nome">
+    <input type="number" min="0" value="${v.qtd != null ? v.qtd : 1}" data-f="qtd">
+    <select data-f="sit">${selOpts(["Operando","Parado","Manutenção"], v.sit || "Operando")}</select>`, "2fr 64px 130px 26px"));
+}
+function addAtiv(v = {}){
+  $("#dAtiv").appendChild(linDin(`
+    <input type="text" placeholder="Descrição do serviço executado" value="${escHtml(v.desc || "")}" data-f="desc">
+    <select data-f="st">${selOpts(["Iniciada","Em andamento","Concluída"], v.st || "Em andamento")}</select>`, "3fr 140px 26px"));
+}
+function totalEfetivo(){
+  const t = [...$("#dEfetivo").querySelectorAll('[data-f="qtd"]')].reduce((s, i) => s + (parseFloat(i.value) || 0), 0);
+  $("#dTotEfetivo").textContent = t ? `efetivo total: ${t}` : "";
+}
+function lerLinhas(cont, chave){
+  return [...cont.querySelectorAll(".linha-din")].map(l => {
+    const o = {};
+    l.querySelectorAll("[data-f]").forEach(el => { o[el.dataset.f] = el.type === "number" ? (parseFloat(el.value) || 0) : el.value.trim(); });
+    return o;
+  }).filter(o => (o[chave] || "").trim() !== "");
+}
+
+// ── formulário do dia ──
+function coletarDiario(){
+  return {
+    climaManha: $("#dClimaM").value, climaTarde: $("#dClimaT").value,
+    pratic: $("#dPratic").value, chuvaMm: parseFloat($("#dChuva").value) || null,
+    efetivo: lerLinhas($("#dEfetivo"), "funcao"),
+    equipamentos: lerLinhas($("#dEquip"), "nome"),
+    atividades: lerLinhas($("#dAtiv"), "desc"),
+    ocorrencias: $("#dOcorr").value.trim(), acidentes: $("#dAcid").value.trim(),
+    visitas: $("#dVisitas").value.trim(), recebimentos: $("#dReceb").value.trim(),
+    responsavel: $("#dResp").value.trim(), obs: $("#dObs").value.trim()
+  };
+}
+function preencherDiario(d = {}){
+  $("#dClimaM").value = d.climaManha || ""; $("#dClimaT").value = d.climaTarde || "";
+  $("#dPratic").value = d.pratic || ""; $("#dChuva").value = d.chuvaMm != null ? d.chuvaMm : "";
+  $("#dEfetivo").innerHTML = ""; (d.efetivo || []).forEach(addEfetivo);
+  $("#dEquip").innerHTML = ""; (d.equipamentos || []).forEach(addEquip);
+  $("#dAtiv").innerHTML = ""; (d.atividades || []).forEach(addAtiv);
+  $("#dOcorr").value = d.ocorrencias || ""; $("#dAcid").value = d.acidentes || "";
+  $("#dVisitas").value = d.visitas || ""; $("#dReceb").value = d.recebimentos || "";
+  $("#dResp").value = d.responsavel || ""; $("#dObs").value = d.obs || "";
+  totalEfetivo();
+}
+
+function rdoNum(d){
+  const i = datasDiario.indexOf(d);
+  return i >= 0 ? i + 1 : datasDiario.filter(x => x < d).length + 1;
+}
+function atualizarRdoInfo(){
+  const registrado = datasDiario.includes(diaSel);
+  $("#dRdoInfo").innerHTML = `RDO nº <b>${String(rdoNum(diaSel)).padStart(3,"0")}</b> · ${diaSemana(diaSel)}${registrado ? "" : " · sem registro"}`;
+  $("#dExcluir").disabled = !registrado;
+}
+function renderChips(){
+  const ult = datasDiario.slice(-15).reverse();
+  $("#dChips").innerHTML = ult.map(d =>
+    `<button class="chip-dia${d === diaSel ? " active" : ""}" data-dia="${d}">${fmtData(d).slice(0,5)}</button>`).join("");
+}
+
+// ── fotos ──
+async function comprimirFoto(file){
+  const img = await createImageBitmap(file);
+  const esc = Math.min(1, 1280 / Math.max(img.width, img.height));
+  const c = document.createElement("canvas");
+  c.width = Math.round(img.width * esc); c.height = Math.round(img.height * esc);
+  c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+  return c.toDataURL("image/jpeg", .72);
+}
+function renderFotos(){
+  $("#dFotos").innerHTML = fotosDia.map((f, i) => `<div class="foto">
+    <img src="${f.img}" alt="${escHtml(f.nome)}">
+    <button type="button" data-rmfoto="${i}" title="Remover foto">✕</button>
+    <span class="nomef">${escHtml(f.nome)}</span></div>`).join("");
+}
+$("#dAddFotos").addEventListener("click", () => $("#dFotosInput").click());
+$("#dFotosInput").addEventListener("change", async e => {
+  const files = [...e.target.files];
+  e.target.value = "";
+  if(fotosDia.length + files.length > 12) return alert("Máximo de 12 fotos por dia.");
+  for(const f of files){
+    try { fotosDia.push({ nome: f.name, img: await comprimirFoto(f) }); }
+    catch(err){ alert(`Não consegui ler a imagem "${f.name}".`); }
+  }
+  renderFotos(); setDirtyD(true);
+});
+
+// ── carregar / salvar / excluir dia ──
+async function carregarDia(d){
+  if(diarioDirty && !confirm("Há alterações não salvas neste dia. Descartá-las?")){ $("#dData").value = diaSel; return; }
+  diaSel = d;
+  $("#dData").value = d;
+  avisoDiario(null);
+  let reg = null;
+  if(online){
+    try { reg = await lerDia(d); }
+    catch(err){ avisoDiario(tabelaDiarioFalta(err) ? AVISO_SCRIPT : "Falha ao carregar o dia do servidor. Verifique a conexão."); }
+  } else avisoDiario(MSG_OFFLINE);
+  preencherDiario(reg ? reg.dados : {});
+  fotosDia = reg && Array.isArray(reg.fotos) ? reg.fotos : [];
+  renderFotos();
+  $("#dStatus").dataset.ok = reg ? `registro carregado (${fmtData(d)})` : "";
+  setDirtyD(false);
+  renderChips(); atualizarRdoInfo();
+}
+
+// ── navegação entre galeria e editor ──
+function mostrarGaleria(){
+  $("#modEditor").hidden = true;
+  $("#modDiario").hidden = false;
+  iniciarDiario();
+}
+async function abrirEditor(dia){
+  $("#modDiario").hidden = true;
+  $("#modEditor").hidden = false;
+  diarioDirty = false; // evita o "descartar?" ao entrar
+  if(!datasDiario.length && online){ try { datasDiario = await listarDias(); } catch(e){} }
+  await carregarDia(dia);
+}
+$("#dVoltar").addEventListener("click", () => {
+  if(diarioDirty && !confirm("Há alterações não salvas. Sair mesmo assim?")) return;
+  diarioDirty = false;
+  mostrarGaleria();
+});
+$("#hNovo").addEventListener("click", () => { if(exigirOnline()) abrirEditor(hoje()); });
+
+// ── inteligência: materiais citados no diário x situação no controle de pedidos ──
+const STOP_INTEL = new Set("para com sem por que dos das uma the and 750v 1000 pavimento serviço servico".split(" "));
+const normSimples = s => String(s).normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+const tokensDe = s => normSimples(s).split(/[^a-z0-9]+/).filter(t => t.length >= 4 && !STOP_INTEL.has(t));
+
+function materiaisCitados(dados){
+  const texto = [dados.recebimentos, dados.obs, ...(dados.atividades || []).map(a => a.desc)].join(" ");
+  const tset = new Set(tokensDe(texto));
+  if(!tset.size) return [];
+  return store.itens.filter(it => it.situacao !== "Entregue" && tokensDe(it.desc).some(t => tset.has(t)));
+}
+
+let intelDia = null;
+function abrirIntel(dia, itens){
+  intelDia = dia;
+  $("#intelData").textContent = `${fmtData(dia)}`;
+  $("#intelLista").innerHTML = itens.map(it => `<label class="intel-item">
+    <input type="checkbox" checked data-iid="${it.id}">
+    <span class="cod">${escHtml(it.codigo)}</span><span class="ds">${escHtml(it.desc)}</span>
+    <span class="sit">${escHtml(it.situacao)}</span></label>`).join("");
+  $("#dlgIntel").showModal();
+}
+$("#btnIntelMarcar").addEventListener("click", async () => {
+  if(!exigirOnline()) return;
+  const ids = [...$("#intelLista").querySelectorAll("input:checked")].map(i => i.dataset.iid);
+  if(!ids.length){ $("#dlgIntel").close(); return; }
+  const btn = $("#btnIntelMarcar"); btn.disabled = true; btn.textContent = "Salvando…";
+  try {
+    const atualizados = store.itens.filter(it => ids.includes(it.id))
+      .map(it => Object.assign({}, it, { situacao: "Entregue", dataEntrega: intelDia, dataPedido: it.dataPedido || intelDia }));
+    await upsertItens(atualizados);
+    atualizados.forEach(a => Object.assign(store.itens.find(d => d.id === a.id), a));
+    salvarCache(); render();
+    $("#dlgIntel").close();
+  } catch(err){ alert("Falha ao atualizar os pedidos. Tente de novo."); }
+  finally { btn.disabled = false; btn.textContent = "Marcar como entregue"; }
+});
+
+$("#dSalvar").addEventListener("click", async () => {
+  if(!exigirOnline()) return;
+  const btn = $("#dSalvar");
+  btn.disabled = true; btn.textContent = "Salvando…";
+  try {
+    const dados = coletarDiario();
+    dados.nFotos = fotosDia.length; // p/ contagem na galeria sem baixar todas as fotos
+    await salvarDiaServidor(diaSel, dados, fotosDia);
+    if(!datasDiario.includes(diaSel)){ datasDiario.push(diaSel); datasDiario.sort(); }
+    const agora = new Date();
+    $("#dStatus").dataset.ok = `salvo às ${String(agora.getHours()).padStart(2,"0")}:${String(agora.getMinutes()).padStart(2,"0")}`;
+    setDirtyD(false); renderChips(); atualizarRdoInfo(); avisoDiario(null);
+    const pend = materiaisCitados(dados);
+    if(pend.length) abrirIntel(diaSel, pend);
+  } catch(err){
+    avisoDiario(tabelaDiarioFalta(err) ? AVISO_SCRIPT : "Falha ao salvar no servidor. Verifique a internet e tente de novo.");
+  } finally { btn.disabled = false; btn.textContent = "Salvar diário"; }
+});
+
+$("#dExcluir").addEventListener("click", () => {
+  if(!exigirOnline() || !datasDiario.includes(diaSel)) return;
+  $("#confirmaTexto").innerHTML = `Excluir o diário de <b>${fmtData(diaSel)}</b> (${diaSemana(diaSel)})?<br>Essa ação não pode ser desfeita.`;
+  acaoExcluir = async () => {
+    await excluirDiaServidor(diaSel);
+    datasDiario = datasDiario.filter(x => x !== diaSel);
+    setDirtyD(false);
+    mostrarGaleria();
+  };
+  dlgConf.showModal();
+});
+
+$("#dData").addEventListener("change", e => carregarDia(e.target.value));
+$("#dAnt").addEventListener("click", () => carregarDia(addDias(diaSel, -1)));
+$("#dProx").addEventListener("click", () => carregarDia(addDias(diaSel, 1)));
+$("#dChips").addEventListener("click", e => { const c = e.target.closest("[data-dia]"); if(c) carregarDia(c.dataset.dia); });
+
+$("#modEditor").addEventListener("click", e => {
+  const rm = e.target.closest("[data-rmfoto]");
+  if(rm){ fotosDia.splice(+rm.dataset.rmfoto, 1); renderFotos(); setDirtyD(true); return; }
+  if(e.target.classList.contains("x-lin")){ e.target.parentElement.remove(); totalEfetivo(); setDirtyD(true); return; }
+  const add = e.target.dataset.add;
+  if(add === "efetivo"){ addEfetivo(); setDirtyD(true); }
+  if(add === "equip"){ addEquip(); setDirtyD(true); }
+  if(add === "ativ"){ addAtiv(); setDirtyD(true); }
+});
+$("#modEditor").addEventListener("input", e => {
+  if(e.target.id === "dData") return;
+  if(e.target.dataset.f === "qtd") totalEfetivo();
+  setDirtyD(true);
+});
+
+// ── RDO (visualização/impressão), reutilizável ──
+let rdoEditarDia = null; // quando aberto por um cartão, guarda o dia p/ botão "Editar"
+
+function montarRDO(dia, d, fotos){
+  const num = String(rdoNum(dia)).padStart(3, "0");
+  const tab = (titulo, thead, linhas) => linhas.length ? `<div class="rdo-h">${titulo}</div>
+    <table><thead><tr>${thead}</tr></thead><tbody>${linhas.join("")}</tbody></table>` : "";
+  const texto = (titulo, v) => v ? `<div class="rdo-h">${titulo}</div><div class="rdo-texto">${escHtml(v)}</div>` : "";
+  const clima = [d.climaManha && `Manhã: ${d.climaManha}`, d.climaTarde && `Tarde: ${d.climaTarde}`,
+    d.pratic, d.chuvaMm != null && d.chuvaMm !== 0 ? `Chuva: ${fmtNum(d.chuvaMm)} mm` : null].filter(Boolean).join(" · ");
+  const totEf = (d.efetivo || []).reduce((s, x) => s + (x.qtd || 0), 0);
+  return `
+    <div class="f-brand">${LOGO_SVG}<div><span class="b-nome">MARTINS NOTARI</span><span class="b-sub">CONSTRUTORA</span></div></div>
+    <div class="f-carimbo">
+      <div class="c-title"><span class="c-label">Documento</span><span class="c-value"><b>RDO-${num}</b> · Relatório Diário de Obra</span></div>
+      <div><span class="c-label">Data</span><span class="c-value">${fmtData(dia)}</span></div>
+      <div><span class="c-label">Dia</span><span class="c-value" style="text-transform:capitalize">${diaSemana(dia)}</span></div>
+    </div>
+    <div class="f-sub">
+      <div><span class="c-label">Obra</span><span class="c-value">${escHtml(store.obra) || "—"}</span></div>
+      <div><span class="c-label">Condições do dia</span><span class="c-value" style="white-space:normal">${escHtml(clima) || "—"}</span></div>
+    </div>
+    ${tab(`Mão de obra${totEf ? ` — efetivo total: ${totEf}` : ""}`,
+      `<th>Função</th><th class="num">Qtd.</th><th>Vínculo</th>`,
+      (d.efetivo || []).map(x => `<tr><td>${escHtml(x.funcao)}</td><td class="num">${fmtNum(x.qtd)}</td><td>${escHtml(x.tipo)}</td></tr>`))}
+    ${tab("Equipamentos", `<th>Equipamento</th><th class="num">Qtd.</th><th>Situação</th>`,
+      (d.equipamentos || []).map(x => `<tr><td>${escHtml(x.nome)}</td><td class="num">${fmtNum(x.qtd)}</td><td>${escHtml(x.sit)}</td></tr>`))}
+    ${tab("Atividades executadas", `<th style="width:38px">Item</th><th>Descrição</th><th>Andamento</th>`,
+      (d.atividades || []).map((x, i) => `<tr><td class="num">${String(i+1).padStart(2,"0")}</td><td>${escHtml(x.desc)}</td><td>${escHtml(x.st)}</td></tr>`))}
+    ${texto("Ocorrências / paralisações", d.ocorrencias || "Sem ocorrências.")}
+    ${texto("Acidentes de trabalho", d.acidentes || "Nenhum.")}
+    ${texto("Visitas à obra", d.visitas)}
+    ${texto("Materiais recebidos", d.recebimentos)}
+    ${texto("Observações gerais", d.obs)}
+    ${(fotos || []).length ? `<div class="rdo-h">Registro fotográfico (${fotos.length})</div>
+      <div class="rdo-fotos">${fotos.map(f => `<figure><img src="${f.img}" alt="${escHtml(f.nome)}"></figure>`).join("")}</div>` : ""}
+    <div class="f-assin"><div>Responsável${d.responsavel ? " — " + escHtml(d.responsavel) : ""}</div><div>Fiscalização / Contratante</div></div>`;
+}
+function abrirRDO(dia, d, fotos, comEditar){
+  $("#folha").innerHTML = montarRDO(dia, d, fotos);
+  $("#btnMarcarEnviado").style.display = "none";
+  rdoEditarDia = comEditar ? dia : null;
+  $("#btnEditarRdo").hidden = !comEditar;
+  $("#overlay").hidden = false;
+}
+// do editor: usa o formulário atual
+$("#dImprimir").addEventListener("click", () => abrirRDO(diaSel, coletarDiario(), fotosDia, false));
+// botão "Editar diário" dentro do RDO (aberto por um cartão)
+$("#btnEditarRdo").addEventListener("click", () => {
+  const dia = rdoEditarDia;
+  $("#overlay").hidden = true;
+  if(dia) abrirEditor(dia);
+});
+
+// ═══ Histórico do Diário ══════════════════════════════════════════════
+function cardDia(r){
+  const d = r.dados || {};
+  const num = String(datasDiario.indexOf(r.data) + 1).padStart(3, "0");
+  const ef = (d.efetivo || []).reduce((s, x) => s + (x.qtd || 0), 0);
+  const clima = [d.climaManha, d.climaTarde].filter(Boolean).join(" / ");
+  const nAtiv = (d.atividades || []).length;
+  const nf = d.nFotos != null ? d.nFotos : (r.capa ? 1 : 0);
+  const tags = [];
+  if(ef) tags.push(`efetivo ${ef}`);
+  if(nAtiv) tags.push(`${nAtiv} atividade${nAtiv > 1 ? "s" : ""}`);
+  if(nf) tags.push(`${nf} foto${nf > 1 ? "s" : ""}`);
+  const temCapa = r.capa && r.capa.img;
+  return `<article class="h-card" data-dia="${r.data}" title="Ver RDO de ${fmtData(r.data)}">
+    <div class="h-capa${temCapa ? "" : " sem"}"${temCapa ? ` style="background-image:url('${r.capa.img}')"` : ""}>${temCapa ? "" : "sem fotos"}</div>
+    <div class="h-info">
+      <div class="h-linha1"><span class="h-data">${fmtData(r.data)}</span><span class="h-rdo">RDO ${num}</span></div>
+      <div class="h-sem">${diaSemana(r.data)}${clima ? " · " + clima : ""}${d.pratic ? " · " + d.pratic : ""}</div>
+      ${tags.length ? `<div class="h-tags">${tags.map(t => `<span>${t}</span>`).join("")}</div>` : ""}
+      ${d.ocorrencias ? `<div class="h-ocorr">⚠ com ocorrências</div>` : ""}
+    </div></article>`;
+}
+
+// galeria de cartões (é o que aparece ao entrar na aba Diário)
+async function iniciarDiario(){
+  const g = $("#hGrid");
+  g.innerHTML = `<div class="h-vazio">Carregando…</div>`;
+  if(!online){ g.innerHTML = `<div class="h-vazio">${MSG_OFFLINE}</div>`; renderCalendario(); return; }
+  try {
+    // capa = primeira foto de cada dia (não baixa as demais, mantém a galeria leve)
+    const rows = await api("diario?select=data,dados,capa:fotos->0&order=data.desc");
+    datasDiario = rows.map(r => r.data).sort();
+    g.innerHTML = rows.length
+      ? rows.map(cardDia).join("")
+      : `<div class="h-vazio">Nenhum diário registrado ainda.<br>Clique num dia do calendário ou em <b>+ Registrar diário</b>.</div>`;
+  } catch(err){
+    g.innerHTML = `<div class="h-vazio">${tabelaDiarioFalta(err) ? AVISO_SCRIPT : "Falha ao carregar os diários. Verifique a conexão."}</div>`;
+  }
+  renderCalendario();
+}
+$("#hAtualizar").addEventListener("click", iniciarDiario);
+
+// abre o RDO de um dia registrado (usado pelo cartão e pelo calendário)
+async function abrirRDODoDia(dia, alvo){
+  if(alvo) alvo.style.opacity = ".5";
+  try {
+    const reg = await lerDia(dia);
+    abrirRDO(dia, reg ? reg.dados : {}, reg && Array.isArray(reg.fotos) ? reg.fotos : [], true);
+  } catch(err){
+    alert("Falha ao abrir o diário. Verifique a conexão.");
+  } finally { if(alvo) alvo.style.opacity = ""; }
+}
+$("#hGrid").addEventListener("click", e => {
+  const c = e.target.closest("[data-dia]");
+  if(c) abrirRDODoDia(c.dataset.dia, c);
+});
+
+// ── Calendário do mês ──
+const MESES = ["janeiro","fevereiro","março","abril","maio","junho","julho","agosto","setembro","outubro","novembro","dezembro"];
+let calRef = { ano: +hoje().slice(0,4), mes: +hoje().slice(5,7) - 1 }; // mês 0-11
+
+function renderCalendario(){
+  const { ano, mes } = calRef;
+  $("#calMes").textContent = `${MESES[mes]} ${ano}`;
+  const primeiro = new Date(ano, mes, 1).getDay();       // 0=domingo
+  const nDias = new Date(ano, mes + 1, 0).getDate();
+  const registrados = new Set(datasDiario);
+  const hj = hoje();
+  let html = "";
+  for(let i = 0; i < primeiro; i++) html += `<div class="cal-dia vazio-cel"></div>`;
+  for(let dia = 1; dia <= nDias; dia++){
+    const iso = `${ano}-${String(mes+1).padStart(2,"0")}-${String(dia).padStart(2,"0")}`;
+    const cls = ["cal-dia","domes"];
+    if(registrados.has(iso)) cls.push("tem");
+    if(iso === hj) cls.push("hoje");
+    if(iso === diaSel) cls.push("sel");
+    html += `<button class="${cls.join(" ")}" data-caldia="${iso}" title="${fmtData(iso)}">${dia}</button>`;
+  }
+  $("#calGrade").innerHTML = html;
+}
+$("#calAnt").addEventListener("click", () => { if(--calRef.mes < 0){ calRef.mes = 11; calRef.ano--; } renderCalendario(); });
+$("#calProx").addEventListener("click", () => { if(++calRef.mes > 11){ calRef.mes = 0; calRef.ano++; } renderCalendario(); });
+$("#calGrade").addEventListener("click", e => {
+  const b = e.target.closest("[data-caldia]");
+  if(!b) return;
+  const dia = b.dataset.caldia;
+  if(datasDiario.includes(dia)) abrirRDODoDia(dia, b);       // dia com registro → vê o RDO
+  else if(exigirOnline()) abrirEditor(dia);                  // dia vazio → registra
+});
+
+// ═══ Troca de módulo ══════════════════════════════════════════════════
+$$(".mod").forEach(b => b.addEventListener("click", () => {
+  $$(".mod").forEach(x => x.classList.toggle("active", x === b));
+  const m = b.dataset.mod;
+  $("#modPedidos").hidden = m !== "pedidos";
+  if(m === "diario") mostrarGaleria();
+  else { $("#modDiario").hidden = true; $("#modEditor").hidden = true; }
+}));
+
+// ═══ Início ═══════════════════════════════════════════════════════════
+iniciar();
+</script>
+</body>
+</html>
