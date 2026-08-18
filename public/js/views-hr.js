@@ -6,6 +6,7 @@
 App.registerView('hr', async (view) => {
   App.setTitle('RH', 'Gerencial — não substitui folha/contabilidade. Acesso restrito.');
   const [employees, payments] = await Promise.all([App.get('/employees'), App.get('/hrPayments')]);
+  employees.sort((a, b) => (a.nome || '').localeCompare(b.nome || '', 'pt-BR'));
   payments.sort((a, b) => b.id - a.id);
   const fin = App.can('finance_sensitive');
   const TIPOS = { salario: 'Salário', beneficio: 'Benefício', bonus: 'Bônus de produção', pista: 'Assistência de pista', outro: 'Outro' };

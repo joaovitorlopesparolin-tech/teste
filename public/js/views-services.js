@@ -213,6 +213,7 @@ App.registerView('quotes', async (view, args) => {
         ${q.status === 'aberto' ? `
           <button class="btn sm primary" onclick="Quotes.approve(${q.id})">✓ Aprovar</button>
           <button class="btn sm danger" onclick="Quotes.reject(${q.id})">✗</button>` : ''}
+        <button class="btn sm ghost" onclick="Quotes.replicate(${q.id})" title="Criar um novo orçamento usando este como modelo">📋</button>
         <button class="btn sm ghost wa" onclick="Quotes.wa(${q.id})" title="Enviar orçamento no WhatsApp">✆</button>
         <button class="btn sm ghost" onclick="Quotes.printOne(${q.id})">🖨️</button>` }
     ]);
@@ -225,6 +226,24 @@ App.registerView('quotes', async (view, args) => {
       const q = quotes.find(x => x.id === id);
       const c = clients.find(x => x.id === q.clienteId);
       App.waShare(`Orçamento nº ${q.numero} — ${(c && c.nome) || 'cliente'}`, App.waPhoneOf(c), App.waMsg.quote(q, c));
+    },
+    /* Novo orçamento com este como modelo: serviços, valores e observações
+       vêm juntos; número, data, status e aprovação começam do zero. */
+    replicate(id) {
+      const q = quotes.find(x => x.id === id);
+      if (!q) return;
+      const m = App.form(`📋 Replicar orçamento nº ${q.numero}`, [
+        { name: 'clienteId', label: 'Cliente do novo orçamento', type: 'select', required: true, full: true,
+          value: q.clienteId, options: App.clientOptions(clients) }
+      ], async d => {
+        const novo = await App.post(`/quotes/${id}/replicate`, { clienteId: Number(d.clienteId) });
+        App.closeModal();
+        App.toast(`Orçamento nº ${novo.numero} criado a partir do nº ${q.numero} — revise e salve`, 'ok');
+        location.hash = '#/quotes/' + novo.id;
+      }, { submitLabel: 'Criar cópia' });
+      m.querySelector('.actions').insertAdjacentHTML('afterbegin',
+        `<p class="small muted" style="margin-right:auto">Copia serviços, quantidades, valores e observações.<br>
+         O orçamento original não é alterado.</p>`);
     },
     async approve(id) {
       if (!await App.confirm('Aprovar este orçamento? Uma Ordem de Serviço será criada automaticamente com todos os dados (cliente, cabeçote, serviços e valores).')) return;
