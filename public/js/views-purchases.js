@@ -218,11 +218,15 @@ App.registerView('purchases', async (view) => {
 /* ================= FORNECEDORES + FECHAMENTO MENSAL ================= */
 App.registerView('suppliers', async (view) => {
   App.setTitle('Fornecedores', 'Cadastro, despesas diárias e fechamento mensal com conferência de divergências');
-  const [suppliers, expenses, invoices, clients] = await Promise.all([
-    App.get('/suppliers'), App.get('/supplierExpenses'), App.get('/supplierInvoices'), App.get('/clients')]);
+  const [suppliers, expenses, invoices, clients, abertos] = await Promise.all([
+    App.get('/suppliers'), App.get('/supplierExpenses'), App.get('/supplierInvoices'), App.get('/clients'),
+    App.get('/suppliers/open-summary')]);
 
   suppliers.sort((a, b) => (a.nome || '').localeCompare(b.nome || '', 'pt-BR'));
   const openBySupplier = id => expenses.filter(e => e.fornecedorId === id && e.status === 'aberto');
+  /* Em aberto = compras não quitadas + gastos do fechamento mensal.
+     Vem calculado do servidor; nunca é digitado à mão. */
+  const emAberto = id => Number(abertos[id]) || 0;
 
   view.innerHTML = `
     <div class="toolbar">
@@ -234,9 +238,12 @@ App.registerView('suppliers', async (view) => {
       { h: 'CNPJ', cell: s => `<span class="mono">${App.esc(s.cnpj ? App.fmtCpfCnpj(s.cnpj) : '—')}</span>` },
       { h: 'Contato', cell: s => App.esc(s.telefone || s.email || '—') },
       { h: 'Em aberto no mês', class: 'num', cell: s => {
-        const t = openBySupplier(s.id).reduce((sum, e) => sum + e.valor, 0);
-        return t ? `<b class="neg">R$ ${App.money(t)}</b>` : '<span class="muted">R$ 0,00</span>'; } },
+        const t = emAberto(s.id);
+        return t
+          ? `<button class="btn sm ghost" onclick="Supp.conferir(${s.id})" title="Ver o que compõe este valor"><b class="neg">R$ ${App.money(t)}</b></button>`
+          : '<span class="muted">R$ 0,00</span>'; } },
       { h: '', class: 'num', cell: s => `
+        <button class="btn sm" onclick="Supp.conferir(${s.id})">🔍 Conferir</button>
         <button class="btn sm" onclick="Supp.detail(${s.id})">Despesas</button>
         ${s.fechamentoMensal ? `<button class="btn sm primary" onclick="Supp.close(${s.id})">Fechar fatura</button>` : ''}
         <button class="btn sm ghost" onclick="Supp.edit(${s.id})">✎</button>` }
@@ -256,6 +263,26 @@ App.registerView('suppliers', async (view) => {
     ], { emptyMsg: 'Nenhuma fatura fechada ainda' })}`;
 
   window.Supp = {
+    /* Detalhamento do "Em aberto no mês": é com esta lista que se confere,
+       linha a linha, a cobrança que o fornecedor manda no fim do mês. */
+    async conferir(id) {
+      const d = await App.get('/suppliers/' + id + '/open');
+      App.modal(`
+        <h2>${App.esc(d.fornecedor.nome)} — em aberto</h2>
+        <p class="small muted">Compare com a cobrança enviada pelo fornecedor: valores a mais ou a menos,
+        compras não lançadas e lançamentos em duplicidade aparecem na comparação.</p>
+        ${App.table(d.itens, [
+          { h: 'Data', cell: i => App.date(i.data) },
+          { h: 'Descrição', cell: i => App.esc(i.descricao || '—') },
+          { h: 'Cliente / OS / pedido', cell: i => `<span class="small muted">${App.esc(i.vinculo || '—')}</span>` },
+          { h: 'Documento', cell: i => `<span class="small mono">${App.esc(i.documento || '—')}</span>` },
+          { h: 'Valor', class: 'num', cell: i => 'R$ ' + App.money(i.valor) },
+          { h: 'Status', cell: i => `<span class="badge ${i.status === 'sem conta a pagar' ? 'warn' : ''}">${App.esc(i.status)}</span>` }
+        ], { emptyMsg: 'Nada em aberto para este fornecedor' })}
+        <p style="text-align:right;margin-top:10px;font-size:15px">Total registrado pela empresa:
+          <b style="color:var(--accent-strong)">R$ ${App.money(d.total)}</b></p>
+        <div class="actions"><button class="btn" onclick="App.closeModal()">Fechar</button></div>`, { wide: true });
+    },
     edit(id) {
       const s = id ? suppliers.find(x => x.id === id) : {};
       App.form(id ? 'Editar fornecedor' : 'Novo fornecedor', [
@@ -309,7 +336,7 @@ App.registerView('suppliers', async (view) => {
     },
     close(id) {
       const s = suppliers.find(x => x.id === id);
-      const total = openBySupplier(id).reduce((sum, e) => sum + e.valor, 0);
+      const total = emAberto(id);
       App.form(`Fechar fatura — ${s.nome}`, [
         { name: 'mes', label: 'Mês de referência', value: App.today().slice(0, 7), required: true },
         { name: 'valorCobrado', label: `Valor cobrado pelo fornecedor (registrado: R$ ${App.money(total)})`, type: 'number', step: '0.01', required: true },
