@@ -1708,13 +1708,30 @@ route('POST', '/api/quotes/:id/approve', 'quotes', async (req, res, user, params
   db.update('quotes', q.id, { status: 'aprovado', osId: os.id, dataAprovacao: domain.today() });
   if (entry) db.update('headEntries', entry.id, { status: 'aprovado', osId: os.id });
   if (entry && entry.assetId) db.update('assets', entry.assetId, { osId: os.id });
+
+  /* O trabalho aparece na Produção e o valor em Contas a receber sem
+     ninguém redigitar nada: aprovar o orçamento fecha o ciclo inteiro. */
+  const op = gerarProducaoDaOS(os, user);
+  const fin = gerarFinanceiroDaOS(os, user, {
+    forma: b.forma, condicao: b.parcelado ? 'parcelado' : 'a_vista',
+    parcelas: b.parcelas, intervaloDias: b.intervaloDias,
+    vencimento: b.vencimento, dataBase: b.dataBase || domain.today()
+  });
+  // Entrada paga na aprovação (ex.: metade agora, metade na entrega).
+  if (Number(b.entrada) > 0) {
+    const atual = db.get('serviceOrders', os.id);
+    receberDaOS(atual, user, { valor: Number(b.entrada), forma: b.formaEntrada || b.forma || 'pix' });
+  }
+
   audit(user, 'aprovou', 'quotes', q.id, `Orçamento nº ${q.numero} aprovado → OS nº ${numero}`);
   db.insert('audit', {
     at: new Date().toISOString(), userId: user.id, userName: user.name, action: 'timeline',
     entity: 'serviceOrders', entityId: os.id, clientId: q.clienteId,
-    details: `Orçamento nº ${q.numero} aprovado — OS nº ${numero} aberta`
+    details: `Orçamento nº ${q.numero} aprovado — OS nº ${numero} aberta` +
+      (op ? ` · ordem de produção #${op.id}` : '') +
+      (fin.criadas ? ` · ${fin.criadas} conta(s) a receber` : '')
   });
-  ok(res, os);
+  ok(res, db.get('serviceOrders', os.id));
 });
 
 route('POST', '/api/quotes/:id/reject', 'quotes', async (req, res, user, params) => {
@@ -1834,9 +1851,22 @@ route('PUT', '/api/os/:id', 'os', async (req, res, user, params) => {
     evento: 'OS editada' + (mudou.length ? ' — ' + mudou.join('; ') : '')
   }]);
   patch.historico = hist;
+  // db.update altera o próprio registro, então o valor antigo é guardado antes.
+  const valorAntigo = Number(antes.valorTotal || 0);
   const os = db.update('serviceOrders', antes.id, patch);
+  // A ordem de produção acompanha a OS sem perder o que a equipe já marcou.
+  gerarProducaoDaOS(os, user);
+  // Mudou o valor: o plano de cobrança em aberto é refeito na mesma hora.
+  if (valorAntigo !== Number(os.valorTotal || 0)) {
+    gerarFinanceiroDaOS(os, user, {
+      forma: (os.pagamento || {}).forma,
+      condicao: (os.pagamento || {}).condicao,
+      parcelas: (os.pagamento || {}).parcelas,
+      intervaloDias: (os.pagamento || {}).intervaloDias
+    });
+  }
   audit(user, 'alterou', 'serviceOrders', os.id, `OS nº ${os.numero} editada${mudou.length ? ' — ' + mudou.join('; ') : ''}`);
-  ok(res, os);
+  ok(res, db.get('serviceOrders', os.id));
 });
 
 route('POST', '/api/os/:id/duplicate', 'os', async (req, res, user, params) => {
@@ -1864,6 +1894,7 @@ route('POST', '/api/os/:id/duplicate', 'os', async (req, res, user, params) => {
     duplicadaDe: origem.numero,
     historico: [{ at: new Date().toISOString(), por: user.name, evento: `OS criada como cópia da nº ${origem.numero}` }]
   });
+  gerarProducaoDaOS(os, user);
   audit(user, 'criou', 'serviceOrders', os.id, `OS nº ${numero} duplicada da nº ${origem.numero} — ${cliente.nome}`);
   ok(res, os);
 });
@@ -1878,6 +1909,7 @@ route('DELETE', '/api/os/:id', 'os', async (req, res, user, params) => {
     return bad(res, `Esta OS já tem ${pagas.length + caixa.length} movimentação(ões) financeira(s) registrada(s). Em vez de excluir, use Cancelar — o histórico e o financeiro ficam preservados.`);
   }
   for (const r of recs) db.remove('receivables', r.id);
+  for (const p of db.all('productionOrders').filter(p => p.osId === os.id)) db.remove('productionOrders', p.id);
   if (os.quoteId) db.update('quotes', os.quoteId, { osId: null });
   if (os.entryId) db.update('headEntries', os.entryId, { osId: null, status: 'orcado' });
   db.remove('serviceOrders', os.id);
@@ -1898,6 +1930,9 @@ route('POST', '/api/os/:id/cancel', 'os', async (req, res, user, params) => {
     evento: `OS cancelada${b.motivo ? ' — ' + b.motivo : ''}${recs.length ? ` (${recs.length} parcela(s) em aberto cancelada(s))` : ''}`
   }]);
   db.update('serviceOrders', os.id, { status: 'cancelada', historico: hist });
+  for (const p of db.all('productionOrders').filter(p => p.osId === os.id && p.status !== 'cancelado')) {
+    db.update('productionOrders', p.id, { status: 'cancelado', osStatus: 'cancelada' });
+  }
   audit(user, 'cancelou', 'serviceOrders', os.id, `OS nº ${os.numero} cancelada${b.motivo ? ' — ' + b.motivo : ''}`);
   ok(res, db.get('serviceOrders', os.id));
 });
@@ -1912,6 +1947,9 @@ route('POST', '/api/os/:id/status', 'os', async (req, res, user, params) => {
   os.historico = os.historico || [];
   os.historico.push({ at: new Date().toISOString(), por: user.name, evento: 'Status → ' + b.status });
   db.update('serviceOrders', os.id, patch);
+  for (const p of db.all('productionOrders').filter(p => p.osId === os.id && p.status !== 'cancelado')) {
+    db.update('productionOrders', p.id, { osStatus: b.status });
+  }
   audit(user, 'status', 'serviceOrders', os.id, `OS nº ${os.numero} → ${b.status}`);
   db.insert('audit', {
     at: new Date().toISOString(), userId: user.id, userName: user.name, action: 'timeline',
@@ -1931,9 +1969,97 @@ route('POST', '/api/os/:id/envio', 'os', async (req, res, user, params) => {
   ok(res, { ok: true });
 });
 
+/* ---- financeiro do serviço ----
+   O valor da OS vira conta a receber sozinho, do mesmo jeito que a venda de
+   cabeçote. Uma única função monta o plano, e ela é usada tanto na aprovação
+   do orçamento quanto quando alguém troca a forma de pagamento depois. */
+
+/** Quanto já entrou nesta OS (recebimentos parciais registrados). */
+function recebidoDaOS(os) {
+  return Math.round((os.recebimentos || []).reduce((s, r) => s + (Number(r.valor) || 0), 0) * 100) / 100;
+}
+
+/** Resumo financeiro da OS: total, recebido, saldo. */
+function resumoFinanceiroOS(os) {
+  const total = Number(os.valorTotal) || 0;
+  const recebido = recebidoDaOS(os);
+  /* Parcelas baixadas em Contas a receber contam aqui. Ficam de fora as
+     baixas automáticas (auto) e a conta de "saldo", que é só o espelho do
+     que já está em `recebimentos` — somar as duas contaria o mesmo dinheiro
+     duas vezes. */
+  const pagas = db.all('receivables')
+    .filter(r => r.refType === 'serviceOrders' && r.refId === os.id &&
+                 r.status === 'paga' && !r.auto && r.origem !== 'saldo')
+    .reduce((s, r) => s + (Number(r.valor) || 0), 0);
+  const quitado = Math.round((recebido + pagas) * 100) / 100;
+  return { total, recebido: quitado, saldo: Math.round((total - quitado) * 100) / 100 };
+}
+
 /**
- * Registro do pagamento de uma OS.
- * À vista → entra direto no caixa. Parcelado/boleto → gera contas a receber automáticas.
+ * (Re)monta as contas a receber de uma OS. Só mexe no que está em aberto e
+ * foi gerado pelo sistema — parcela já recebida nunca é tocada.
+ * opcoes: { forma, condicao: 'a_vista'|'parcelado', parcelas, intervaloDias,
+ *           vencimento, dataBase, entrada }
+ */
+function gerarFinanceiroDaOS(os, user, opcoes = {}) {
+  const cliente = db.get('clients', os.clienteId);
+  const total = Number(os.valorTotal) || 0;
+  if (total <= 0) return { criadas: 0, motivo: 'OS sem valor' };
+
+  // Fora o que já foi recebido: o plano cobre apenas o que falta.
+  const jaRecebido = resumoFinanceiroOS(os).recebido;
+  const aCobrar = Math.round((total - jaRecebido) * 100) / 100;
+
+  // Limpa só as parcelas em aberto criadas automaticamente para esta OS.
+  for (const r of db.all('receivables').filter(r =>
+    r.refType === 'serviceOrders' && r.refId === os.id && r.status !== 'paga' && r.status !== 'cancelada')) {
+    db.remove('receivables', r.id);
+  }
+  if (aCobrar <= 0.005) {
+    db.update('serviceOrders', os.id, { pagamentoStatus: 'pago' });
+    return { criadas: 0, motivo: 'já quitada' };
+  }
+
+  const forma = opcoes.forma || (os.pagamento && os.pagamento.forma) || 'boleto';
+  const base = opcoes.dataBase || domain.today();
+  const parcelas = Math.max(1, Number(opcoes.parcelas) || 1);
+  const parcelado = opcoes.condicao === 'parcelado' && parcelas > 1;
+
+  let criadas = 0;
+  if (parcelado) {
+    const parcels = domain.generateInstallments(base, aCobrar, parcelas, opcoes.intervaloDias);
+    for (const p of parcels) {
+      db.insert('receivables', {
+        clienteId: os.clienteId, origem: 'servico', refType: 'serviceOrders', refId: os.id,
+        descricao: `OS nº ${os.numero} — ${os.modelo || 'serviço'} — parcela ${p.parcela}/${p.parcelas}`,
+        forma, valor: p.valor, vencimento: p.vencimento,
+        status: 'aberto', parcela: p.parcela, parcelas: p.parcelas
+      });
+      criadas++;
+    }
+  } else {
+    db.insert('receivables', {
+      clienteId: os.clienteId, origem: 'servico', refType: 'serviceOrders', refId: os.id,
+      descricao: `OS nº ${os.numero} — ${os.modelo || 'serviço'}`,
+      forma, valor: aCobrar,
+      vencimento: opcoes.vencimento || os.previsaoEntrega || domain.addDays(base, 30),
+      status: 'aberto', parcela: 1, parcelas: 1
+    });
+    criadas = 1;
+  }
+  db.update('serviceOrders', os.id, {
+    pagamentoStatus: jaRecebido > 0 ? 'parcial' : (parcelado ? 'parcelado' : 'pendente'),
+    pagamento: Object.assign({}, os.pagamento, {
+      forma, condicao: parcelado ? 'parcelado' : 'a_vista',
+      parcelas: parcelado ? parcelas : 1, intervaloDias: opcoes.intervaloDias || 30, valor: total
+    })
+  });
+  return { criadas, aCobrar };
+}
+
+/**
+ * Registro do pagamento de uma OS: define a forma e refaz o plano de parcelas.
+ * À vista com dinheiro em caixa entra direto; boleto/parcelado vira conta a receber.
  */
 route('POST', '/api/os/:id/payment', 'receivables', async (req, res, user, params) => {
   const b = await readBody(req);
@@ -1941,24 +2067,36 @@ route('POST', '/api/os/:id/payment', 'receivables', async (req, res, user, param
   if (!os) return notFound(res);
   const cliente = db.get('clients', os.clienteId);
   const valor = Number(b.valor) || os.valorTotal || 0;
-  if (b.parcelado) {
-    const parcels = domain.generateInstallments(b.dataVenda || domain.today(), valor, b.parcelas, b.intervaloDias);
-    for (const p of parcels) {
-      db.insert('receivables', {
-        clienteId: os.clienteId, origem: 'servico', refType: 'serviceOrders', refId: os.id,
-        descricao: `OS nº ${os.numero} — parcela ${p.parcela}/${p.parcelas}`,
-        forma: b.forma || 'boleto', valor: p.valor, vencimento: p.vencimento,
-        status: 'aberto', parcela: p.parcela, parcelas: p.parcelas
-      });
+
+  // "Recebido agora, à vista": entra no caixa e a OS fica quitada.
+  if (b.aVistaAgora) {
+    const data = b.data || domain.today();
+    for (const r of db.all('receivables').filter(r =>
+      r.refType === 'serviceOrders' && r.refId === os.id && r.status !== 'paga' && r.status !== 'cancelada')) {
+      db.remove('receivables', r.id);
     }
-    db.update('serviceOrders', os.id, { pagamentoStatus: 'parcelado', pagamento: { forma: b.forma, parcelas: b.parcelas, intervaloDias: b.intervaloDias, valor } });
-  } else {
     db.insert('cashflow', {
-      tipo: 'entrada', valor, data: b.data || domain.today(), conta: b.conta || 'principal',
+      tipo: 'entrada', valor, data, conta: b.conta || 'principal',
       categoria: 'servico', origem: `OS nº ${os.numero}${cliente ? ' — ' + cliente.nome : ''}`,
       documento: b.documento || '', refType: 'serviceOrders', refId: os.id, descricao: 'Pagamento de serviço'
     });
-    db.update('serviceOrders', os.id, { pagamentoStatus: 'pago', pagamento: { forma: b.forma || 'pix', valor, data: b.data || domain.today() } });
+    db.insert('receivables', {
+      clienteId: os.clienteId, origem: 'servico', refType: 'serviceOrders', refId: os.id,
+      descricao: `OS nº ${os.numero} — à vista (${b.forma || 'pix'})`,
+      forma: b.forma || 'pix', valor, vencimento: data,
+      // auto: baixa lançada pelo próprio sistema, pode ser desfeita ao editar.
+      status: 'paga', auto: true, dataRecebimento: data, parcela: 1, parcelas: 1
+    });
+    db.update('serviceOrders', os.id, {
+      pagamentoStatus: 'pago',
+      pagamento: { forma: b.forma || 'pix', condicao: 'a_vista', parcelas: 1, valor, data }
+    });
+  } else {
+    gerarFinanceiroDaOS(os, user, {
+      forma: b.forma, condicao: b.parcelado ? 'parcelado' : 'a_vista',
+      parcelas: b.parcelas, intervaloDias: b.intervaloDias,
+      vencimento: b.vencimento, dataBase: b.dataVenda || domain.today()
+    });
   }
   audit(user, 'pagamento', 'serviceOrders', os.id, `OS nº ${os.numero} — R$ ${valor.toFixed(2)} (${b.parcelado ? b.parcelas + 'x' : 'à vista'})`);
   db.insert('audit', {
@@ -1966,7 +2104,116 @@ route('POST', '/api/os/:id/payment', 'receivables', async (req, res, user, param
     entity: 'serviceOrders', entityId: os.id, clientId: os.clienteId,
     details: `Pagamento registrado na OS nº ${os.numero}: R$ ${valor.toFixed(2)}`
   });
-  ok(res, { ok: true });
+  ok(res, db.get('serviceOrders', os.id));
+});
+
+/* Recebimento parcial do serviço — mesma lógica da venda de cabeçote:
+   entrada de R$ 1.500 num serviço de R$ 3.000 deixa R$ 1.500 em aberto,
+   e só isso. Nunca as duas coisas ao mesmo tempo. */
+function receberDaOS(os, user, b) {
+  const cliente = db.get('clients', os.clienteId);
+  const valor = Number(b.valor) || 0;
+  if (valor <= 0) return { erro: 'Informe o valor recebido.' };
+  const resumo = resumoFinanceiroOS(os);
+  if (valor > resumo.saldo + 0.005) {
+    return { erro: `O saldo em aberto é R$ ${resumo.saldo.toFixed(2)} — não dá para receber R$ ${valor.toFixed(2)}.` };
+  }
+  const data = b.data || domain.today();
+  const rec = { valor, data, forma: b.forma || 'pix', obs: b.obs || '' };
+  const lista = (os.recebimentos || []).concat([rec]);
+  db.update('serviceOrders', os.id, { recebimentos: lista });
+  db.insert('cashflow', {
+    tipo: 'entrada', valor, data, conta: b.conta || 'principal',
+    categoria: 'servico', origem: `OS nº ${os.numero}${cliente ? ' — ' + cliente.nome : ''} — recebimento`,
+    documento: b.documento || '', refType: 'serviceOrders', refId: os.id,
+    descricao: `Recebimento de serviço (${rec.forma})`
+  });
+
+  // A cobrança cheia dá lugar ao saldo: o mesmo dinheiro não pode aparecer duas vezes.
+  for (const r of db.all('receivables').filter(r =>
+    r.refType === 'serviceOrders' && r.refId === os.id && r.origem !== 'saldo' && r.status !== 'paga' && r.status !== 'cancelada')) {
+    db.remove('receivables', r.id);
+  }
+  const atualizada = db.get('serviceOrders', os.id);
+  const saldo = resumoFinanceiroOS(atualizada).saldo;
+  const saldoAberto = db.all('receivables').find(r =>
+    r.refType === 'serviceOrders' && r.refId === os.id && r.origem === 'saldo' && r.status !== 'paga');
+  if (saldo > 0.005) {
+    const dados = {
+      clienteId: os.clienteId, origem: 'saldo', refType: 'serviceOrders', refId: os.id,
+      descricao: `OS nº ${os.numero} — saldo em aberto`,
+      forma: b.forma || 'pix', valor: saldo,
+      vencimento: b.vencimentoSaldo || os.previsaoEntrega || domain.addDays(data, 30),
+      status: 'aberto', parcela: 1, parcelas: 1
+    };
+    if (saldoAberto) db.update('receivables', saldoAberto.id, { valor: saldo, vencimento: dados.vencimento });
+    else db.insert('receivables', dados);
+    db.update('serviceOrders', os.id, { pagamentoStatus: 'parcial' });
+  } else {
+    if (saldoAberto) db.update('receivables', saldoAberto.id, { status: 'paga', dataRecebimento: data });
+    db.update('serviceOrders', os.id, { pagamentoStatus: 'pago' });
+  }
+
+  audit(user, 'recebeu', 'serviceOrders', os.id,
+    `OS nº ${os.numero} — recebido R$ ${valor.toFixed(2)} (${rec.forma}); saldo R$ ${saldo.toFixed(2)}`);
+  db.insert('audit', {
+    at: new Date().toISOString(), userId: user.id, userName: user.name, action: 'timeline',
+    entity: 'serviceOrders', entityId: os.id, clientId: os.clienteId,
+    details: `Recebimento de R$ ${valor.toFixed(2)} na OS nº ${os.numero} — saldo R$ ${saldo.toFixed(2)}`
+  });
+  return { recebido: recebidoDaOS(db.get('serviceOrders', os.id)), saldo };
+}
+
+route('POST', '/api/os/:id/receive', 'receivables', async (req, res, user, params) => {
+  const b = await readBody(req);
+  const os = db.get('serviceOrders', params.id);
+  if (!os) return notFound(res);
+  const out = receberDaOS(os, user, b);
+  if (out.erro) return bad(res, out.erro);
+  ok(res, out);
+});
+
+/** Desfaz um recebimento parcial do serviço (estorna o caixa e devolve o saldo). */
+route('POST', '/api/os/:id/unreceive', 'receivables', async (req, res, user, params) => {
+  const b = await readBody(req);
+  const os = db.get('serviceOrders', params.id);
+  if (!os) return notFound(res);
+  const idx = Number(b.index);
+  const lista = (os.recebimentos || []).slice();
+  if (!(idx >= 0 && idx < lista.length)) return bad(res, 'Recebimento não encontrado.');
+  const [removido] = lista.splice(idx, 1);
+  db.update('serviceOrders', os.id, { recebimentos: lista });
+
+  const caixa = db.all('cashflow').find(c =>
+    c.refType === 'serviceOrders' && c.refId === os.id && c.tipo === 'entrada' &&
+    Math.abs((Number(c.valor) || 0) - removido.valor) < 0.005 && c.data === removido.data);
+  if (caixa) db.remove('cashflow', caixa.id);
+
+  const atualizada = db.get('serviceOrders', os.id);
+  const saldo = resumoFinanceiroOS(atualizada).saldo;
+  const saldoAberto = db.all('receivables').find(r =>
+    r.refType === 'serviceOrders' && r.refId === os.id && r.origem === 'saldo');
+  if (saldo > 0.005) {
+    if (saldoAberto) db.update('receivables', saldoAberto.id, { valor: saldo, status: 'aberto', dataRecebimento: null });
+    else gerarFinanceiroDaOS(atualizada, user, { forma: (os.pagamento || {}).forma });
+    db.update('serviceOrders', os.id, { pagamentoStatus: lista.length ? 'parcial' : 'pendente' });
+  }
+  audit(user, 'estornou', 'serviceOrders', os.id,
+    `OS nº ${os.numero} — recebimento de R$ ${removido.valor.toFixed(2)} desfeito; saldo R$ ${saldo.toFixed(2)}`);
+  ok(res, { recebido: recebidoDaOS(db.get('serviceOrders', os.id)), saldo });
+});
+
+/** Resumo financeiro do serviço para a tela da OS. */
+route('GET', '/api/os/:id/financeiro', 'receivables', async (req, res, user, params) => {
+  const os = db.get('serviceOrders', params.id);
+  if (!os) return notFound(res);
+  const parcelas = withOverdue(db.all('receivables')
+    .filter(r => r.refType === 'serviceOrders' && r.refId === os.id))
+    .sort((a, b) => String(a.vencimento || '').localeCompare(String(b.vencimento || '')));
+  ok(res, Object.assign(resumoFinanceiroOS(os), {
+    pagamento: os.pagamento || {}, pagamentoStatus: os.pagamentoStatus,
+    recebimentos: os.recebimentos || [], parcelas
+  }));
 });
 
 /* ---- vendas ----
@@ -2049,6 +2296,64 @@ function reverterVenda(sale, user) {
   return null;
 }
 
+/**
+ * Quando a ordem fica pronta, os componentes saem do estoque próprio — uma
+ * única vez, venha o "pronto" do checklist ou de onde for. Serviço não baixa
+ * nada: quem entra é o cabeçote do cliente.
+ */
+function concluirSePronto(po, user) {
+  const atual = andamentoDaOrdem(po);
+  if (atual.status !== 'pronto' || atual.estoqueBaixado || atual.origem === 'servico') return atual;
+  const cascoCat = atual.tipo === 'crossflow' ? 'casco_crossflow' : 'casco_unilateral';
+  const wanted = [
+    it => it.categoria === cascoCat,
+    it => it.categoria === 'valvula' && /admiss/i.test(it.nome),
+    it => it.categoria === 'valvula' && /escape/i.test(it.nome),
+    it => it.categoria === 'mola',
+    it => it.categoria === 'prato',
+    it => it.categoria === 'trava',
+    it => it.categoria === (atual.tucho === '37' ? 'tucho37' : 'tucho35'),
+    it => it.categoria === 'comando' && String(it.nome).includes(atual.comando)
+  ];
+  for (const match of wanted) {
+    const item = db.all('stockItems').find(match);
+    if (item) moveStock(item.id, 'saida', 1, 'productionOrders', atual.id, `Produção pedido nº ${atual.pedidoNumero}`, user);
+  }
+  db.update('productionOrders', atual.id, { estoqueBaixado: true });
+  audit(user, 'concluiu', 'productionOrders', atual.id,
+    `Ordem de produção #${atual.id} pronta — componentes baixados do estoque`);
+  return andamentoDaOrdem(db.get('productionOrders', atual.id));
+}
+
+/**
+ * Ordem de produção com o andamento calculado: etapa atual, progresso de
+ * cada etapa e o status derivado do próprio checklist — assim o que a tela
+ * mostra nunca briga com o que a equipe marcou.
+ */
+function andamentoDaOrdem(po) {
+  if (!po) return po;
+  const checklist = domain.migrarChecklist(po.checklist);
+  if (JSON.stringify(checklist) !== JSON.stringify(po.checklist)) {
+    db.update('productionOrders', po.id, { checklist });
+  }
+  const etapas = domain.ETAPAS_PRODUCAO.map(([chave, nome]) => {
+    const itens = checklist.filter(c => c.etapa === chave);
+    const feitos = itens.filter(c => c.done).length;
+    return {
+      chave, nome, total: itens.length, feitos,
+      situacao: !itens.length ? 'vazia' : feitos === itens.length ? 'concluida' : feitos ? 'andamento' : 'pendente'
+    };
+  });
+  const derivado = domain.statusPorEtapa(checklist);
+  // Cancelado é decisão de gente, não do checklist: esse nunca é sobrescrito.
+  const status = po.status === 'cancelado' ? 'cancelado' : derivado;
+  if (status !== po.status) db.update('productionOrders', po.id, { status });
+  return Object.assign({}, db.get('productionOrders', po.id), {
+    etapas, etapaAtual: domain.etapaAtual(checklist),
+    feitos: checklist.filter(c => c.done).length, totalItens: checklist.length
+  });
+}
+
 /** Cria as ordens de produção dos cabeçotes de uma venda. */
 function gerarProducaoDaVenda(sale, cliente, user) {
   const itens = sale.itens || [], numero = sale.numero;
@@ -2056,15 +2361,59 @@ function gerarProducaoDaVenda(sale, cliente, user) {
   for (const item of itens.filter(i => i.kind !== 'peca')) {
     for (let u = 0; u < item.qtd; u++) {
       db.insert('productionOrders', {
-        saleId: sale.id, pedidoNumero: numero, clienteNome: cliente.nome,
+        origem: 'venda',
+        saleId: sale.id, pedidoNumero: numero, clienteId: cliente.id, clienteNome: cliente.nome,
         productId: item.productId, produto: item.produto,
         tipo: item.tipo, stage: item.stage, comando: item.comando, tucho: item.tucho,
+        qtd: 1, qtdPedido: item.qtd,
+        observacoes: sale.observacoes || '',
         checklist: domain.productionChecklist(item.tipo, item.stage, item.comando, item.tucho),
         status: 'nao_produzido', responsavelId: suggestAssignee('production'),
         previsaoEntrega: sale.previsaoEntrega
       });
     }
   }
+}
+
+/**
+ * Ordem de produção do serviço de um cabeçote de cliente. Nasce da OS —
+ * a equipe nunca redigita nada. Idempotente: se a OS já tem ordem, atualiza
+ * os dados (menos o que já foi marcado) em vez de criar outra.
+ */
+function gerarProducaoDaOS(os, user) {
+  if (!os || os.status === 'cancelado' || os.status === 'cancelada') return null;
+  const cliente = db.get('clients', os.clienteId);
+  const operacoes = (os.itens || []).filter(i => i && i.nome)
+    .map(i => ({ nome: i.nome, qtd: Number(i.qtd) || 1 }));
+  // "Peças necessárias" saem das linhas de material/componente do custo do serviço.
+  const pecas = (os.custoBase || []).concat(os.custoReal || [])
+    .filter(c => ['materiais', 'componentes'].includes(c.tipo) && c.descricao)
+    .map(c => c.descricao);
+  const dados = {
+    origem: 'servico',
+    osId: os.id, osNumero: os.numero, quoteId: os.quoteId || null,
+    clienteId: os.clienteId, clienteNome: cliente ? cliente.nome : '',
+    produto: os.modelo || 'Cabeçote de cliente',
+    identificacao: os.identificacao || '',
+    problema: os.problema || '',
+    descricaoServico: os.descricaoServico || '',
+    operacoes,
+    pecas: [...new Set(pecas)],
+    observacoes: os.observacoes || '',
+    previsaoEntrega: os.previsaoEntrega || '',
+    osStatus: os.status
+  };
+  const existente = db.all('productionOrders').find(p => p.osId === os.id && p.status !== 'cancelado');
+  if (existente) {
+    // Nunca sobrescreve o andamento: só reflete os dados da OS.
+    db.update('productionOrders', existente.id, dados);
+    return db.get('productionOrders', existente.id);
+  }
+  return db.insert('productionOrders', Object.assign({}, dados, {
+    checklist: domain.serviceChecklist(os),
+    status: 'nao_produzido',
+    responsavelId: os.responsavelId || suggestAssignee('production')
+  }));
 }
 
 /** Cria contas a receber / caixa de uma venda, conforme a forma de pagamento. */
@@ -2364,6 +2713,27 @@ route('GET', '/api/sales/:id/result', 'finance_sensitive', async (req, res, user
 });
 
 /* ---- ordens de produção ---- */
+/* Lista de trabalho da produção: cabeçotes vendidos e serviços de cliente
+   no mesmo lugar, cada um com os dados de onde veio. */
+route('GET', '/api/producao', 'production', async (req, res, user) => {
+  const lista = db.all('productionOrders').map(andamentoDaOrdem).map(po => {
+    if (po.origem === 'servico') {
+      const os = db.get('serviceOrders', po.osId);
+      return Object.assign({}, po, {
+        osStatus: os ? os.status : po.osStatus,
+        previsaoEntrega: os ? (os.previsaoEntrega || po.previsaoEntrega) : po.previsaoEntrega
+      });
+    }
+    const sale = db.get('sales', po.saleId);
+    return Object.assign({}, po, {
+      vendaStatus: sale ? sale.status : null,
+      previsaoEntrega: sale ? (sale.previsaoEntrega || po.previsaoEntrega) : po.previsaoEntrega
+    });
+  });
+  lista.sort((a, b) => b.id - a.id);
+  ok(res, { ordens: lista, etapas: domain.ETAPAS_PRODUCAO.map(([chave, nome]) => ({ chave, nome })) });
+});
+
 route('POST', '/api/productionOrders/:id/check', 'production', async (req, res, user, params) => {
   const b = await readBody(req);
   const po = db.get('productionOrders', params.id);
@@ -2373,37 +2743,49 @@ route('POST', '/api/productionOrders/:id/check', 'production', async (req, res, 
   po.checklist[b.index].por = user.name;
   po.checklist[b.index].em = new Date().toISOString();
   db.save();
-  ok(res, po);
+  ok(res, concluirSePronto(po, user));
 });
 
+/* Conclui (ou reabre) uma etapa inteira de uma vez — é assim que a equipe
+   trabalha: termina a separação, marca a etapa, parte para a usinagem. */
+route('POST', '/api/productionOrders/:id/etapa', 'production', async (req, res, user, params) => {
+  const b = await readBody(req);
+  const po = db.get('productionOrders', params.id);
+  if (!po) return notFound(res);
+  if (!domain.ETAPAS_ORDEM.includes(b.etapa)) return bad(res, 'Etapa inválida: ' + b.etapa);
+  const done = !!b.done;
+  let n = 0;
+  for (const c of po.checklist || []) {
+    if (c.etapa !== b.etapa || c.done === done) continue;
+    c.done = done;
+    c.por = user.name;
+    c.em = new Date().toISOString();
+    n++;
+  }
+  db.save();
+  const nome = (domain.ETAPAS_PRODUCAO.find(e => e[0] === b.etapa) || [])[1] || b.etapa;
+  audit(user, 'etapa', 'productionOrders', po.id,
+    `OP #${po.id} — etapa "${nome}" ${done ? 'concluída' : 'reaberta'} (${n} item(ns))`);
+  ok(res, concluirSePronto(po, user));
+});
+
+/* Trocar o responsável (ou cancelar/reabrir a ordem). O ANDAMENTO não é
+   digitado: ele vem do checklist, para a etapa marcada e o status nunca
+   contarem histórias diferentes. */
 route('POST', '/api/productionOrders/:id/status', 'production', async (req, res, user, params) => {
   const b = await readBody(req);
   const po = db.get('productionOrders', params.id);
   if (!po) return notFound(res);
-  const patch = { status: b.status };
+  const patch = {};
   if (b.responsavelId !== undefined) patch.responsavelId = b.responsavelId;
-  db.update('productionOrders', po.id, patch);
-  // Ao concluir a produção, dá baixa automática dos componentes no estoque próprio.
-  if (b.status === 'pronto' && !po.estoqueBaixado) {
-    const cascoCat = po.tipo === 'crossflow' ? 'casco_crossflow' : 'casco_unilateral';
-    const wanted = [
-      it => it.categoria === cascoCat,
-      it => it.categoria === 'valvula' && /admiss/i.test(it.nome),
-      it => it.categoria === 'valvula' && /escape/i.test(it.nome),
-      it => it.categoria === 'mola',
-      it => it.categoria === 'prato',
-      it => it.categoria === 'trava',
-      it => it.categoria === (po.tucho === '37' ? 'tucho37' : 'tucho35'),
-      it => it.categoria === 'comando' && it.nome.includes(po.comando)
-    ];
-    for (const match of wanted) {
-      const item = db.all('stockItems').find(match);
-      if (item) moveStock(item.id, 'saida', 1, 'productionOrders', po.id, `Produção pedido nº ${po.pedidoNumero}`, user);
-    }
-    db.update('productionOrders', po.id, { estoqueBaixado: true });
+  // Cancelar/reabrir é decisão de gente; os demais status saem do checklist.
+  if (b.status === 'cancelado' || (po.status === 'cancelado' && b.status && b.status !== 'cancelado')) {
+    patch.status = b.status === 'cancelado' ? 'cancelado' : domain.statusPorEtapa(po.checklist);
+    audit(user, 'status', 'productionOrders', po.id,
+      `Ordem de produção #${po.id} → ${patch.status === 'cancelado' ? 'cancelada' : 'reaberta'}`);
   }
-  audit(user, 'status', 'productionOrders', po.id, `Ordem de produção #${po.id} → ${b.status}`);
-  ok(res, db.get('productionOrders', po.id));
+  if (Object.keys(patch).length) db.update('productionOrders', po.id, patch);
+  ok(res, concluirSePronto(db.get('productionOrders', po.id), user));
 });
 
 /* ---- estoque: ajustes manuais ---- */
@@ -3414,6 +3796,91 @@ const server = http.createServer(async (req, res) => {
 /* o aplicativo de sincronização sobe o arquivo para a nuvem sozinho.    */
 /* Roda no start e é reavaliado a cada 6 horas.                          */
 
+/* ===================================================================== */
+/* Reconciliação: produção e financeiro do que já estava no sistema      */
+/* ===================================================================== */
+/**
+ * Vendas e OS cadastradas antes desta versão não tinham ordem de produção
+ * nem conta a receber automática. Esta rotina identifica o que ficou para
+ * trás e completa — sempre conferindo antes, para nunca duplicar.
+ */
+function reconciliarProducaoEFinanceiro(user) {
+  const quem = user || { id: 0, name: 'Sistema' };
+  const out = { checklistsAtualizados: 0, producaoVendas: 0, producaoServicos: 0, receberServicos: 0 };
+
+  // 1. Checklists antigos (lista simples) ganham as etapas.
+  for (const p of db.all('productionOrders')) {
+    if ((p.checklist || []).some(c => !c.etapa)) {
+      db.update('productionOrders', p.id, { checklist: domain.migrarChecklist(p.checklist) });
+      out.checklistsAtualizados++;
+    }
+    if (!p.origem) db.update('productionOrders', p.id, { origem: p.osId ? 'servico' : 'venda' });
+  }
+
+  // 2. Vendas de cabeçote sem ordem de produção.
+  for (const sale of db.all('sales')) {
+    if (sale.status === 'cancelado' || sale.status === 'cancelada') continue;
+    const cabecotes = (sale.itens || []).filter(i => i.kind !== 'peca');
+    if (!cabecotes.length) continue;
+    if (db.all('productionOrders').some(p => p.saleId === sale.id)) continue;
+    const cliente = db.get('clients', sale.clienteId);
+    if (!cliente) continue;
+    gerarProducaoDaVenda(sale, cliente, quem);
+    out.producaoVendas += cabecotes.reduce((s, i) => s + (Number(i.qtd) || 1), 0);
+  }
+
+  // 3. Ordens de serviço em andamento sem ordem de produção.
+  for (const os of db.all('serviceOrders')) {
+    if (['cancelado', 'cancelada'].includes(os.status)) continue;
+    if (db.all('productionOrders').some(p => p.osId === os.id)) continue;
+    if (gerarProducaoDaOS(os, quem)) out.producaoServicos++;
+  }
+
+  // 4. Serviços com valor a receber que nunca chegaram ao financeiro.
+  for (const os of db.all('serviceOrders')) {
+    if (['cancelado', 'cancelada'].includes(os.status)) continue;
+    if (!(Number(os.valorTotal) > 0)) continue;
+    if (os.pagamentoStatus === 'pago') continue;
+    // Já tem cobrança ou dinheiro registrado? Então não se mexe.
+    const temReceber = db.all('receivables').some(r => r.refType === 'serviceOrders' && r.refId === os.id);
+    const temCaixa = db.all('cashflow').some(c => c.refType === 'serviceOrders' && c.refId === os.id);
+    if (temReceber || temCaixa) continue;
+    const r = gerarFinanceiroDaOS(os, quem, {
+      forma: (os.pagamento || {}).forma,
+      condicao: (os.pagamento || {}).condicao,
+      parcelas: (os.pagamento || {}).parcelas,
+      intervaloDias: (os.pagamento || {}).intervaloDias
+    });
+    if (r.criadas) out.receberServicos += r.criadas;
+  }
+
+  db.save();
+  return out;
+}
+
+/* Roda uma vez sozinha ao subir a versão nova; depois é só pelo botão. */
+function reconciliacaoInicial() {
+  if (db.settings.reconciliacaoProducaoV1) return;
+  try {
+    const r = reconciliarProducaoEFinanceiro();
+    db.settings.reconciliacaoProducaoV1 = { at: new Date().toISOString(), resultado: r };
+    db.save();
+    const total = r.producaoVendas + r.producaoServicos + r.receberServicos;
+    if (total || r.checklistsAtualizados) {
+      console.log('Reconciliação inicial:', JSON.stringify(r));
+    }
+  } catch (e) {
+    console.error('Falha na reconciliação inicial:', e.message);
+  }
+}
+
+route('POST', '/api/producao/reconciliar', 'admin', async (req, res, user) => {
+  const r = reconciliarProducaoEFinanceiro(user);
+  audit(user, 'reconciliou', 'productionOrders', 0,
+    `Produção/financeiro reconciliados — ${r.producaoVendas} OP de venda, ${r.producaoServicos} OP de serviço, ${r.receberServicos} conta(s) a receber`);
+  ok(res, r);
+});
+
 /** Pastas de nuvem que costumam existir no computador (só as que existem). */
 function cloudCandidates() {
   const home = process.env.USERPROFILE || process.env.HOME || '';
@@ -3477,6 +3944,7 @@ function ensureDailyBackup() {
 }
 ensureDailyBackup();
 setInterval(ensureDailyBackup, 6 * 3600 * 1000);
+reconciliacaoInicial();
 
 process.on('SIGINT', () => { db.persistNow(); process.exit(0); });
 process.on('SIGTERM', () => { db.persistNow(); process.exit(0); });

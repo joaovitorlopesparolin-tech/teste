@@ -318,7 +318,7 @@ const App = {
     montagem: ['Em montagem', 'accent'], pronto: ['Pronto p/ envio', 'ok'], enviado: ['Enviado', 'info'], entregue: ['Entregue', 'ok'],
     // financeiro
     paga: ['Paga', 'ok'], pago: ['Pago', 'ok'], vencida: ['Vencida', 'danger'], cancelada: ['Cancelada', 'danger'],
-    pendente: ['Pendente', 'warn'], parcelado: ['Parcelado', 'info'],
+    pendente: ['Pendente', 'warn'], parcelado: ['Parcelado', 'info'], parcial: ['Recebido em parte', 'info'],
     // bens de terceiros
     na_empresa: ['Na empresa', 'accent'], devolvido: ['Devolvido', 'ok'],
     // fatura fornecedor

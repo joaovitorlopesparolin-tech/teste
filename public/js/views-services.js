@@ -245,11 +245,55 @@ App.registerView('quotes', async (view, args) => {
         `<p class="small muted" style="margin-right:auto">Copia serviços, quantidades, valores e observações.<br>
          O orçamento original não é alterado.</p>`);
     },
-    async approve(id) {
-      if (!await App.confirm('Aprovar este orçamento? Uma Ordem de Serviço será criada automaticamente com todos os dados (cliente, cabeçote, serviços e valores).')) return;
-      const os = await App.post(`/quotes/${id}/approve`, {});
-      App.toast(`Orçamento aprovado — OS nº ${os.numero} criada`, 'ok');
-      location.hash = '#/os';
+    /* Aprovar fecha o ciclo inteiro: abre a OS, joga o trabalho na Produção
+       e lança o valor em Contas a receber — sem ninguém redigitar nada. */
+    approve(id) {
+      const q = quotes.find(x => x.id === id);
+      if (!q) return;
+      const total = Number(q.total) || 0;
+      const m = App.form(`✓ Aprovar orçamento nº ${q.numero}`, [
+        { name: 'previsaoEntrega', label: 'Previsão de entrega', type: 'date',
+          value: q.previsaoEntrega || '', full: true },
+        { name: 'forma', label: 'Forma de pagamento', type: 'select', value: 'pix', options: [
+          { value: 'pix', label: 'Pix' }, { value: 'dinheiro', label: 'Dinheiro' },
+          { value: 'boleto', label: 'Boleto' }, { value: 'cartao', label: 'Cartão' },
+          { value: 'cheque', label: 'Cheque' }, { value: 'outro', label: 'Outro' }] },
+        { name: 'condicao', label: 'Condição', type: 'select', value: 'a_vista', options: [
+          { value: 'a_vista', label: 'Cobrança única' },
+          { value: 'parcelado', label: 'Parcelado' }] },
+        { name: 'parcelas', label: 'Nº de parcelas', type: 'number', value: 1 },
+        { name: 'intervaloDias', label: 'Intervalo entre parcelas (dias)', type: 'number', value: 30 },
+        { name: 'vencimento', label: 'Vencimento da cobrança única', type: 'date', value: '' },
+        { name: 'entrada', label: 'Entrada recebida agora (R$) — opcional', type: 'number', step: '0.01', value: '' }
+      ], async d => {
+        const os = await App.post(`/quotes/${id}/approve`, {
+          previsaoEntrega: d.previsaoEntrega,
+          forma: d.forma,
+          parcelado: d.condicao === 'parcelado',
+          parcelas: Number(d.parcelas) || 1,
+          intervaloDias: Number(d.intervaloDias) || 30,
+          vencimento: d.vencimento,
+          entrada: Number(d.entrada) || 0
+        });
+        App.closeModal();
+        App.toast(`Orçamento aprovado — OS nº ${os.numero}, produção e cobrança criadas`, 'ok');
+        location.hash = '#/os';
+      }, { submitLabel: 'Aprovar e abrir a OS' });
+
+      m.querySelector('.actions').insertAdjacentHTML('afterbegin',
+        `<p class="small muted" style="margin-right:auto">Valor do serviço: <b>R$ ${App.money(total)}</b><br>
+         O trabalho entra na <b>Produção</b> e o valor em <b>Contas a receber</b> automaticamente.</p>`);
+
+      /* Só mostra o que faz sentido para a condição escolhida. */
+      const campo = n => m.querySelector(`[name=${n}]`).closest('.field');
+      const ajustar = () => {
+        const parcelado = m.querySelector('[name=condicao]').value === 'parcelado';
+        campo('parcelas').style.display = parcelado ? '' : 'none';
+        campo('intervaloDias').style.display = parcelado ? '' : 'none';
+        campo('vencimento').style.display = parcelado ? 'none' : '';
+      };
+      m.querySelector('[name=condicao]').addEventListener('change', ajustar);
+      ajustar();
     },
     async reject(id) {
       const m = App.modal(`
@@ -650,17 +694,89 @@ App.registerView('os', async (view) => {
           { h: 'Qtd', class: 'num', cell: i => i.qtd },
           ...(verValores ? [{ h: 'Total', class: 'num', cell: i => 'R$ ' + App.money(i.total) }] : [])
         ])}
-        ${verValores ? `<p style="text-align:right;margin-top:6px">Total: <b>R$ ${App.money(o.valorTotal)}</b> · Pagamento: ${App.badge(o.pagamentoStatus)}</p>` : ''}
+        ${verValores ? `<p style="text-align:right;margin-top:6px">Total: <b>R$ ${App.money(o.valorTotal)}</b> · Pagamento: ${App.badge(o.pagamentoStatus)}</p>
+        <div id="os-fin" class="small muted" style="text-align:right">carregando financeiro…</div>` : ''}
         <h3 style="margin:8px 0">Histórico</h3>
         <ul class="timeline">${(o.historico || []).slice().reverse().map(h =>
           `<li><div class="when">${App.dateTime(h.at)} · ${App.esc(h.por)}</div><div class="what">${App.esc(h.evento)}</div></li>`).join('')}</ul>
         <div class="actions">
-          ${o.pagamentoStatus === 'pendente' && App.can('receivables') ? `<button class="btn" onclick="OS.payment(${o.id})">💰 Registrar pagamento</button>` : ''}
+          ${App.can('receivables') ? `
+            <button class="btn primary" onclick="OS.receber(${o.id})">💰 Registrar recebimento</button>
+            <button class="btn" onclick="OS.payment(${o.id})" title="Trocar a forma de pagamento e refazer as parcelas em aberto">🧾 Forma de pagamento</button>` : ''}
           <button class="btn wa" onclick="OS.wa(${o.id})" title="Avisar o cliente no WhatsApp">✆ WhatsApp</button>
           <button class="btn" onclick="OS.etiqueta(${o.id})" title="Etiqueta de envio com os dados do cliente">📦 Etiqueta</button>
           <button class="btn" onclick="OS.printOne(${o.id})">🖨️ Imprimir OS</button>
           <button class="btn primary" onclick="OS.save(${o.id})">Salvar</button>
         </div>`, { wide: true });
+      if (verValores) OS._resumoFinanceiro(id);
+    },
+
+    /* Resumo do que já entrou e do que falta neste serviço. */
+    async _resumoFinanceiro(id) {
+      const el = document.getElementById('os-fin');
+      if (!el) return;
+      try {
+        const d = await App.get(`/os/${id}/financeiro`);
+        const parcelas = (d.parcelas || []).filter(p => p.status !== 'cancelada');
+        el.innerHTML = `Recebido <b class="pos">R$ ${App.money(d.recebido)}</b> ·
+          Saldo em aberto <b class="${d.saldo > 0 ? 'neg' : 'pos'}">R$ ${App.money(d.saldo)}</b>
+          ${parcelas.length ? ` · ${parcelas.length} parcela(s) em Contas a receber` : ''}`;
+      } catch (e) { el.textContent = ''; }
+    },
+
+    /* Recebimento (total ou parcial) — mesma regra da venda de cabeçote:
+       serviço de R$ 3.000 com entrada de R$ 1.500 deixa R$ 1.500 em aberto. */
+    async receber(id) {
+      const o = oss.find(x => x.id === id);
+      let d;
+      try { d = await App.get(`/os/${id}/financeiro`); }
+      catch (e) { return App.toast(e.message, 'err'); }
+      if (d.saldo <= 0.005) return App.toast('Este serviço já está quitado.', 'ok');
+
+      const m = App.form(`💰 Receber — OS nº ${o.numero}`, [
+        { name: 'valor', label: 'Valor recebido agora (R$)', type: 'number', step: '0.01',
+          value: d.saldo.toFixed(2), required: true },
+        { name: 'forma', label: 'Forma', type: 'select', value: 'pix',
+          options: ['pix', 'dinheiro', 'cartao', 'boleto', 'cheque', 'transferencia']
+            .map(v => ({ value: v, label: v })) },
+        { name: 'data', label: 'Data do recebimento', type: 'date', value: App.today(), required: true },
+        { name: 'vencimentoSaldo', label: 'Vencimento do saldo (se sobrar)', type: 'date',
+          value: o.previsaoEntrega || '' },
+        { name: 'obs', label: 'Observação', full: true }
+      ], async v => {
+        const out = await App.post(`/os/${id}/receive`, {
+          valor: Number(v.valor), forma: v.forma, data: v.data,
+          vencimentoSaldo: v.vencimentoSaldo, obs: v.obs
+        });
+        App.closeModal();
+        App.toast(out.saldo > 0
+          ? `Recebido — saldo em aberto: R$ ${App.money(out.saldo)}`
+          : 'Serviço quitado', 'ok');
+        App.route();
+      }, { submitLabel: 'Registrar recebimento' });
+
+      m.querySelector('.actions').insertAdjacentHTML('afterbegin',
+        `<p class="small muted" style="margin-right:auto">Valor do serviço: <b>R$ ${App.money(d.total)}</b> ·
+         já recebido <b>R$ ${App.money(d.recebido)}</b> · em aberto <b>R$ ${App.money(d.saldo)}</b><br>
+         O que sobrar continua em Contas a receber e na projeção.</p>` +
+        ((d.recebimentos || []).length
+          ? `<div style="width:100%;margin-top:8px">${App.table(d.recebimentos.map((r, i) => Object.assign({ _i: i }, r)), [
+              { h: 'Recebido em', cell: r => App.date(r.data) },
+              { h: 'Forma', cell: r => App.esc(r.forma || '—') },
+              { h: 'Valor', class: 'num', cell: r => App.moneyHtml(r.valor) },
+              { h: '', class: 'num', cell: r => `<button class="btn sm ghost" onclick="OS.desfazerRecebimento(${id}, ${r._i})" title="Desfazer este recebimento">↩️</button>` }
+            ])}</div>`
+          : ''));
+    },
+
+    async desfazerRecebimento(id, index) {
+      if (!await App.confirm('Desfazer este recebimento? A entrada correspondente sai do caixa e o saldo volta para Contas a receber.')) return;
+      try {
+        const out = await App.post(`/os/${id}/unreceive`, { index });
+        App.closeModal();
+        App.toast(`Recebimento desfeito — saldo R$ ${App.money(out.saldo)}`, 'ok');
+        App.route();
+      } catch (e) { App.toast(e.message, 'err'); }
     },
     etiqueta(id) {
       const o = oss.find(x => x.id === id);
@@ -686,20 +802,27 @@ App.registerView('os', async (view) => {
       }
       App.closeModal(); App.toast('OS atualizada', 'ok'); App.route();
     },
+    /* Define/troca a forma de pagamento: as parcelas em aberto são refeitas,
+       e o que já foi recebido nunca é tocado — nada de cobrança duplicada. */
     payment(id) {
       const o = oss.find(x => x.id === id);
-      App.form(`Pagamento da OS nº ${o.numero} — R$ ${App.money(o.valorTotal)}`, [
-        { name: 'forma', label: 'Forma', type: 'select', value: 'pix', options: [
+      const m = App.form(`🧾 Forma de pagamento — OS nº ${o.numero}`, [
+        { name: 'forma', label: 'Forma', type: 'select', value: (o.pagamento || {}).forma || 'boleto', options: [
           'pix', 'dinheiro', 'cartao', 'link', 'boleto', 'cheque'].map(v => ({ value: v, label: v })) },
         { name: 'valor', label: 'Valor (R$)', type: 'number', step: '0.01', value: o.valorTotal },
-        { name: 'parcelado', label: 'Parcelado (gera boletos automáticos)', type: 'checkbox', value: false, full: true },
-        { name: 'parcelas', label: 'Nº de parcelas', type: 'number', value: 1 },
+        { name: 'aVistaAgora', label: 'Já recebido à vista (entra no caixa agora)', type: 'checkbox', value: false, full: true },
+        { name: 'parcelado', label: 'Parcelado (gera as parcelas em Contas a receber)', type: 'checkbox', value: false, full: true },
+        { name: 'parcelas', label: 'Nº de parcelas', type: 'number', value: (o.pagamento || {}).parcelas || 1 },
         { name: 'intervaloDias', label: 'Intervalo entre parcelas (dias)', type: 'number', value: 30 },
+        { name: 'vencimento', label: 'Vencimento (cobrança única)', type: 'date', value: o.previsaoEntrega || '' },
         { name: 'data', label: 'Data (se à vista)', type: 'date', value: App.today() }
       ], async d => {
         await App.post(`/os/${id}/payment`, d);
-        App.closeModal(); App.toast('Pagamento registrado', 'ok'); App.route();
-      });
+        App.closeModal(); App.toast('Cobrança do serviço atualizada', 'ok'); App.route();
+      }, { submitLabel: 'Aplicar' });
+      m.querySelector('.actions').insertAdjacentHTML('afterbegin',
+        `<p class="small muted" style="margin-right:auto">As parcelas <b>em aberto</b> deste serviço são refeitas.<br>
+         O que já foi recebido continua como está.</p>`);
     },
     printOne(id) {
       const o = oss.find(x => x.id === id);

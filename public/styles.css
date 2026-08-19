@@ -271,6 +271,48 @@ textarea { min-height: 72px; resize: vertical; }
 .checklist li.done { color: var(--text-3); text-decoration: line-through; }
 .checklist input { cursor: pointer; }
 
+/* ---------- Etapas da produção ---------- */
+.etapas {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 4px;
+  margin: 12px 0 4px; padding: 8px; border-radius: 10px; background: var(--bg-1);
+}
+.etapas .etapa {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 1px;
+  padding: 6px 12px; border-radius: 8px; cursor: pointer;
+  border: 1px solid var(--line); background: var(--bg-2); color: var(--text-2);
+  font-family: inherit; font-size: 12px; line-height: 1.25; text-align: left;
+}
+.etapas .etapa:hover { border-color: var(--accent); color: var(--text-1); }
+.etapas .etapa .etapa-nome { font-weight: 600; }
+.etapas .etapa .etapa-qtd { font-size: 11px; opacity: .75; }
+.etapas .etapa.concluida { background: var(--ok-bg); border-color: var(--ok); color: var(--ok); }
+.etapas .etapa.concluida .etapa-nome::before { content: '✓ '; }
+.etapas .etapa.atual { border-color: var(--accent); color: var(--text-1); background: var(--accent-dim); }
+.etapas .etapa.andamento { box-shadow: inset 0 -2px 0 var(--accent); }
+.etapas .etapa-seta { color: var(--text-3); font-size: 15px; padding: 0 2px; }
+
+.etapa-bloco { margin-top: 10px; }
+.etapa-titulo {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  font-size: 11.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--text-2); padding: 4px 10px; border-bottom: 1px solid var(--line);
+  cursor: pointer; list-style: none;
+}
+.etapa-titulo::-webkit-details-marker { display: none; }
+.etapa-titulo::before {
+  content: '▸'; margin-right: 6px; font-size: 11px; color: var(--text-3);
+  transition: transform .12s; display: inline-block;
+}
+details[open] > .etapa-titulo::before { transform: rotate(90deg); }
+.etapa-titulo:hover { color: var(--text-1); }
+.etapa-titulo > span:first-child { flex: 1; }
+/* O botão dentro do título não herda o caixa-alta do cabeçalho da etapa. */
+.etapa-titulo .btn { text-transform: none; letter-spacing: normal; font-weight: 550; }
+@media (max-width: 720px) {
+  .etapas .etapa-seta { display: none; }
+  .etapas .etapa { flex: 1 1 45%; }
+}
+
 /* ---------- Diversos ---------- */
 .muted { color: var(--text-2); }
 .small { font-size: 12px; }

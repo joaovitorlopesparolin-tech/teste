@@ -162,31 +162,84 @@ App.registerView('payables', async (view) => {
 
 /* ================= CONTAS A RECEBER ================= */
 App.registerView('receivables', async (view) => {
-  App.setTitle('Contas a receber', 'Boletos, cartões, Pix — com geração automática de parcelas');
-  const [receivables, clients] = await Promise.all([App.get('/receivables'), App.get('/clients')]);
+  App.setTitle('Contas a receber', 'Tudo que a empresa tem para receber — venda de cabeçote e serviço no mesmo lugar');
+  const [receivables, clients, oss, sales] = await Promise.all([
+    App.get('/receivables'), App.get('/clients'), App.get('/serviceOrders'), App.get('/sales')]);
   receivables.sort((a, b) => (a.vencimento || '') < (b.vencimento || '') ? -1 : 1);
 
-  const open = receivables.filter(r => r.status === 'aberto' || r.status === 'vencida');
+  /* De onde vem o dinheiro. É o refType que manda: 'saldo' de uma venda
+     continua sendo venda, e 'saldo' de uma OS continua sendo serviço. */
+  const ORIGENS = {
+    venda: ['Venda de cabeçote', 'accent'],
+    servico: ['Serviço', 'info'],
+    avulso: ['Avulso', '']
+  };
+  const origemDe = (r) => r.refType === 'serviceOrders' ? 'servico'
+    : r.refType === 'sales' ? 'venda'
+    : (r.origem === 'servico' ? 'servico' : r.origem === 'venda' ? 'venda' : 'avulso');
+  const selo = (r) => {
+    const [rotulo, cls] = ORIGENS[origemDe(r)];
+    return `<span class="badge ${cls}">${rotulo}</span>`;
+  };
+  const refDe = (r) => {
+    if (r.refType === 'serviceOrders') {
+      const o = oss.find(x => x.id === r.refId);
+      return o ? `OS nº ${o.numero}` : 'OS #' + r.refId;
+    }
+    if (r.refType === 'sales') {
+      const v = sales.find(x => x.id === r.refId);
+      return v ? `Pedido nº ${v.numero}` : 'Pedido #' + r.refId;
+    }
+    return '—';
+  };
+
+  const aberto = r => r.status === 'aberto' || r.status === 'vencida';
+  const open = receivables.filter(aberto);
   const totalOpen = open.reduce((s, r) => s + r.valor, 0);
   const totalOverdue = open.filter(r => r.status === 'vencida').reduce((s, r) => s + r.valor, 0);
+  const abertoDe = o => open.filter(r => origemDe(r) === o).reduce((s, r) => s + r.valor, 0);
 
   view.innerHTML = `
-    <div class="toolbar">
+    <div class="grid cols-4">
+      <div class="card kpi ${totalOverdue ? 'k-danger' : ''}"><div class="label">Vencido</div>
+        <div class="value money">${App.money(totalOverdue)}</div></div>
+      <div class="card kpi k-warn"><div class="label">Total em aberto</div>
+        <div class="value money">${App.money(totalOpen)}</div></div>
+      <div class="card kpi"><div class="label">Venda de cabeçote</div>
+        <div class="value money">${App.money(abertoDe('venda'))}</div></div>
+      <div class="card kpi"><div class="label">Serviços</div>
+        <div class="value money">${App.money(abertoDe('servico'))}</div></div>
+    </div>
+    <div class="toolbar" style="margin-top:14px">
       <button class="btn primary" onclick="Recv.generate()">+ Gerar boletos / parcelas</button>
-      <select id="rf" style="max-width:180px"><option value="">Todos</option>
+      <select id="rf-origem" style="max-width:210px">
+        <option value="">Toda a receita</option>
+        <option value="venda">Venda de cabeçote</option>
+        <option value="servico">Serviço</option>
+        <option value="avulso">Avulso</option>
+      </select>
+      <select id="rf" style="max-width:180px"><option value="">Todos os status</option>
         <option value="aberto">Em aberto</option><option value="vencida">Vencidas</option>
         <option value="paga">Pagas</option><option value="cancelada">Canceladas</option></select>
       <div class="spacer"></div>
-      <span class="badge ${totalOverdue ? 'danger' : 'ok'}">Vencido: R$ ${App.money(totalOverdue)}</span>
-      <span class="badge">Em aberto: R$ ${App.money(totalOpen)}</span>
+      <span class="muted small" id="rf-contagem"></span>
       <button class="btn" onclick="Recv.print()">🖨️ Imprimir</button>
     </div>
     <div id="r-table"></div>`;
 
-  const render = () => {
+  const filtrada = () => {
     const f = document.getElementById('rf').value;
-    const list = receivables.filter(r => !f || r.status === f);
+    const fo = document.getElementById('rf-origem').value;
+    return receivables.filter(r => (!f || r.status === f) && (!fo || origemDe(r) === fo));
+  };
+
+  const render = () => {
+    const list = filtrada();
+    const soma = list.filter(aberto).reduce((s, r) => s + r.valor, 0);
+    document.getElementById('rf-contagem').textContent =
+      `${list.length} lançamento(s) · R$ ${App.money(soma)} em aberto`;
     document.getElementById('r-table').innerHTML = App.table(list, [
+      { h: 'Origem', cell: r => `${selo(r)}<div class="small muted">${App.esc(refDe(r))}</div>` },
       { h: 'Cliente', cell: r => `<b>${App.esc(App.clientName(r.clienteId, clients))}</b>` },
       { h: 'Descrição', cell: r => `<span class="small">${App.esc(r.descricao)}</span>` },
       { h: 'Forma', cell: r => App.esc(r.forma || '—') },
@@ -195,6 +248,7 @@ App.registerView('receivables', async (view) => {
       { h: 'Valor', class: 'num', cell: r => App.moneyHtml(r.valor) },
       { h: 'Status', cell: r => App.badge(r.status) },
       { h: '', class: 'num', cell: r => `
+        <button class="btn sm ghost" onclick="Recv.detalhe(${r.id})" title="Total, parcelas, recebido e saldo">🔍</button>
         ${(r.status === 'aberto' || r.status === 'vencida') ? `
           <button class="btn sm primary" onclick="Recv.receive(${r.id})">✓ Receber</button>
           <button class="btn sm ghost wa" onclick="Recv.wa(${r.id})" title="Cobrar no WhatsApp">✆</button>` : ''}
@@ -203,10 +257,11 @@ App.registerView('receivables', async (view) => {
           <button class="btn sm ghost" onclick="Recv.replan(${r.id})" title="Recalcular as parcelas futuras deste grupo">🔁</button>` : ''}
         ${(r.status === 'aberto' || r.status === 'vencida') ? `<button class="btn sm ghost" onclick="Recv.cancel(${r.id})" title="Cancelar (mantém o histórico)">✕</button>` : ''}
         <button class="btn sm ghost" onclick="Recv.excluir(${r.id})" title="Excluir lançamento">🗑️</button>` }
-    ], { emptyMsg: 'Nenhum recebível' });
+    ], { emptyMsg: 'Nenhum recebível nesta seleção' });
   };
   render();
   document.getElementById('rf').addEventListener('change', render);
+  document.getElementById('rf-origem').addEventListener('change', render);
 
   /* Parcelas irmãs: mesma venda (refType/refId) ou, nos boletos avulsos,
      mesmo cliente e mesma descrição-base. */
@@ -366,15 +421,79 @@ App.registerView('receivables', async (view) => {
       await App.post(`/receivables/${id}/cancel`, {});
       App.route();
     },
+    /* Painel do título: total combinado, parcelas, o que já entrou e o que
+       falta — para venda de cabeçote e para serviço, do mesmo jeito. */
+    detalhe(id) {
+      const r = receivables.find(x => x.id === id);
+      if (!r) return;
+      const grupo = grupoDe(r).slice().sort((a, b) =>
+        String(a.vencimento || '').localeCompare(String(b.vencimento || '')) || a.id - b.id);
+      const vivos = grupo.filter(x => x.status !== 'cancelada');
+      const total = vivos.reduce((s, x) => s + x.valor, 0);
+      const pagas = vivos.filter(x => x.status === 'paga');
+      const recebidoParcelas = pagas.reduce((s, x) => s + x.valor, 0);
+
+      // Recebimentos parciais ficam guardados na venda / na OS.
+      const fonte = r.refType === 'sales' ? sales.find(x => x.id === r.refId)
+        : r.refType === 'serviceOrders' ? oss.find(x => x.id === r.refId) : null;
+      const parciais = (fonte && fonte.recebimentos) || [];
+      const recebidoParcial = parciais.reduce((s, x) => s + (Number(x.valor) || 0), 0);
+      const valorContratado = fonte
+        ? Number(fonte.valorTotal) || 0
+        : total + recebidoParcial;
+      const recebido = Math.round((recebidoParcelas + recebidoParcial) * 100) / 100;
+      const saldo = Math.round((valorContratado - recebido) * 100) / 100;
+      const pag = (fonte && fonte.pagamento) || {};
+
+      App.modal(`
+        <h2>${ORIGENS[origemDe(r)][0]} — ${App.esc(refDe(r))}</h2>
+        <p class="small muted">${App.esc(App.clientName(r.clienteId, clients))}${
+          fonte && fonte.modelo ? ' · ' + App.esc(fonte.modelo) : ''}${
+          fonte && fonte.descricaoServico ? ' · ' + App.esc(fonte.descricaoServico) : ''}</p>
+        <div class="grid cols-4" style="margin-top:12px">
+          <div class="card kpi"><div class="label">Valor total</div><div class="value money">${App.money(valorContratado)}</div></div>
+          <div class="card kpi k-ok"><div class="label">Já recebido</div><div class="value money">${App.money(recebido)}</div></div>
+          <div class="card kpi ${saldo > 0 ? 'k-warn' : 'k-ok'}"><div class="label">Saldo em aberto</div><div class="value money">${App.money(saldo)}</div></div>
+          <div class="card kpi"><div class="label">Situação</div><div class="value" style="font-size:15px;padding-top:6px">${
+            App.badge(saldo <= 0.005 ? 'pago' : recebido > 0 ? 'parcial' : 'pendente')}</div></div>
+        </div>
+        <div class="section-title">FORMA DE PAGAMENTO</div>
+        <p class="small">${App.esc(pag.forma || r.forma || '—')}${
+          vivos.length > 1 ? ` · ${vivos.length} parcelas de ~R$ ${App.money(total / vivos.length)}` : ' · parcela única'}</p>
+        <div class="section-title">PARCELAS</div>
+        ${App.table(grupo, [
+          { h: 'Parcela', cell: x => x.parcelas > 1 ? `${x.parcela}/${x.parcelas}` : 'única' },
+          { h: 'Descrição', cell: x => `<span class="small">${App.esc(x.descricao)}</span>` },
+          { h: 'Vencimento', cell: x => App.date(x.vencimento) },
+          { h: 'Valor', class: 'num', cell: x => App.moneyHtml(x.valor) },
+          { h: 'Recebida em', cell: x => x.dataRecebimento ? App.date(x.dataRecebimento) : '—' },
+          { h: 'Status', cell: x => App.badge(x.status) }
+        ], { emptyMsg: 'Sem parcelas' })}
+        ${parciais.length ? `<div class="section-title">RECEBIMENTOS PARCIAIS</div>
+          ${App.table(parciais, [
+            { h: 'Data', cell: x => App.date(x.data) },
+            { h: 'Forma', cell: x => App.esc(x.forma || '—') },
+            { h: 'Observação', cell: x => `<span class="small muted">${App.esc(x.obs || '—')}</span>` },
+            { h: 'Valor', class: 'num', cell: x => App.moneyHtml(x.valor) }
+          ])}` : ''}
+        <div class="actions"><button class="btn" onclick="App.closeModal()">Fechar</button></div>`, { wide: true });
+    },
+
     print() {
+      const list = filtrada();
       const f = document.getElementById('rf').value;
-      const list = receivables.filter(r => !f || r.status === f);
-      App.print('Contas a receber' + (f ? ' — ' + (App.STATUS[f] || [f])[0] : ''),
-        `<table><tr><th>Cliente</th><th>Descrição</th><th>Parcela</th><th>Vencimento</th><th class="num">Valor</th><th>Status</th></tr>
-        ${list.map(r => `<tr><td>${App.esc(App.clientName(r.clienteId, clients))}</td><td>${App.esc(r.descricao)}</td>
+      const fo = document.getElementById('rf-origem').value;
+      const titulo = 'Contas a receber' +
+        (fo ? ' — ' + ORIGENS[fo][0] : '') +
+        (f ? ' — ' + (App.STATUS[f] || [f])[0] : '');
+      const emAberto = list.filter(aberto).reduce((s, r) => s + r.valor, 0);
+      App.print(titulo,
+        `<table><tr><th>Origem</th><th>Referência</th><th>Cliente</th><th>Descrição</th><th>Parcela</th><th>Vencimento</th><th class="num">Valor</th><th>Status</th></tr>
+        ${list.map(r => `<tr><td>${ORIGENS[origemDe(r)][0]}</td><td>${App.esc(refDe(r))}</td>
+        <td>${App.esc(App.clientName(r.clienteId, clients))}</td><td>${App.esc(r.descricao)}</td>
         <td>${r.parcelas > 1 ? r.parcela + '/' + r.parcelas : 'única'}</td><td>${App.date(r.vencimento)}</td>
         <td class="num">R$ ${App.money(r.valor)}</td><td>${(App.STATUS[r.status] || [r.status])[0]}</td></tr>`).join('')}</table>`,
-        list.length + ' título(s)');
+        `${list.length} título(s) — R$ ${App.money(emAberto)} em aberto`);
     }
   };
 });
