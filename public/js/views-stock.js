@@ -15,26 +15,29 @@ App.registerView('stock', async (view) => {
   };
 
   const cols = [
-    { h: 'Item', cell: i => `<b>${App.esc(i.nome)}</b>` },
+    { h: 'Item', cell: i => `<b>${App.esc(i.nome)}</b>${App.seloInativo(i)}` },
     { h: 'Categoria', cell: i => `<span class="small muted">${CATS[i.categoria] || i.categoria}</span>` },
     { h: 'Quantidade', class: 'num', cell: i =>
       `<b class="${i.qtd <= 0 ? 'neg' : (i.minimo && i.qtd <= i.minimo ? 'neg' : '')}">${i.qtd}</b>${i.minimo ? `<span class="small muted"> / mín ${i.minimo}</span>` : ''}` },
     ...(fin ? [{ h: 'Custo unit.', class: 'num', cell: i => 'R$ ' + App.money(i.custoUnit || 0) },
                { h: 'Valor em estoque', class: 'num', cell: i => 'R$ ' + App.money((i.custoUnit || 0) * i.qtd) }] : []),
-    { h: '', class: 'num', cell: i => `
+    { h: '', class: 'num', cell: i => i.ativo === false
+      ? `<button class="btn sm ghost" onclick="Stock.reativar(${i.id})" title="Reativar item">↩️ Reativar</button>`
+      : `
       <button class="btn sm" onclick="Stock.move(${i.id}, 'entrada')">+ Entrada</button>
       <button class="btn sm" onclick="Stock.move(${i.id}, 'saida')">− Saída</button>
-      <button class="btn sm ghost" onclick="Stock.edit(${i.id})">✎</button>
-      <button class="btn sm ghost" title="Excluir item" onclick="Stock.del(${i.id})">🗑</button>` }
+      <button class="btn sm ghost" onclick="Stock.edit(${i.id})" title="Editar cadastro">✏️</button>
+      <button class="btn sm ghost" title="Excluir item" onclick="Stock.del(${i.id})">🗑️</button>` }
   ];
 
   const groups = Object.keys(CATS).map(cat => {
-    const list = items.filter(i => i.categoria === cat);
+    const list = items.filter(i => i.categoria === cat && i.ativo !== false);
     if (!list.length) return '';
     return `<div class="section-title">${CATS[cat]}</div>` + App.table(list, cols);
   }).join('');
+  const inativos = items.filter(i => i.ativo === false);
 
-  const low = items.filter(i => i.minimo && i.qtd <= i.minimo);
+  const low = items.filter(i => i.minimo && i.qtd <= i.minimo && i.ativo !== false);
 
   view.innerHTML = `
     <div class="toolbar">
@@ -44,6 +47,7 @@ App.registerView('stock', async (view) => {
       <button class="btn" onclick="Stock.print()">🖨️ Imprimir</button>
     </div>
     ${groups}
+    ${inativos.length ? `<div class="section-title">Itens inativos <span class="small muted">— não aparecem em novas vendas nem em movimentações; o histórico continua intacto</span></div>` + App.table(inativos, cols) : ''}
     <div class="section-title">Últimas movimentações</div>
     ${App.table(moves.slice(0, 30), [
       { h: 'Data', cell: m => App.date(m.data) },
@@ -68,17 +72,13 @@ App.registerView('stock', async (view) => {
         App.closeModal(); App.toast('Item salvo', 'ok'); App.route();
       });
     },
-    async del(id) {
+    del(id) {
       const i = items.find(x => x.id === id);
-      let msg = `Excluir o item "${i.nome}" do estoque?`;
-      if (i.qtd) msg += ` Atenção: ele ainda tem ${i.qtd} unidade(s) em estoque.`;
-      if (moves.some(m => m.itemId === id)) msg += ' As movimentações já registradas permanecem no histórico.';
-      if (!await App.confirm(msg)) return;
-      try {
-        await App.del('/stockItems/' + id);
-        App.toast('Item excluído do estoque', 'ok');
-        App.route();
-      } catch (e) { App.toast(e.message, 'err'); }
+      App.excluirCadastro('stockItems', id, i && i.nome);
+    },
+    reativar(id) {
+      const i = items.find(x => x.id === id);
+      App.reativar('stockItems', id, i && i.nome);
     },
     move(id, tipo) {
       const i = items.find(x => x.id === id);
@@ -93,12 +93,12 @@ App.registerView('stock', async (view) => {
     print() {
       App.print('Posição de estoque próprio',
         Object.keys(CATS).map(cat => {
-          const list = items.filter(i => i.categoria === cat);
+          const list = items.filter(i => i.categoria === cat && i.ativo !== false);
           if (!list.length) return '';
           return `<h3>${CATS[cat]}</h3><table><tr><th>Item</th><th class="num">Qtd</th><th class="num">Mínimo</th></tr>
             ${list.map(i => `<tr><td>${App.esc(i.nome)}</td><td class="num">${i.qtd}</td><td class="num">${i.minimo || '—'}</td></tr>`).join('')}</table>`;
         }).join(''),
-        items.length + ' itens');
+        App.ativos(items).length + ' itens');
     }
   };
 });

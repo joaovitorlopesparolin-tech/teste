@@ -96,7 +96,11 @@ App.registerView('hr', async (view) => {
         { h: 'Benefícios', class: 'num', cell: e => 'R$ ' + App.money(e.beneficios || 0) }] : []),
       { h: 'Dia de pagamento', class: 'num', cell: e => e.diaPagamento || '—' },
       { h: 'Ativo', cell: e => e.ativo !== false ? App.badge('ok') : App.badge('cancelada') },
-      { h: '', class: 'num', cell: e => `<button class="btn sm ghost" onclick="HR.editEmp(${e.id})">✎</button>` }
+      { h: '', class: 'num', cell: e => `
+        <button class="btn sm ghost" onclick="HR.editEmp(${e.id})" title="Editar cadastro">✏️</button>
+        ${e.ativo === false
+          ? `<button class="btn sm ghost" onclick="HR.reativarEmp(${e.id})" title="Reativar cadastro">↩️</button>`
+          : `<button class="btn sm ghost" onclick="HR.excluirEmp(${e.id})" title="Excluir cadastro">🗑️</button>`}` }
     ]);
   };
 
@@ -246,6 +250,15 @@ App.registerView('hr', async (view) => {
     },
 
     editPayment(id) { HR.addPayment(id); },
+
+    excluirEmp(id) {
+      const e = employees.find(x => x.id === id);
+      App.excluirCadastro('employees', id, e && e.nome);
+    },
+    reativarEmp(id) {
+      const e = employees.find(x => x.id === id);
+      App.reativar('employees', id, e && e.nome);
+    },
 
     async delPayment(id) {
       const p = payments.find(x => x.id === id);

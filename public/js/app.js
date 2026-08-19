@@ -91,6 +91,80 @@ const App = {
     atualiza();
   },
 
+  /* ---------------- Cadastros ativos / inativos ----------------
+     Inativar não apaga nada: o registro continua no banco (o histórico
+     depende dele), mas some das listas e dos campos de escolha. */
+
+  /** Lista sem os inativos. `manter` preserva o item já escolhido num formulário. */
+  ativos(lista, manter) {
+    const keep = Number(manter);
+    return (lista || []).filter(r => r.ativo !== false || Number(r.id) === keep);
+  },
+  /** Selo para listas que mostram inativos junto com os ativos. */
+  seloInativo(r) {
+    return r && r.ativo === false ? ' <span class="badge cancelada" title="Cadastro inativo — não aparece em novos lançamentos">inativo</span>' : '';
+  },
+  /** Volta um cadastro inativado para o uso normal. */
+  async reativar(colecao, id, nome, campo) {
+    if (!await this.confirm(`Reativar ${nome ? `<b>${this.esc(nome)}</b>` : 'este cadastro'}? Ele volta a aparecer nas listas e nos campos de escolha.`, { html: true })) return;
+    try {
+      await this.put(`/${colecao}/${id}`, { [campo || 'ativo']: true });
+      this.toast('Cadastro reativado', 'ok');
+      this.route();
+    } catch (e) { this.toast(e.message, 'err'); }
+  },
+
+  /**
+   * Excluir cadastro com rede de proteção, igual em todos os módulos.
+   * Confirma; se o cadastro estiver em uso, mostra exatamente o que está
+   * preso a ele e oferece INATIVAR — apagar deixaria vendas, compras e
+   * lançamentos apontando para o vazio.
+   *
+   * colecao: 'clients' | 'suppliers' | 'products' | 'stockItems' | 'employees' | 'serviceCatalog'
+   */
+  async excluirCadastro(colecao, id, nome, { aoConcluir } = {}) {
+    const rotulo = nome ? `<b>${this.esc(nome)}</b>` : 'este cadastro';
+    let info = { vinculos: [], podeInativar: false };
+    try { info = await this.get(`/vinculos/${colecao}/${id}`); } catch (e) { /* segue com a confirmação simples */ }
+
+    if (info.vinculos && info.vinculos.length) {
+      const lista = info.vinculos.map(v => `<li>${v.qtd} ${this.esc(v.rotulo)}</li>`).join('');
+      const m = this.modal(`
+        <h2>Cadastro em uso</h2>
+        <p>${rotulo} está vinculado a:</p>
+        <ul style="margin:8px 0 0 20px;line-height:1.7">${lista}</ul>
+        <p class="small muted" style="margin-top:12px">Excluir deixaria esses registros sem referência — a venda,
+        a compra ou o lançamento continuariam existindo, mas sem saber de quem são. ${info.podeInativar
+          ? 'O caminho seguro é <b>inativar</b>: some das listas e dos campos de escolha, e todo o histórico fica intacto.'
+          : ''}</p>
+        <div class="actions">
+          <button class="btn" onclick="App.closeModal()">Cancelar</button>
+          ${info.podeInativar && info.ativo !== false
+            ? '<button class="btn primary" id="cad-inativar">Inativar cadastro</button>' : ''}
+        </div>`);
+      const btn = m.querySelector('#cad-inativar');
+      if (btn) btn.onclick = async () => {
+        try {
+          await this.put(`/${colecao}/${id}`, { [info.campoAtivo || 'ativo']: false });
+          this.closeModal();
+          this.toast('Cadastro inativado — o histórico continua intacto', 'ok');
+          if (aoConcluir) aoConcluir(); else this.route();
+        } catch (e) { this.toast(e.message, 'err'); }
+      };
+      return false;
+    }
+
+    if (!await this.confirm(`Tem certeza que deseja excluir ${rotulo}?<br><br>
+      <span class="small">Nenhum registro está vinculado a ele, então nada mais é afetado. Isto não pode ser desfeito.</span>`,
+      { html: true })) return false;
+    try {
+      await this.del(`/${colecao}/${id}`);
+      this.toast('Cadastro excluído', 'ok');
+      if (aoConcluir) aoConcluir(); else this.route();
+      return true;
+    } catch (e) { this.toast(e.message, 'err'); return false; }
+  },
+
   /* ---------------- API ---------------- */
   /* O token fica no localStorage quando o usuário marca "manter conectado"
      (login permanece mesmo fechando o navegador) ou no sessionStorage quando
@@ -102,13 +176,13 @@ const App = {
     (remember ? localStorage : sessionStorage).setItem('jm_token', t);
   },
 
-  async api(method, path, body) {
+  async api(method, path, body, extraHeaders) {
     const res = await fetch('/api' + path, {
       method,
-      headers: {
+      headers: Object.assign({
         'Content-Type': 'application/json',
         'Authorization': 'Bearer ' + this.token()
-      },
+      }, extraHeaders || {}),
       body: body !== undefined ? JSON.stringify(body) : undefined
     });
     if (res.status === 401) { this.logout(false); throw new Error('Sessão expirada'); }
@@ -119,7 +193,7 @@ const App = {
   get(p) { return this.api('GET', p); },
   post(p, b) { return this.api('POST', p, b); },
   put(p, b) { return this.api('PUT', p, b); },
-  del(p) { return this.api('DELETE', p); },
+  del(p, extraHeaders) { return this.api('DELETE', p, undefined, extraHeaders); },
 
   can(perm) { return this.permissions.includes(perm) || this.permissions.includes('admin'); },
 
@@ -919,7 +993,7 @@ const App = {
   },
   clientOptions(clients, selected) {
     return [{ value: '', label: '— selecione —' }].concat(
-      clients.slice().sort((a, b) => (a.nome || '').localeCompare(b.nome || '', 'pt-BR'))
-        .map(c => ({ value: c.id, label: c.nome })));
+      this.ativos(clients, selected).slice().sort((a, b) => (a.nome || '').localeCompare(b.nome || '', 'pt-BR'))
+        .map(c => ({ value: c.id, label: c.nome + (c.ativo === false ? ' (inativo)' : '') })));
   }
 };

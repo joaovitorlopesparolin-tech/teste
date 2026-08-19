@@ -86,22 +86,29 @@ App.registerView('clients', async (view, args) => {
     estado: (a, b) => (a.estado || '').localeCompare(b.estado || '', 'pt-BR') || (a.nome || '').localeCompare(b.nome || '', 'pt-BR')
   };
   let ordem = 'nome';
+  let verInativos = false;
 
   const render = (filter) => {
     clients.sort(ORDENS[ordem] || ORDENS.nome);
     const f = (filter || '').toLowerCase().trim();
     const fd = App.digits(f); // busca por documento ignora pontos, barras e traços
-    const list = clients.filter(c =>
+    const base = verInativos ? clients : App.ativos(clients);
+    const list = base.filter(c =>
       !f || (c.nome || '').toLowerCase().includes(f) || (c.cidade || '').toLowerCase().includes(f) ||
       (fd && App.digits(c.cpfCnpj).includes(fd)) || (fd && App.digits(c.cep).includes(fd)) ||
       (c.estado || '').toLowerCase() === f);
     document.getElementById('clients-table').innerHTML = App.table(list, [
-      { h: 'Nome / Razão social', cell: c => `<b>${App.esc(c.nome)}</b><div class="small muted">${App.esc(c.tipo || '')}</div>` },
+      { h: 'Nome / Razão social', cell: c => `<b>${App.esc(c.nome)}</b>${App.seloInativo(c)}<div class="small muted">${App.esc(c.tipo || '')}</div>` },
       { h: 'CPF / CNPJ', cell: c => c.cpfCnpj ? `<span class="mono">${App.esc(App.fmtCpfCnpj(c.cpfCnpj))}</span>` : '<span class="muted">—</span>' },
       { h: 'Telefone / WhatsApp', cell: c => `${App.esc(c.telefone || '—')}${c.whatsapp ? `<div class="small muted">WhatsApp: ${App.esc(c.whatsapp)}</div>` : ''}` },
       { h: 'Cidade', cell: c => App.esc(c.cidade || '—') },
       { h: 'UF', cell: c => App.esc(c.estado || '—') },
-      { h: '', class: 'num', cell: c => `<button class="btn sm" onclick="location.hash='#/clients/${c.id}'">Abrir perfil</button>` }
+      { h: '', class: 'num', cell: c => `
+        <button class="btn sm" onclick="location.hash='#/clients/${c.id}'">Abrir perfil</button>
+        <button class="btn sm ghost" onclick="event.stopPropagation();Clients.edit(${c.id})" title="Editar cadastro">✏️</button>
+        ${c.ativo === false
+          ? `<button class="btn sm ghost" onclick="event.stopPropagation();Clients.reativar(${c.id})" title="Reativar cadastro">↩️</button>`
+          : `<button class="btn sm ghost" onclick="event.stopPropagation();Clients.excluir(${c.id})" title="Excluir cadastro">🗑️</button>`}` }
     ], { onRow: c => location.hash = '#/clients/' + c.id });
   };
 
@@ -116,7 +123,9 @@ App.registerView('clients', async (view, args) => {
         <option value="estado">Por estado</option>
       </select>
       <div class="spacer"></div>
-      <span class="muted small">${clients.length} cliente(s)</span>
+      ${clients.some(c => c.ativo === false) ? `<label class="small muted" style="display:flex;gap:6px;align-items:center;cursor:pointer">
+        <input type="checkbox" id="client-inativos" style="width:auto"> Mostrar inativos</label>` : ''}
+      <span class="muted small">${App.ativos(clients).length} cliente(s)</span>
     </div>
     <div id="clients-table"></div>`;
   render();
@@ -125,8 +134,21 @@ App.registerView('clients', async (view, args) => {
     ordem = e.target.value;
     render(document.getElementById('client-search').value);
   });
+  const chkInativos = document.getElementById('client-inativos');
+  if (chkInativos) chkInativos.addEventListener('change', e => {
+    verInativos = e.target.checked;
+    render(document.getElementById('client-search').value);
+  });
 
   window.Clients = {
+    excluir(id) {
+      const c = clients.find(x => x.id === id);
+      App.excluirCadastro('clients', id, c && c.nome);
+    },
+    reativar(id) {
+      const c = clients.find(x => x.id === id);
+      App.reativar('clients', id, c && c.nome);
+    },
     edit(id) {
       const c = id ? clients.find(x => x.id === id) : {};
       clientForm(id ? 'Editar cliente' : 'Novo cliente', c, async d => {

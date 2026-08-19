@@ -140,11 +140,23 @@ App.registerView('admin', async (view) => {
             ? 'R$ ' + App.money(s.preco)
             : '<span class="badge warn">definir preço</span>' },
         { h: 'Ativo', cell: s => s.ativo ? App.badge('ok') : App.badge('cancelada') },
-        { h: '', class: 'num', cell: s => `<button class="btn sm ghost" onclick="Adm.editService(${s.id})">✎ Editar</button>` }
+        { h: '', class: 'num', cell: s => `
+          <button class="btn sm ghost" onclick="Adm.editService(${s.id})">✏️ Editar</button>
+          ${s.ativo === false
+            ? `<button class="btn sm ghost" onclick="Adm.reativarService(${s.id})" title="Reativar cadastro">↩️</button>`
+            : `<button class="btn sm ghost" onclick="Adm.excluirService(${s.id})" title="Excluir cadastro">🗑️</button>`}` }
       ])}
       <p class="small muted" style="margin-top:10px">O preço-base é usado como sugestão nos orçamentos.
       Em cada orçamento é possível usar um valor personalizado sem alterar o catálogo.</p>`;
     window.Adm = window.Adm || {};
+    Adm.excluirService = (id) => {
+      const s = catalog.find(x => x.id === id);
+      App.excluirCadastro('serviceCatalog', id, s && s.nome, { aoConcluir: () => renderCatalog(el) });
+    };
+    Adm.reativarService = (id) => {
+      const s = catalog.find(x => x.id === id);
+      App.reativar('serviceCatalog', id, s && s.nome);
+    };
     Adm.editService = (id) => {
       const s = id ? catalog.find(x => x.id === id) : {};
       App.form(id ? 'Editar serviço' : 'Novo serviço do catálogo', [
