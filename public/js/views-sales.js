@@ -609,96 +609,226 @@ async function saleEditor(view, editId) {
 
 /* ================= PRODUÇÃO ================= */
 App.registerView('production', async (view) => {
-  App.setTitle('Produção sob encomenda', 'Ordens de produção com checklist de separação, operações e montagem');
-  const pos = await App.get('/productionOrders');
-  pos.sort((a, b) => b.id - a.id);
+  App.setTitle('Produção', 'A lista de trabalho da equipe: cabeçotes vendidos e serviços de clientes, com checklist por etapa');
+  const dados = await App.get('/producao');
+  const pos = dados.ordens || [];
+  const ETAPAS = dados.etapas || [];
   const ST = ['nao_produzido', 'preparacao', 'usinagem', 'montagem', 'pronto'];
   const users = App.meta.users.filter(u => u.active);
 
+  let filtroStatus = '', filtroTipo = '', filtroEtapa = '';
+
+  const pendentes = pos.filter(p => p.status !== 'pronto' && p.status !== 'cancelado');
+  const deVenda = pos.filter(p => p.origem !== 'servico' && p.status !== 'cancelado');
+  const deServico = pos.filter(p => p.origem === 'servico' && p.status !== 'cancelado');
+
   view.innerHTML = `
-    <div class="toolbar">
-      <select id="pf" style="max-width:210px"><option value="">Todas</option>
+    <div class="grid cols-4">
+      <div class="card kpi"><div class="label">Em produção</div><div class="value">${pendentes.length}</div></div>
+      <div class="card kpi"><div class="label">Cabeçotes vendidos</div><div class="value">${deVenda.filter(p => p.status !== 'pronto').length}</div></div>
+      <div class="card kpi"><div class="label">Serviços de clientes</div><div class="value">${deServico.filter(p => p.status !== 'pronto').length}</div></div>
+      <div class="card kpi k-ok"><div class="label">Prontos p/ envio</div><div class="value">${pos.filter(p => p.status === 'pronto').length}</div></div>
+    </div>
+    <div class="toolbar" style="margin-top:14px">
+      <select id="pf-tipo" style="max-width:210px">
+        <option value="">Vendas e serviços</option>
+        <option value="venda">Só cabeçotes vendidos</option>
+        <option value="servico">Só serviços de clientes</option>
+      </select>
+      <select id="pf" style="max-width:200px"><option value="">Todos os status</option>
         ${ST.map(s => `<option value="${s}">${(App.STATUS[s] || [s])[0]}</option>`).join('')}</select>
+      <select id="pf-etapa" style="max-width:210px"><option value="">Todas as etapas</option>
+        ${ETAPAS.map(e => `<option value="${e.chave}">${App.esc(e.nome)}</option>`).join('')}</select>
       <div class="spacer"></div>
+      <span class="muted small" id="pf-contagem"></span>
       <button class="btn" onclick="PO.print()">🖨️ Imprimir ordens</button>
     </div>
     <div id="po-list"></div>`;
 
+  /* Barra de etapas: mostra de relance onde a ordem está e deixa concluir
+     a etapa inteira de uma vez, que é como a equipe realmente trabalha. */
+  const barraEtapas = (p) => `
+    <div class="etapas">
+      ${(p.etapas || []).filter(e => e.total).map(e => `
+        <button class="etapa ${e.situacao}${e.chave === p.etapaAtual ? ' atual' : ''}"
+          title="${e.feitos}/${e.total} item(ns) — clique para ${e.situacao === 'concluida' ? 'reabrir' : 'concluir'} a etapa"
+          onclick="PO.etapa(${p.id}, '${e.chave}', ${e.situacao !== 'concluida'})">
+          <span class="etapa-nome">${App.esc(e.nome)}</span>
+          <span class="etapa-qtd">${e.feitos}/${e.total}</span>
+        </button>`).join('<span class="etapa-seta">›</span>')}
+    </div>`;
+
+  const cabecalhoVenda = (p) => `
+    <b>OP #${p.id}</b> <span class="badge accent">Cabeçote vendido</span>
+    <div style="margin-top:3px">${App.esc(p.produto)} · <b>Stage ${p.stage}</b> ·
+      ${p.tipo === 'crossflow' ? 'fluxo cruzado' : 'unilateral'} ·
+      comando <b>${App.esc(p.comando || '—')}</b> · tucho <b>${App.esc(String(p.tucho || '—'))} mm</b></div>
+    <div class="small muted">Pedido nº ${p.pedidoNumero} · ${App.esc(p.clienteNome || '—')}
+      ${p.qtdPedido > 1 ? ` · 1 de ${p.qtdPedido} do pedido` : ''}
+      · previsão ${App.date(p.previsaoEntrega)} · resp.: ${App.esc(App.userName(p.responsavelId))}</div>
+    ${p.observacoes ? `<div class="small" style="margin-top:4px"><b>Obs.:</b> ${App.esc(p.observacoes)}</div>` : ''}`;
+
+  const cabecalhoServico = (p) => `
+    <b>OP #${p.id}</b> <span class="badge info">Serviço de cliente</span>
+    ${p.osStatus ? App.badge(p.osStatus) : ''}
+    <div style="margin-top:3px">${App.esc(p.produto || 'Cabeçote de cliente')}${p.identificacao ? ` · <span class="mono">${App.esc(p.identificacao)}</span>` : ''}</div>
+    <div class="small muted">OS nº ${p.osNumero} · ${App.esc(p.clienteNome || '—')}
+      · prazo ${App.date(p.previsaoEntrega)} · resp.: ${App.esc(App.userName(p.responsavelId))}</div>
+    ${p.problema ? `<div class="small" style="margin-top:4px"><b>Problema:</b> ${App.esc(p.problema)}</div>` : ''}
+    ${p.descricaoServico ? `<div class="small"><b>Serviço:</b> ${App.esc(p.descricaoServico)}</div>` : ''}
+    ${(p.operacoes || []).length ? `<div class="small" style="margin-top:4px"><b>Operações:</b> ${
+      p.operacoes.map(o => App.esc((o.qtd > 1 ? o.qtd + '× ' : '') + o.nome)).join(' · ')}</div>` : ''}
+    ${(p.pecas || []).length ? `<div class="small"><b>Peças necessárias:</b> ${p.pecas.map(x => App.esc(x)).join(' · ')}</div>` : ''}
+    ${p.observacoes ? `<div class="small" style="margin-top:4px"><b>Obs.:</b> ${App.esc(p.observacoes)}</div>` : ''}`;
+
+  /* A etapa atual já vem aberta; as que o usuário abrir à mão continuam
+     abertas quando a tela se redesenha. */
+  const abertas = new Set();
+
   const render = () => {
-    const f = document.getElementById('pf').value;
-    const list = pos.filter(p => (!f || p.status === f) && p.status !== 'cancelado');
-    document.getElementById('po-list').innerHTML = list.length ? list.map(p => {
-      const done = p.checklist.filter(c => c.done).length;
-      return `<div class="card" style="margin-bottom:12px">
-        <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;align-items:center">
-          <div>
-            <b>OP #${p.id}</b> — ${App.esc(p.produto)} · comando <b>${p.comando}</b> · tucho <b>${p.tucho} mm</b>
-            <div class="small muted">Pedido nº ${p.pedidoNumero} · ${App.esc(p.clienteNome)} · previsão ${App.date(p.previsaoEntrega)}
-             · resp.: ${App.esc(App.userName(p.responsavelId))}</div>
-          </div>
-          <div style="display:flex;gap:8px;align-items:center">
-            <span class="small muted">${done}/${p.checklist.length}</span>
-            ${App.badge(p.status)}
-            <select onchange="PO.setStatus(${p.id}, this.value)" style="width:auto">
-              ${ST.map(s => `<option value="${s}" ${p.status === s ? 'selected' : ''}>${(App.STATUS[s] || [s])[0]}</option>`).join('')}
-            </select>
-            <select onchange="PO.setResp(${p.id}, this.value)" style="width:auto">
+    const list = pos.filter(p =>
+      p.status !== 'cancelado' &&
+      (!filtroStatus || p.status === filtroStatus) &&
+      (!filtroTipo || (filtroTipo === 'servico' ? p.origem === 'servico' : p.origem !== 'servico')) &&
+      (!filtroEtapa || p.etapaAtual === filtroEtapa));
+    document.getElementById('pf-contagem').textContent = `${list.length} ordem(ns)`;
+    document.getElementById('po-list').innerHTML = list.length ? list.map(p => `
+      <div class="card" style="margin-bottom:12px">
+        <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;align-items:flex-start">
+          <div>${p.origem === 'servico' ? cabecalhoServico(p) : cabecalhoVenda(p)}</div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <span class="small muted" title="Itens concluídos no checklist">${p.feitos}/${p.totalItens}</span>
+            <span title="O status acompanha o checklist — marque as etapas abaixo">${App.badge(p.status)}</span>
+            <select onchange="PO.setResp(${p.id}, this.value)" style="width:auto" title="Responsável">
               <option value="">— responsável —</option>
               ${users.map(u => `<option value="${u.id}" ${p.responsavelId === u.id ? 'selected' : ''}>${App.esc(u.name)}</option>`).join('')}
             </select>
-            <button class="btn sm" onclick="PO.printOne(${p.id})">🖨️</button>
+            ${p.origem === 'servico'
+              ? `<button class="btn sm ghost" onclick="location.hash='#/os'" title="Abrir a ordem de serviço">Ver OS</button>`
+              : `<button class="btn sm ghost" onclick="location.hash='#/sales'" title="Abrir o pedido">Ver pedido</button>`}
+            <button class="btn sm" onclick="PO.printOne(${p.id})" title="Imprimir esta ordem">🖨️</button>
+            <button class="btn sm ghost" onclick="PO.cancelar(${p.id})" title="Cancelar a ordem de produção">🚫</button>
           </div>
         </div>
-        <ul class="checklist" style="margin-top:10px;columns:2;column-gap:24px">
-          ${p.checklist.map((c, i) => `<li class="${c.done ? 'done' : ''}" style="break-inside:avoid">
-            <input type="checkbox" ${c.done ? 'checked' : ''} onchange="PO.check(${p.id}, ${i}, this.checked)">
-            <span>${App.esc(c.item)}</span>
-            ${c.done && c.por ? `<span class="small muted">(${App.esc(c.por)})</span>` : ''}
-          </li>`).join('')}
-        </ul>
-      </div>`;
-    }).join('') : '<div class="card"><div class="empty">Nenhuma ordem de produção nesta situação</div></div>';
+        ${barraEtapas(p)}
+        ${(p.etapas || []).filter(e => e.total).map(e => `
+          <details class="etapa-bloco" ${e.chave === p.etapaAtual || abertas.has(p.id + ':' + e.chave) ? 'open' : ''}
+            data-op="${p.id}" data-etapa="${e.chave}">
+            <summary class="etapa-titulo">
+              <span>${App.esc(e.nome)} <span class="muted">${e.feitos}/${e.total}</span></span>
+              <span class="btn sm ghost" onclick="event.preventDefault();event.stopPropagation();PO.etapa(${p.id}, '${e.chave}', ${e.situacao !== 'concluida'})">
+                ${e.situacao === 'concluida' ? 'Reabrir etapa' : 'Concluir etapa'}</span>
+            </summary>
+            <ul class="checklist">
+              ${p.checklist.map((c, i) => [c, i]).filter(([c]) => c.etapa === e.chave).map(([c, i]) => `
+                <li class="${c.done ? 'done' : ''}">
+                  <input type="checkbox" ${c.done ? 'checked' : ''} onchange="PO.check(${p.id}, ${i}, this.checked)">
+                  <span>${App.esc(c.item)}</span>
+                  ${c.done && c.por ? `<span class="small muted">(${App.esc(c.por)})</span>` : ''}
+                </li>`).join('')}
+            </ul>
+          </details>`).join('')}
+      </div>`).join('')
+      : `<div class="card"><div class="empty">Nenhuma ordem de produção nesta situação.
+         ${pos.length ? 'Experimente limpar os filtros acima.' :
+           'Vendas de cabeçote e orçamentos aprovados entram aqui automaticamente. Se faltar algo antigo, use <b>Reconciliar</b> em Administração.'}</div></div>`;
   };
   render();
-  document.getElementById('pf').addEventListener('change', render);
+  document.getElementById('po-list').addEventListener('toggle', e => {
+    const d = e.target;
+    if (!d.matches || !d.matches('details.etapa-bloco')) return;
+    const chave = d.dataset.op + ':' + d.dataset.etapa;
+    if (d.open) abertas.add(chave); else abertas.delete(chave);
+  }, true);
+  document.getElementById('pf').addEventListener('change', e => { filtroStatus = e.target.value; render(); });
+  document.getElementById('pf-tipo').addEventListener('change', e => { filtroTipo = e.target.value; render(); });
+  document.getElementById('pf-etapa').addEventListener('change', e => { filtroEtapa = e.target.value; render(); });
+
+  /* Atualiza a ordem na tela com o que o servidor devolveu (etapas e status
+     vêm calculados de lá, então a tela nunca inventa andamento). */
+  const aplicar = (novo) => {
+    const i = pos.findIndex(x => x.id === novo.id);
+    if (i >= 0) pos[i] = Object.assign({}, pos[i], novo);
+    render();
+  };
 
   window.PO = {
     async check(id, i, done) {
-      await App.post(`/productionOrders/${id}/check`, { index: i, done });
-      const p = pos.find(x => x.id === id);
-      p.checklist[i].done = done; p.checklist[i].por = App.user.name;
-      render();
+      const antes = (pos.find(x => x.id === id) || {}).status;
+      try {
+        const novo = await App.post(`/productionOrders/${id}/check`, { index: i, done });
+        aplicar(novo);
+        if (novo.status === 'pronto' && antes !== 'pronto') {
+          App.toast(novo.origem === 'servico'
+            ? 'Serviço concluído — pronto para devolver ao cliente'
+            : 'Produção concluída — componentes baixados do estoque próprio', 'ok');
+        }
+      } catch (e) { App.toast(e.message, 'err'); }
     },
-    async setStatus(id, status) {
-      await App.post(`/productionOrders/${id}/status`, { status });
-      const p = pos.find(x => x.id === id); p.status = status;
-      if (status === 'pronto') App.toast('Produção concluída — componentes baixados do estoque próprio', 'ok');
-      render();
+    async etapa(id, etapa, done) {
+      const antes = (pos.find(x => x.id === id) || {}).status;
+      try {
+        const novo = await App.post(`/productionOrders/${id}/etapa`, { etapa, done });
+        aplicar(novo);
+        if (novo.status === 'pronto' && antes !== 'pronto') {
+          App.toast(novo.origem === 'servico'
+            ? 'Serviço concluído — pronto para devolver ao cliente'
+            : 'Produção concluída — componentes baixados do estoque próprio', 'ok');
+        }
+      } catch (e) { App.toast(e.message, 'err'); }
+    },
+    async cancelar(id) {
+      const p = pos.find(x => x.id === id);
+      if (!await App.confirm(`Cancelar a ordem de produção #${id}?<br><br>
+        <span class="small">Ela sai da lista de trabalho da equipe. O ${p.origem === 'servico' ? 'serviço' : 'pedido'} continua como está.</span>`,
+        { html: true })) return;
+      try {
+        await App.post(`/productionOrders/${id}/status`, { status: 'cancelado' });
+        App.toast('Ordem cancelada', 'ok');
+        App.route();
+      } catch (e) { App.toast(e.message, 'err'); }
     },
     async setResp(id, v) {
-      await App.post(`/productionOrders/${id}/status`, { status: pos.find(x => x.id === id).status, responsavelId: v ? Number(v) : null });
-      pos.find(x => x.id === id).responsavelId = v ? Number(v) : null;
-      render();
+      try { aplicar(await App.post(`/productionOrders/${id}/status`, { responsavelId: v ? Number(v) : null })); }
+      catch (e) { App.toast(e.message, 'err'); }
     },
     printOne(id) {
       const p = pos.find(x => x.id === id);
-      App.print(`Ordem de Produção #${p.id}`, `
-        <table><tr><th>Produto</th><th>Comando</th><th>Tucho</th><th>Pedido</th><th>Cliente</th><th>Previsão</th></tr>
-        <tr><td>${App.esc(p.produto)}</td><td>${p.comando}</td><td>${p.tucho} mm</td>
-        <td>nº ${p.pedidoNumero}</td><td>${App.esc(p.clienteNome)}</td><td>${App.date(p.previsaoEntrega)}</td></tr></table>
-        <h3>Checklist de produção</h3>
-        <ul class="check">${p.checklist.map(c => `<li>${App.esc(c.item)}</li>`).join('')}</ul>
-        <div class="sig"><div>Produzido por</div><div>Controle de qualidade</div></div>`,
+      const ficha = p.origem === 'servico'
+        ? `<table><tr><th>OS</th><th>Cliente</th><th>Cabeçote</th><th>Identificação</th><th>Prazo</th></tr>
+           <tr><td>nº ${p.osNumero}</td><td>${App.esc(p.clienteNome || '')}</td><td>${App.esc(p.produto || '')}</td>
+           <td>${App.esc(p.identificacao || '—')}</td><td>${App.date(p.previsaoEntrega)}</td></tr></table>
+           ${p.problema ? `<p><b>Problema:</b> ${App.esc(p.problema)}</p>` : ''}
+           ${(p.operacoes || []).length ? `<p><b>Operações:</b> ${p.operacoes.map(o => App.esc((o.qtd > 1 ? o.qtd + '× ' : '') + o.nome)).join(' · ')}</p>` : ''}
+           ${(p.pecas || []).length ? `<p><b>Peças:</b> ${p.pecas.map(x => App.esc(x)).join(' · ')}</p>` : ''}`
+        : `<table><tr><th>Produto</th><th>Stage</th><th>Comando</th><th>Tucho</th><th>Pedido</th><th>Cliente</th><th>Previsão</th></tr>
+           <tr><td>${App.esc(p.produto)}</td><td>${p.stage}</td><td>${App.esc(p.comando || '')}</td><td>${App.esc(String(p.tucho || ''))} mm</td>
+           <td>nº ${p.pedidoNumero}</td><td>${App.esc(p.clienteNome || '')}</td><td>${App.date(p.previsaoEntrega)}</td></tr></table>`;
+      App.print(`Ordem de Produção #${p.id}`,
+        ficha +
+        (p.observacoes ? `<p><b>Observações:</b> ${App.esc(p.observacoes)}</p>` : '') +
+        (p.etapas || []).filter(e => e.total).map(e => `
+          <h3>${App.esc(e.nome)}</h3>
+          <ul class="check">${p.checklist.filter(c => c.etapa === e.chave).map(c => `<li>${App.esc(c.item)}</li>`).join('')}</ul>`).join('') +
+        '<div class="sig"><div>Executado por</div><div>Controle de qualidade</div></div>',
         `Responsável: ${App.userName(p.responsavelId)}`);
     },
     print() {
-      const f = document.getElementById('pf').value;
-      const list = pos.filter(p => (!f || p.status === f) && p.status !== 'cancelado');
-      App.print('Ordens de produção' + (f ? ' — ' + (App.STATUS[f] || [f])[0] : ''),
-        list.map(p => `<h3>OP #${p.id} — ${App.esc(p.produto)} · comando ${p.comando} · tucho ${p.tucho} mm
-          <span class="badge">${(App.STATUS[p.status] || [p.status])[0]}</span></h3>
-          <p style="font-size:11px;color:#555">Pedido nº ${p.pedidoNumero} — ${App.esc(p.clienteNome)} — previsão ${App.date(p.previsaoEntrega)}</p>
-          <ul class="check">${p.checklist.filter(c => !c.done).map(c => `<li>${App.esc(c.item)}</li>`).join('') || '<li style="list-style:none">— tudo concluído —</li>'}</ul>`).join(''),
+      const list = pos.filter(p =>
+        p.status !== 'cancelado' &&
+        (!filtroStatus || p.status === filtroStatus) &&
+        (!filtroTipo || (filtroTipo === 'servico' ? p.origem === 'servico' : p.origem !== 'servico')) &&
+        (!filtroEtapa || p.etapaAtual === filtroEtapa));
+      App.print('Ordens de produção' + (filtroStatus ? ' — ' + (App.STATUS[filtroStatus] || [filtroStatus])[0] : ''),
+        list.map(p => `
+          <h3>OP #${p.id} — ${p.origem === 'servico'
+            ? `Serviço · OS nº ${p.osNumero} · ${App.esc(p.produto || '')}`
+            : `${App.esc(p.produto)} · comando ${App.esc(p.comando || '')} · tucho ${App.esc(String(p.tucho || ''))} mm`}
+            <span class="badge">${(App.STATUS[p.status] || [p.status])[0]}</span></h3>
+          <p style="font-size:11px;color:#555">${p.origem === 'servico' ? 'OS nº ' + p.osNumero : 'Pedido nº ' + p.pedidoNumero}
+            — ${App.esc(p.clienteNome || '')} — previsão ${App.date(p.previsaoEntrega)}</p>
+          <ul class="check">${p.checklist.filter(c => !c.done)
+            .map(c => `<li>${App.esc(c.item)}</li>`).join('') || '<li style="list-style:none">— tudo concluído —</li>'}</ul>`).join(''),
         list.length + ' ordem(ns) — somente itens pendentes listados');
     }
   };

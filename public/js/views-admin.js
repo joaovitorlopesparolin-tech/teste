@@ -217,6 +217,16 @@ App.registerView('admin', async (view) => {
       </div>
 
       <div class="card" style="max-width:560px;margin-top:16px">
+        <h3>🔄 RECONCILIAR PRODUÇÃO E FINANCEIRO</h3>
+        <p class="small muted" style="margin-bottom:12px">Confere as vendas de cabeçote e as ordens de serviço já
+        cadastradas e completa o que faltou: <b>ordem de produção</b> para o que ainda precisa ser feito e
+        <b>conta a receber</b> para o serviço que tem valor em aberto. Nada é duplicado — o que já existe é respeitado.
+        Use se sentir falta de algo antigo na Produção ou em Contas a receber.</p>
+        <button class="btn primary" onclick="Adm.reconciliar()">Verificar e completar agora</button>
+        <div id="cfg-recon" class="small" style="margin-top:10px"></div>
+      </div>
+
+      <div class="card" style="max-width:560px;margin-top:16px">
         <h3>✦ ASSISTENTE DE IA</h3>
         <p class="small muted" style="margin-bottom:12px">O assistente (botão ✦ no canto da tela) responde perguntas
         sobre os dados do sistema. A chave fica gravada apenas neste computador e nunca aparece para os usuários —
@@ -306,6 +316,33 @@ App.registerView('admin', async (view) => {
         e.target.value === 'claude' ? 'padrão: claude-haiku-4-5' : 'padrão: gemini-2.5-flash';
     });
     window.Adm = window.Adm || {};
+    /* O resultado vai numa janela: a tela se atualiza sozinha quando o banco
+       muda, e um aviso escrito no meio da página sumiria antes de ser lido. */
+    Adm.reconciliar = async () => {
+      const el = document.getElementById('cfg-recon');
+      if (el) el.innerHTML = '<span class="muted">verificando…</span>';
+      try {
+        const r = await App.post('/producao/reconciliar', {});
+        const linhas = [
+          [r.producaoVendas, 'ordem(ns) de produção de cabeçote vendido'],
+          [r.producaoServicos, 'ordem(ns) de produção de serviço'],
+          [r.receberServicos, 'conta(s) a receber de serviço'],
+          [r.checklistsAtualizados, 'checklist(s) reorganizado(s) por etapa']
+        ].filter(([n]) => n > 0);
+        App.modal(`
+          <h2>Verificação concluída</h2>
+          ${linhas.length ? `
+            <p>O sistema completou o que estava faltando:</p>
+            <ul style="margin:10px 0 0 20px;line-height:1.8">${
+              linhas.map(([n, t]) => `<li><b>${n}</b> ${t}</li>`).join('')}</ul>
+            <p class="small muted" style="margin-top:12px">Confira em <b>Produção</b> e em <b>Contas a receber</b>.</p>`
+          : `<p>Está tudo em dia — nada faltando na Produção nem em Contas a receber.</p>`}
+          <div class="actions"><button class="btn primary" onclick="App.closeModal()">Fechar</button></div>`);
+      } catch (e) {
+        App.modal(`<h2>Não foi possível verificar</h2><p>${App.esc(e.message)}</p>
+          <div class="actions"><button class="btn" onclick="App.closeModal()">Fechar</button></div>`);
+      }
+    };
     Adm.saveSettings = async () => {
       await App.put('/settings', {
         companyName: document.getElementById('cfg-nome').value,
