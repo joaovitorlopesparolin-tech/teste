@@ -7,7 +7,36 @@ App.registerView('purchases', async (view) => {
   const [purchases, suppliers, clients, serviceOrders, sales] = await Promise.all([
     App.get('/purchases'), App.get('/suppliers'), App.get('/clients'),
     App.get('/serviceOrders'), App.get('/sales')]);
-  purchases.sort((a, b) => b.id - a.id);
+  /* A referência é sempre a DATA DA COMPRA — não o vencimento nem o pagamento.
+     Padrão: mais recente primeiro. */
+  let ordemData = 'desc';
+  let periodo = 'todos', de = '', ate = '';
+
+  const hoje = App.today();
+  const somaDias = (d, n) => {
+    const x = new Date(d + 'T12:00:00');
+    x.setDate(x.getDate() + n);
+    return x.toISOString().slice(0, 10);
+  };
+  const mesDe = d => d.slice(0, 7);
+  const mesAnterior = () => {
+    const x = new Date(hoje + 'T12:00:00');
+    x.setMonth(x.getMonth() - 1);
+    return x.toISOString().slice(0, 7);
+  };
+  /* Semana começando no domingo, como o calendário brasileiro. */
+  const inicioSemana = () => somaDias(hoje, -new Date(hoje + 'T12:00:00').getDay());
+
+  const noPeriodo = (d) => {
+    if (!d) return periodo === 'todos';
+    if (periodo === 'todos') return true;
+    if (periodo === 'hoje') return d === hoje;
+    if (periodo === 'semana') return d >= inicioSemana() && d <= hoje;
+    if (periodo === 'mes') return mesDe(d) === mesDe(hoje);
+    if (periodo === 'anterior') return mesDe(d) === mesAnterior();
+    if (periodo === 'custom') return (!de || d >= de) && (!ate || d <= ate);
+    return true;
+  };
 
   const DOCS = { nf: 'NF', recibo: 'Recibo', comprovante: 'Comprovante', sem_documento: 'Sem documento', outro: 'Outro' };
 
@@ -30,10 +59,30 @@ App.registerView('purchases', async (view) => {
     <div class="toolbar">
       <button class="btn primary" onclick="Purch.create()">+ Nova compra</button>
       <button class="btn" onclick="Purch.importNfe()">📎 Importar NF-e (XML)</button>
+      <select id="pc-periodo" style="max-width:170px" title="Filtrar pela data da compra">
+        <option value="todos">Todo o período</option>
+        <option value="hoje">Hoje</option>
+        <option value="semana">Esta semana</option>
+        <option value="mes">Este mês</option>
+        <option value="anterior">Mês anterior</option>
+        <option value="custom">Período personalizado…</option>
+      </select>
+      <span id="pc-custom" style="display:none;gap:6px;align-items:center">
+        <input type="date" id="pc-de" style="max-width:150px" title="De">
+        <span class="muted small">até</span>
+        <input type="date" id="pc-ate" style="max-width:150px" title="Até">
+      </span>
+      <select id="pc-ordem" style="max-width:200px" title="Ordenar pela data da compra">
+        <option value="desc">Mais recentes primeiro</option>
+        <option value="asc">Mais antigas primeiro</option>
+      </select>
       <div class="spacer"></div>
+      <span class="muted small" id="pc-contagem"></span>
       <button class="btn" onclick="Purch.print()">🖨️ Imprimir</button>
     </div>
-    ${App.table(purchases, [
+    <div id="pc-tabela"></div>`;
+
+  const colunas = [
       { h: 'Data', cell: p => App.date(p.data) },
       { h: 'Fornecedor', cell: p => `<b>${App.esc(p.fornecedorNome || '—')}</b>` },
       { h: 'Itens', cell: p => `<span class="small">${(p.itens || []).slice(0, 3).map(i => App.esc(i.descricao)).join(', ') || '—'}</span>` },
@@ -44,8 +93,33 @@ App.registerView('purchases', async (view) => {
       { h: 'Categoria', cell: p => `<span class="small">${App.esc(App.catCompraNome(p.categoria))}</span>` },
       { h: 'Vínculo', cell: p => `<span class="small muted">${App.esc(App.vincCompraNome((p.vinculo || {}).tipo))}${p.vinculo && p.vinculo.refNome ? ': ' + App.esc(p.vinculo.refNome) : ''}</span>` },
       { h: 'Pagamento', cell: p => `<span class="small">${App.esc(agendNome(p.tipoPagamento))}${p.parcelas > 1 ? ` · ${p.parcelas}x` : ''}</span>` },
-      { h: '', class: 'num', cell: p => `<button class="btn sm ghost" onclick="Purch.edit(${p.id})">✏️ Editar</button>` }
-    ], { emptyMsg: 'Nenhuma compra registrada' })}`;
+    { h: '', class: 'num', cell: p => `<button class="btn sm ghost" onclick="Purch.edit(${p.id})">✏️ Editar</button>` }
+  ];
+
+  const renderCompras = () => {
+    const lista = purchases
+      .filter(p => noPeriodo(p.data))
+      .sort((a, b) => {
+        const d = String(a.data || '').localeCompare(String(b.data || ''));
+        // Mesmo dia: o lançamento mais novo primeiro, para não embaralhar.
+        return (ordemData === 'asc' ? d : -d) || (ordemData === 'asc' ? a.id - b.id : b.id - a.id);
+      });
+    document.getElementById('pc-tabela').innerHTML =
+      App.table(lista, colunas, { emptyMsg: 'Nenhuma compra neste período' });
+    const soma = lista.reduce((s, p) => s + (Number(p.valor) || 0), 0);
+    document.getElementById('pc-contagem').textContent =
+      `${lista.length} compra(s) · R$ ${App.money(soma)}`;
+  };
+
+  document.getElementById('pc-periodo').addEventListener('change', e => {
+    periodo = e.target.value;
+    document.getElementById('pc-custom').style.display = periodo === 'custom' ? 'inline-flex' : 'none';
+    renderCompras();
+  });
+  document.getElementById('pc-de').addEventListener('change', e => { de = e.target.value; renderCompras(); });
+  document.getElementById('pc-ate').addEventListener('change', e => { ate = e.target.value; renderCompras(); });
+  document.getElementById('pc-ordem').addEventListener('change', e => { ordemData = e.target.value; renderCompras(); });
+  renderCompras();
 
   window.Purch = {
     create(prefill) { Purch.openForm(prefill || {}, null); },
@@ -66,7 +140,7 @@ App.registerView('purchases', async (view) => {
       const vinc = pf.vinculo || {};
       const m = App.form(editId ? 'Editar compra' : 'Nova compra', [
         { name: 'fornecedorId', label: 'Fornecedor', type: 'select', value: pf.fornecedorId || '',
-          options: [{ value: '', label: '— avulso / outro —' }].concat(suppliers.map(s => ({ value: s.id, label: s.nome }))) },
+          options: [{ value: '', label: '— avulso / outro —' }].concat(App.ativos(suppliers, pf.fornecedorId).map(s => ({ value: s.id, label: s.nome + (s.ativo === false ? ' (inativo)' : '') }))) },
         { name: 'fornecedorNome', label: 'Fornecedor avulso (se não cadastrado)', value: pf.fornecedorNome || '' },
         { name: 'data', label: 'Data', type: 'date', value: pf.data || App.today(), required: true },
         { name: 'valor', label: 'Valor total (R$)', type: 'number', step: '0.01', value: pf.valor, required: true },
@@ -205,12 +279,14 @@ App.registerView('purchases', async (view) => {
       });
     },
     print() {
+      const visiveis = purchases.filter(p => noPeriodo(p.data))
+        .sort((a, b) => (ordemData === 'asc' ? 1 : -1) * String(a.data || '').localeCompare(String(b.data || '')));
       App.print('Compras registradas',
         `<table><tr><th>Data</th><th>Fornecedor</th><th class="num">Valor</th><th>Documento</th><th>Pagamento</th></tr>
-        ${purchases.map(p => `<tr><td>${App.date(p.data)}</td><td>${App.esc(p.fornecedorNome || '')}</td>
+        ${visiveis.map(p => `<tr><td>${App.date(p.data)}</td><td>${App.esc(p.fornecedorNome || '')}</td>
         <td class="num">R$ ${App.money(p.valor)}</td><td>${p.documentoTipo === 'sem_documento' ? 'SEM DOCUMENTO' : App.esc(p.documentoNumero || p.documentoTipo)}</td>
         <td>${App.esc(p.formaPagamento || '')}</td></tr>`).join('')}</table>`,
-        purchases.length + ' compra(s)');
+        visiveis.length + ' compra(s)');
     }
   };
 });
@@ -228,13 +304,20 @@ App.registerView('suppliers', async (view) => {
      Vem calculado do servidor; nunca é digitado à mão. */
   const emAberto = id => Number(abertos[id]) || 0;
 
+  const temInativos = suppliers.some(s => s.ativo === false);
+  const verInativos = App.verInativosFornecedor === true;
+  const visiveis = verInativos ? suppliers : App.ativos(suppliers);
+
   view.innerHTML = `
     <div class="toolbar">
       <button class="btn primary" onclick="Supp.edit()">+ Novo fornecedor</button>
       <button class="btn" onclick="Supp.addExpense()">+ Registrar gasto do dia</button>
+      <div class="spacer"></div>
+      ${temInativos ? `<label class="small muted" style="display:flex;gap:6px;align-items:center;cursor:pointer">
+        <input type="checkbox" id="supp-inativos" style="width:auto" ${verInativos ? 'checked' : ''}> Mostrar inativos</label>` : ''}
     </div>
-    ${App.table(suppliers, [
-      { h: 'Fornecedor', cell: s => `<b>${App.esc(s.nome)}</b>${s.fechamentoMensal ? ' <span class="badge info">fechamento mensal</span>' : ''}` },
+    ${App.table(visiveis, [
+      { h: 'Fornecedor', cell: s => `<b>${App.esc(s.nome)}</b>${App.seloInativo(s)}${s.fechamentoMensal ? ' <span class="badge info">fechamento mensal</span>' : ''}` },
       { h: 'CNPJ', cell: s => `<span class="mono">${App.esc(s.cnpj ? App.fmtCpfCnpj(s.cnpj) : '—')}</span>` },
       { h: 'Contato', cell: s => App.esc(s.telefone || s.email || '—') },
       { h: 'Em aberto no mês', class: 'num', cell: s => {
@@ -246,7 +329,10 @@ App.registerView('suppliers', async (view) => {
         <button class="btn sm" onclick="Supp.conferir(${s.id})">🔍 Conferir</button>
         <button class="btn sm" onclick="Supp.detail(${s.id})">Despesas</button>
         ${s.fechamentoMensal ? `<button class="btn sm primary" onclick="Supp.close(${s.id})">Fechar fatura</button>` : ''}
-        <button class="btn sm ghost" onclick="Supp.edit(${s.id})">✎</button>` }
+        <button class="btn sm ghost" onclick="Supp.edit(${s.id})" title="Editar cadastro">✏️</button>
+        ${s.ativo === false
+          ? `<button class="btn sm ghost" onclick="Supp.reativar(${s.id})" title="Reativar cadastro">↩️</button>`
+          : `<button class="btn sm ghost" onclick="Supp.excluir(${s.id})" title="Excluir cadastro">🗑️</button>`}` }
     ])}
     <div class="section-title">Faturas mensais</div>
     ${App.table(invoices.slice().reverse(), [
@@ -262,7 +348,21 @@ App.registerView('suppliers', async (view) => {
           ? `<button class="btn sm primary" onclick="Supp.confirm(${i.id})">Conferir e confirmar</button>` : '' }
     ], { emptyMsg: 'Nenhuma fatura fechada ainda' })}`;
 
+  const chkSuppInativos = document.getElementById('supp-inativos');
+  if (chkSuppInativos) chkSuppInativos.addEventListener('change', e => {
+    App.verInativosFornecedor = e.target.checked;
+    App.route();
+  });
+
   window.Supp = {
+    excluir(id) {
+      const f = suppliers.find(x => x.id === id);
+      App.excluirCadastro('suppliers', id, f && f.nome);
+    },
+    reativar(id) {
+      const f = suppliers.find(x => x.id === id);
+      App.reativar('suppliers', id, f && f.nome);
+    },
     /* Detalhamento do "Em aberto no mês": é com esta lista que se confere,
        linha a linha, a cobrança que o fornecedor manda no fim do mês. */
     async conferir(id) {
@@ -302,7 +402,7 @@ App.registerView('suppliers', async (view) => {
       App.form('Registrar gasto do dia (fechamento mensal)', [
         { name: 'fornecedorId', label: 'Fornecedor', type: 'select', required: true, full: true,
           options: [{ value: '', label: '— selecione —' }].concat(
-            suppliers.filter(s => s.fechamentoMensal).map(s => ({ value: s.id, label: s.nome }))) },
+            App.ativos(suppliers).filter(s => s.fechamentoMensal).map(s => ({ value: s.id, label: s.nome }))) },
         { name: 'data', label: 'Data', type: 'date', value: App.today(), required: true },
         { name: 'descricao', label: 'Descrição (peça, item…)', required: true },
         { name: 'valor', label: 'Valor (R$)', type: 'number', step: '0.01', required: true },
@@ -435,7 +535,7 @@ App.registerView('freights', async (view) => {
           sales.slice().sort((a, b) => b.numero - a.numero)
             .map(v => ({ value: v.id, label: `Pedido nº ${v.numero} — ${App.clientName(v.clienteId, clients)}` }))) },
       { name: 'clienteId', label: 'Cliente', type: 'select', value: f.clienteId || '',
-        options: App.clientOptions(clients) },
+        options: App.clientOptions(clients, f.clienteId) },
       { name: 'produto', label: 'Produto / cabeçote enviado', value: f.produto || '' },
       { name: 'dataEnvio', label: 'Data do envio', type: 'date', value: f.dataEnvio || App.today(), required: true },
       { name: 'transportadora', label: 'Transportadora', value: f.transportadora || '' },

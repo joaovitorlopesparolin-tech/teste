@@ -245,6 +245,61 @@ function completeRecurringTask(recurringId, vencimento) {
   }
 }
 
+/* ===================================================================== */
+/* Vínculos de um cadastro                                               */
+/* ===================================================================== */
+
+/**
+ * Onde cada cadastro é referenciado. É esta tabela que permite responder
+ * "dá para apagar?" sem sair caçando à mão em cada tela — e que garante
+ * que apagar um cliente duplicado nunca leve junto a venda dele.
+ * [coleção, campo, rótulo humano]
+ */
+const VINCULOS = {
+  clients: [
+    ['sales', 'clienteId', 'venda(s)'], ['quotes', 'clienteId', 'orçamento(s)'],
+    ['serviceOrders', 'clienteId', 'ordem(ns) de serviço'], ['headEntries', 'clienteId', 'entrada(s) de cabeçote'],
+    ['assets', 'clienteId', 'bem(ns) guardado(s)'], ['receivables', 'clienteId', 'conta(s) a receber'],
+    ['freights', 'clienteId', 'frete(s)'], ['supplierExpenses', 'clienteId', 'gasto(s) de fornecedor']
+  ],
+  suppliers: [
+    ['purchases', 'fornecedorId', 'compra(s)'], ['payables', 'fornecedorId', 'conta(s) a pagar'],
+    ['supplierExpenses', 'fornecedorId', 'gasto(s) do mês'], ['supplierInvoices', 'fornecedorId', 'fatura(s) mensal(is)']
+  ],
+  products: [
+    ['sales', 'itens.productId', 'venda(s)'], ['productionOrders', 'productId', 'ordem(ns) de produção'],
+    ['models3d', 'produtoId', 'modelo(s) 3D']
+  ],
+  stockItems: [
+    ['stockMoves', 'itemId', 'movimentação(ões) de estoque'], ['sales', 'itens.stockItemId', 'venda(s)']
+  ],
+  employees: [['hrPayments', 'employeeId', 'lançamento(s) de RH']],
+  serviceCatalog: [['quotes', 'itens.catalogId', 'orçamento(s)'], ['serviceOrders', 'itens.catalogId', 'ordem(ns) de serviço']],
+  headEntries: [['quotes', 'entryId', 'orçamento(s)'], ['serviceOrders', 'entryId', 'ordem(ns) de serviço'], ['assets', 'entryId', 'bem(ns)']],
+  assets: [['headEntries', 'assetId', 'entrada(s)']]
+};
+
+/** Cadastros que aceitam ser inativados em vez de apagados. */
+const INATIVAVEIS = { clients: 'ativo', suppliers: 'ativo', products: 'ativo', employees: 'ativo', serviceCatalog: 'ativo', stockItems: 'ativo' };
+
+/** Conta as referências a um registro. Devolve [{colecao, rotulo, qtd}]. */
+function vinculosDe(colecao, id) {
+  const regras = VINCULOS[colecao] || [];
+  const alvo = Number(id);
+  const out = [];
+  for (const [col, campo, rotulo] of regras) {
+    let qtd;
+    if (campo.includes('.')) {
+      const [lista, chave] = campo.split('.');
+      qtd = db.all(col).filter(r => (r[lista] || []).some(i => Number(i[chave]) === alvo)).length;
+    } else {
+      qtd = db.all(col).filter(r => Number(r[campo]) === alvo).length;
+    }
+    if (qtd) out.push({ colecao: col, rotulo, qtd });
+  }
+  return out;
+}
+
 /** Movimenta estoque com registro da movimentação. */
 function moveStock(itemId, tipo, qtd, refType, refId, obs, user) {
   const item = db.get('stockItems', itemId);
@@ -1110,6 +1165,24 @@ route('POST', '/api/contaazul/sync/clientes/enviar', 'admin', async (req, res, u
    Só leitura do estado de sincronização; nenhuma chamada externa ainda. */
 /* O plano de sincronização: o que iria, para onde, e o que já foi.
    É calculado só com dados locais — não toca na Conta Azul. */
+/* Consulta de vínculos antes de excluir — a tela usa isto para avisar
+   exatamente o que está preso ao cadastro. */
+route('GET', '/api/vinculos/:colecao/:id', 'dashboard', async (req, res, user, params) => {
+  const col = params.colecao;
+  if (!REST[col]) return notFound(res);
+  if (!can(user, REST[col].perm)) return forbidden(res);
+  const rec = db.get(col, params.id);
+  if (!rec) return notFound(res);
+  const vinc = vinculosDe(col, params.id);
+  ok(res, {
+    vinculos: vinc,
+    total: vinc.reduce((s, v) => s + v.qtd, 0),
+    podeInativar: !!INATIVAVEIS[col],
+    campoAtivo: INATIVAVEIS[col] || null,
+    ativo: INATIVAVEIS[col] ? rec[INATIVAVEIS[col]] !== false : null
+  });
+});
+
 route('GET', '/api/sync/plano', 'admin', async (req, res) => {
   ok(res, {
     sistema: 'contaazul',
@@ -2853,6 +2926,32 @@ route('PUT', '/api/receivables/:id', 'receivables', async (req, res, user, param
   ok(res, rec);
 });
 
+/* Exclui uma conta a receber lançada por engano.
+   Sem recebimento, sai limpo. Com recebimento, só sai se o usuário
+   confirmar — e aí a entrada correspondente sai do caixa junto, para o
+   financeiro não ficar com dinheiro que não existe. */
+route('DELETE', '/api/receivables/:id', 'receivables', async (req, res, user, params) => {
+  const r = db.get('receivables', params.id);
+  if (!r) return notFound(res);
+  const caixa = db.all('cashflow').filter(c => c.refType === 'receivables' && c.refId === r.id);
+  const recebida = r.status === 'paga' || caixa.length > 0;
+
+  if (recebida && String((req.headers['x-confirmar'] || '')).toLowerCase() !== 'sim') {
+    return send(res, 409, {
+      error: `Esta parcela já tem recebimento registrado (R$ ${Number(r.valor).toFixed(2)}` +
+             (r.dataRecebimento ? ` em ${r.dataRecebimento}` : '') +
+             `). Excluir vai retirar também ${caixa.length} entrada(s) do caixa. Confirma?`,
+      precisaConfirmar: true, entradasCaixa: caixa.length
+    });
+  }
+  for (const c of caixa) db.remove('cashflow', c.id);
+  db.remove('receivables', r.id);
+  audit(user, 'excluiu', 'receivables', r.id,
+    `${r.descricao || 'Parcela'} — R$ ${Number(r.valor).toFixed(2)} excluída` +
+    (caixa.length ? ` (${caixa.length} entrada(s) de caixa estornada(s))` : ''));
+  ok(res, { ok: true, estornadas: caixa.length });
+});
+
 /* Recalcula as parcelas futuras de um grupo (os boletos de uma venda).
    As já recebidas não são tocadas: o valor recebido é abatido do novo
    total e o restante é redistribuído nas novas parcelas em aberto. */
@@ -3193,11 +3292,26 @@ async function handleRest(req, res, user, collection, id) {
     const rec = db.get(collection, id);
     if (!rec) return notFound(res);
     // Entidades com efeitos financeiros/históricos não são apagadas, apenas canceladas.
-    if (['sales', 'quotes', 'serviceOrders', 'cashflow', 'receivables', 'payables', 'supplierInvoices'].includes(collection)) {
+    // (sales, serviceOrders e receivables têm rota própria de exclusão, com estorno.)
+    if (['quotes', 'cashflow', 'payables', 'supplierInvoices'].includes(collection)) {
       return bad(res, 'Este registro não pode ser excluído — use cancelamento/estorno para manter a rastreabilidade');
     }
+    /* Cadastro em uso não some: apagá-lo deixaria vendas, compras e
+       lançamentos apontando para o vazio. O caminho é inativar. */
+    const vinc = vinculosDe(collection, id);
+    if (vinc.length) {
+      const lista = vinc.map(v => `${v.qtd} ${v.rotulo}`).join(', ');
+      return send(res, 409, {
+        error: `Este cadastro está em uso: ${lista}. Excluir deixaria esses registros sem referência — ` +
+               (INATIVAVEIS[collection]
+                 ? 'use "Inativar" para tirá-lo das listas sem perder o histórico.'
+                 : 'não é possível excluí-lo enquanto houver vínculos.'),
+        vinculos: vinc, podeInativar: !!INATIVAVEIS[collection]
+      });
+    }
     db.remove(collection, id);
-    audit(user, 'excluiu', collection, Number(id), cfg.label + ' #' + id);
+    audit(user, 'excluiu', collection, Number(id),
+      cfg.label + ' #' + id + (rec.nome ? ': ' + rec.nome : ''));
     return ok(res, { ok: true });
   }
   notFound(res);

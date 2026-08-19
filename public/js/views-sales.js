@@ -8,10 +8,12 @@ App.registerView('products', async (view) => {
   const fin = App.can('finance_sensitive');
   const modelOf = pid => models.find(m => m.produtoId === pid);
 
-  const group = tipo => products.filter(p => p.tipo === tipo)
+  const group = tipo => products.filter(p => p.tipo === tipo && p.ativo !== false)
     .sort((a, b) => (a.stage - b.stage) || (a.nome || '').localeCompare(b.nome || '', 'pt-BR'));
+  const inativos = products.filter(p => p.ativo === false)
+    .sort((a, b) => (a.nome || '').localeCompare(b.nome || '', 'pt-BR'));
   const cols = [
-    { h: 'Configuração', cell: p => `<b>${App.esc(p.nome)}</b>` },
+    { h: 'Configuração', cell: p => `<b>${App.esc(p.nome)}</b>${App.seloInativo(p)}` },
     { h: 'Stage', cell: p => `<span class="badge accent">Stage ${p.stage}</span>` },
     { h: 'Comandos válidos', cell: p => App.meta.stageComandos[p.stage].join(' · ') },
     { h: 'Tuchos', cell: p => p.stage === 3 ? '37 mm (300x308: 35 ou 37)' : '35 mm' },
@@ -24,12 +26,16 @@ App.registerView('products', async (view) => {
       return `<span class="${m >= 0 ? 'pos' : 'neg'}">${m.toFixed(1)}%</span>`; } }] : []),
     { h: '', class: 'num', cell: p => `
       ${modelOf(p.id) ? `<button class="btn sm ghost" onclick="Prod.view3d(${modelOf(p.id).id})" title="Ver modelo 3D">🧊 3D</button>` : ''}
-      ${fin ? `<button class="btn sm" onclick="Prod.edit(${p.id})">✎ Editar</button>` : ''}` }
+      ${fin ? `<button class="btn sm" onclick="Prod.edit(${p.id})">✏️ Editar</button>` : ''}
+      ${fin ? (p.ativo === false
+        ? `<button class="btn sm ghost" onclick="Prod.reativar(${p.id})" title="Reativar cadastro">↩️</button>`
+        : `<button class="btn sm ghost" onclick="Prod.excluir(${p.id})" title="Excluir cadastro">🗑️</button>`) : ''}` }
   ];
 
   view.innerHTML = `
     <div class="section-title">Unilateral</div>${App.table(group('unilateral'), cols)}
     <div class="section-title">Fluxo cruzado / Crossflow</div>${App.table(group('crossflow'), cols)}
+    ${inativos.length ? `<div class="section-title">Inativos <span class="small muted">— não aparecem em novas vendas; o histórico continua intacto</span></div>${App.table(inativos, cols)}` : ''}
 
     <div class="card" style="margin-top:16px">
       <h3>🧊 MODELOS 3D DOS CABEÇOTES</h3>
@@ -60,7 +66,7 @@ App.registerView('products', async (view) => {
       { h: 'Produto vinculado', cell: m => `
         <select onchange="Prod.linkModel(${m.id}, this.value)" style="width:auto;max-width:230px">
           <option value="">— nenhum —</option>
-          ${products.map(p => `<option value="${p.id}" ${m.produtoId === p.id ? 'selected' : ''}>${App.esc(p.nome)}</option>`).join('')}
+          ${App.ativos(products, m.produtoId).map(p => `<option value="${p.id}" ${m.produtoId === p.id ? 'selected' : ''}>${App.esc(p.nome)}${p.ativo === false ? ' (inativo)' : ''}</option>`).join('')}
         </select>` },
       { h: '', class: 'num', cell: m => `
         <button class="btn sm primary" onclick="Prod.view3d(${m.id})">🧊 Ver em 3D</button>
@@ -117,6 +123,14 @@ App.registerView('products', async (view) => {
   });
 
   window.Prod = {
+    excluir(id) {
+      const p = products.find(x => x.id === id);
+      App.excluirCadastro('products', id, p && p.nome);
+    },
+    reativar(id) {
+      const p = products.find(x => x.id === id);
+      App.reativar('products', id, p && p.nome);
+    },
     edit(id) {
       const p = products.find(x => x.id === id);
       App.form('Editar ' + p.nome, [
@@ -274,7 +288,7 @@ App.registerView('sales', async (view, args) => {
       const s = sales.find(x => x.id === id);
       App.form(`📋 Duplicar pedido nº ${s.numero}`, [
         { name: 'clienteId', label: 'Cliente do novo pedido', type: 'select', required: true, full: true,
-          value: s.clienteId, options: App.clientOptions(clients) },
+          value: s.clienteId, options: App.clientOptions(clients, s.clienteId) },
         { name: 'dataPedido', label: 'Data do novo pedido', type: 'date', value: App.today(), required: true }
       ], async d => {
         const novo = await App.post(`/sales/${id}/duplicate`, { clienteId: Number(d.clienteId), dataPedido: d.dataPedido });
@@ -412,7 +426,7 @@ async function saleEditor(view, editId) {
         <h3 style="margin-top:6px">ADICIONAR CABEÇOTE</h3>
         <div class="formgrid">
           <label class="field full"><span>Produto</span>
-            <select id="v-produto">${products.map(p => `<option value="${p.id}">${App.esc(p.nome)}</option>`).join('')}</select></label>
+            <select id="v-produto">${App.ativos(products).map(p => `<option value="${p.id}">${App.esc(p.nome)}</option>`).join('')}</select></label>
           <label class="field"><span>Comando</span><select id="v-comando"></select></label>
           <label class="field"><span>Tucho</span><select id="v-tucho"></select></label>
           <label class="field"><span>Quantidade</span><input type="number" id="v-qtd" value="1" min="1"></label>
@@ -427,7 +441,7 @@ async function saleEditor(view, editId) {
         (cabeçotes consomem componentes quando a produção fica pronta).</p>
         <div class="formgrid">
           <label class="field full"><span>Peça</span>
-            <select id="v-peca">${estoque.map(it =>
+            <select id="v-peca">${App.ativos(estoque).map(it =>
               `<option value="${it.id}" data-qtd="${it.qtd}">${App.esc(it.nome)} — ${it.qtd} em estoque</option>`).join('')}</select></label>
           <label class="field"><span>Quantidade</span><input type="number" id="v-peca-qtd" value="1" min="1"></label>
           <label class="field"><span>Valor unitário (R$)</span><input type="number" step="0.01" id="v-peca-valor"></label>

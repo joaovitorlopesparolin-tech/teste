@@ -72,7 +72,7 @@ App.registerView('payables', async (view) => {
         { name: 'recurringId', label: 'Conta recorrente (dá baixa na pendência do mês)', type: 'select', value: p.recurringId || '',
           options: [{ value: '', label: '— não é recorrente —' }].concat(recurring.filter(r => r.ativo).map(r => ({ value: r.id, label: r.nome }))) },
         { name: 'fornecedorId', label: 'Fornecedor (opcional)', type: 'select', value: '',
-          options: [{ value: '', label: '—' }].concat(suppliers.map(s => ({ value: s.id, label: s.nome }))) },
+          options: [{ value: '', label: '—' }].concat(App.ativos(suppliers, p.fornecedorId).map(s => ({ value: s.id, label: s.nome + (s.ativo === false ? ' (inativo)' : '') }))) },
         { name: 'valor', label: 'Valor (R$)', type: 'number', step: '0.01', required: true },
         { name: 'vencimento', label: 'Vencimento', type: 'date', required: true },
         { name: 'tipoPagamento', label: 'Tipo de pagamento', type: 'select', value: 'programado', options: [
@@ -201,7 +201,8 @@ App.registerView('receivables', async (view) => {
         ${r.status !== 'cancelada' ? `<button class="btn sm ghost" onclick="Recv.edit(${r.id})" title="Editar parcela">✏️</button>` : ''}
         ${r.parcelas > 1 && (r.status === 'aberto' || r.status === 'vencida') ? `
           <button class="btn sm ghost" onclick="Recv.replan(${r.id})" title="Recalcular as parcelas futuras deste grupo">🔁</button>` : ''}
-        ${(r.status === 'aberto' || r.status === 'vencida') ? `<button class="btn sm ghost" onclick="Recv.cancel(${r.id})">✕</button>` : ''}` }
+        ${(r.status === 'aberto' || r.status === 'vencida') ? `<button class="btn sm ghost" onclick="Recv.cancel(${r.id})" title="Cancelar (mantém o histórico)">✕</button>` : ''}
+        <button class="btn sm ghost" onclick="Recv.excluir(${r.id})" title="Excluir lançamento">🗑️</button>` }
     ], { emptyMsg: 'Nenhum recebível' });
   };
   render();
@@ -216,13 +217,38 @@ App.registerView('receivables', async (view) => {
       String(x.descricao || '').replace(/ — parcela .*$/, '') === String(r.descricao || '').replace(/ — parcela .*$/, '')));
 
   window.Recv = {
+    /* Excluir um lançamento feito por engano. Sem recebimento, sai limpo;
+       com recebimento, o servidor exige confirmação e estorna o caixa. */
+    async excluir(id) {
+      const r = receivables.find(x => x.id === id);
+      if (!await App.confirm(
+        `Tem certeza que deseja excluir esta conta a receber?<br><br>` +
+        `<b>${App.esc(r.descricao || 'Parcela')}</b> — R$ ${App.money(r.valor)} ` +
+        `(vencimento ${App.date(r.vencimento)})<br><br>` +
+        '<span class="small">Isto não pode ser desfeito. Se quiser manter o histórico, use ✕ Cancelar.</span>',
+        { html: true })) return;
+      try {
+        await App.del('/receivables/' + id);
+        App.toast('Conta a receber excluída', 'ok');
+        App.route();
+      } catch (e) {
+        if (!/recebimento registrado/.test(e.message)) return App.toast(e.message, 'err');
+        // Já recebida: o servidor devolveu o aviso e pede confirmação extra.
+        if (!await App.confirm(e.message + '<br><br><span class="small">A entrada correspondente sai do caixa junto, para o financeiro não ficar com dinheiro que não existe.</span>', { html: true })) return;
+        try {
+          const out = await App.del('/receivables/' + id, { 'X-Confirmar': 'sim' });
+          App.toast(`Excluída — ${out.estornadas} entrada(s) de caixa estornada(s)`, 'ok');
+          App.route();
+        } catch (e2) { App.toast(e2.message, 'err'); }
+      }
+    },
     edit(id) {
       const r = receivables.find(x => x.id === id);
       if (!r) return;
       const recebida = r.status === 'paga';
       const m = App.form(`✏️ Editar parcela${r.parcelas > 1 ? ` ${r.parcela}/${r.parcelas}` : ''}`, [
         { name: 'clienteId', label: 'Cliente', type: 'select', value: r.clienteId, full: true,
-          options: App.clientOptions(clients) },
+          options: App.clientOptions(clients, r.clienteId) },
         { name: 'descricao', label: 'Descrição', value: r.descricao, full: true },
         { name: 'valor', label: 'Valor (R$)', type: 'number', step: '0.01', value: r.valor, required: true },
         { name: 'vencimento', label: 'Vencimento', type: 'date', value: r.vencimento, required: true },

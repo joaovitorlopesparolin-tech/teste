@@ -234,7 +234,7 @@ App.registerView('quotes', async (view, args) => {
       if (!q) return;
       const m = App.form(`📋 Replicar orçamento nº ${q.numero}`, [
         { name: 'clienteId', label: 'Cliente do novo orçamento', type: 'select', required: true, full: true,
-          value: q.clienteId, options: App.clientOptions(clients) }
+          value: q.clienteId, options: App.clientOptions(clients, q.clienteId) }
       ], async d => {
         const novo = await App.post(`/quotes/${id}/replicate`, { clienteId: Number(d.clienteId) });
         App.closeModal();
@@ -347,7 +347,7 @@ async function quoteEditor(view, { entryId, quoteId }) {
         <div class="formgrid">
           <label class="field full"><span>Cliente *</span>
             <select id="q-cliente" ${entry || readOnly ? 'disabled' : ''}>
-              ${App.clientOptions(clients).map(o => `<option value="${o.value}"
+              ${App.clientOptions(clients, quote ? quote.clienteId : entry ? entry.clienteId : '').map(o => `<option value="${o.value}"
                 ${String(o.value) === String(quote ? quote.clienteId : entry ? entry.clienteId : '') ? 'selected' : ''}>${App.esc(o.label)}</option>`).join('')}
             </select></label>
           <label class="field"><span>Data do orçamento</span>
@@ -577,7 +577,7 @@ App.registerView('os', async (view) => {
       const o = oss.find(x => x.id === id);
       App.form(`✏️ Editar OS nº ${o.numero}`, [
         { name: 'clienteId', label: 'Cliente', type: 'select', value: o.clienteId, full: true,
-          options: App.clientOptions(clients) },
+          options: App.clientOptions(clients, o.clienteId) },
         { name: 'modelo', label: 'Modelo do cabeçote', value: o.modelo || '' },
         { name: 'identificacao', label: 'Identificação', value: o.identificacao || '' },
         { name: 'problema', label: 'Problema relatado', type: 'textarea', value: o.problema || '', full: true },
@@ -598,7 +598,7 @@ App.registerView('os', async (view) => {
       const o = oss.find(x => x.id === id);
       App.form(`📋 Duplicar OS nº ${o.numero}`, [
         { name: 'clienteId', label: 'Cliente da nova OS', type: 'select', required: true, full: true,
-          value: o.clienteId, options: App.clientOptions(clients) }
+          value: o.clienteId, options: App.clientOptions(clients, o.clienteId) }
       ], async d => {
         const nova = await App.post(`/os/${id}/duplicate`, { clienteId: Number(d.clienteId) });
         App.closeModal();
