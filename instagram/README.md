@@ -25,3 +25,17 @@ python3 instagram/build/render.py
 ```
 
 O script usa o Chromium já instalado no ambiente e exporta em 2× (2160×2160).
+
+## Paleta
+
+| Uso | Hex |
+|---|---|
+| Fundo (lilás claro) | `#EFEAF3` |
+| Texto principal (roxo profundo) | `#2F2740` |
+| Texto secundário | `#6E6280` / `#655A78` |
+| Roxo meio-tom (destaque) | `#8465A8` |
+| Lilás médio | `#C4B0DA` |
+| Lilás claro | `#DCD0E8` |
+
+Na arte com foto, um véu `#8465A8` em `soft-light` a 34% puxa a imagem para dentro
+da paleta sem apagar o brilho do esmalte.
