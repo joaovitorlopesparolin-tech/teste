@@ -119,21 +119,102 @@ if (soltos.length) {
   process.exit(1);
 }
 
+/* ---------------- leitor de ZIP (o inverso do escritor acima) ---------------- */
+
+/**
+ * Extrai UM arquivo de dentro de um zip, sem dependência externa. Só precisa
+ * dar conta do que este mesmo script escreve: deflate ou sem compressão, sem
+ * ZIP64. Devolve null se o nome pedido não estiver no pacote.
+ */
+function lerDoZip(caminhoZip, nomeInterno) {
+  const buf = fs.readFileSync(caminhoZip);
+
+  /* O fim do diretório central fica no final do arquivo, atrás de um comentário
+     de tamanho variável — por isso a procura é de trás para frente. */
+  let fim = -1;
+  for (let i = buf.length - 22; i >= 0 && i >= buf.length - 22 - 65535; i--) {
+    if (buf.readUInt32LE(i) === 0x06054b50) { fim = i; break; }
+  }
+  if (fim < 0) throw new Error(`${path.basename(caminhoZip)} não é um zip válido.`);
+
+  const qtd = buf.readUInt16LE(fim + 10);
+  let p = buf.readUInt32LE(fim + 16);
+
+  for (let n = 0; n < qtd; n++) {
+    if (buf.readUInt32LE(p) !== 0x02014b50) throw new Error('Diretório central corrompido.');
+    const metodo = buf.readUInt16LE(p + 10);
+    const crcEsperado = buf.readUInt32LE(p + 16);
+    const tamComprimido = buf.readUInt32LE(p + 20);
+    const tamBruto = buf.readUInt32LE(p + 24);
+    const tamNome = buf.readUInt16LE(p + 28);
+    const tamExtra = buf.readUInt16LE(p + 30);
+    const tamComentario = buf.readUInt16LE(p + 32);
+    const offsetLocal = buf.readUInt32LE(p + 42);
+    const nome = buf.toString('utf8', p + 46, p + 46 + tamNome);
+
+    if (nome === nomeInterno) {
+      if (tamComprimido === 0xffffffff || tamBruto === 0xffffffff || offsetLocal === 0xffffffff) {
+        throw new Error('Pacote gravado em ZIP64 — este leitor não dá conta.');
+      }
+      /* O cabeçalho local repete o nome e pode ter um campo "extra" de tamanho
+         diferente do que está no diretório central: os dados só começam depois
+         dos dois, então os tamanhos vêm de lá, não daqui. */
+      if (buf.readUInt32LE(offsetLocal) !== 0x04034b50) throw new Error('Cabeçalho local corrompido.');
+      const inicio = offsetLocal + 30 +
+        buf.readUInt16LE(offsetLocal + 26) + buf.readUInt16LE(offsetLocal + 28);
+      const cru = buf.subarray(inicio, inicio + tamComprimido);
+      const dados = metodo === 0 ? Buffer.from(cru) : zlib.inflateRawSync(cru);
+      if (dados.length !== tamBruto) throw new Error(`${nomeInterno} veio com tamanho inesperado.`);
+      if (zlib.crc32(dados) !== crcEsperado) throw new Error(`${nomeInterno} está corrompido no pacote anterior.`);
+      return dados;
+    }
+    p += 46 + tamNome + tamExtra + tamComentario;
+  }
+  return null;
+}
+
 /* node.exe: da raiz, ou reaproveitado do pacote anterior */
 function acharNodeExe() {
   const local = path.join(RAIZ, 'node.exe');
   if (fs.existsSync(local)) return fs.readFileSync(local);
+
+  /* Não está na raiz: aproveita o binário que já foi entregue no pacote
+     anterior — é exatamente o mesmo arquivo. Sem isso seria preciso caçá-lo
+     à mão antes de cada geração, que é justamente o incômodo a evitar. */
+  if (fs.existsSync(SAIDA)) {
+    let dados;
+    try {
+      dados = lerDoZip(SAIDA, `${PASTA}/node.exe`);
+    } catch (e) {
+      throw new Error(
+        `Não consegui reaproveitar o node.exe do pacote anterior: ${e.message}\n` +
+        'Copie o node.exe de uma instalação do sistema no Windows para a raiz\n' +
+        'do projeto e gere o pacote de novo.');
+    }
+    if (dados) {
+      console.log(`node.exe reaproveitado do pacote anterior (${(dados.length / 1048576).toFixed(0)} MB).`);
+      return dados;
+    }
+  }
+
   throw new Error(
-    'node.exe não encontrado na raiz do projeto.\n' +
-    'Ele não é versionado (87 MB). Copie o node.exe do pacote anterior\n' +
-    'para a raiz antes de gerar um novo pacote.');
+    'node.exe não encontrado na raiz do projeto nem dentro do pacote anterior.\n' +
+    'Ele não é versionado (87 MB). Copie o node.exe de uma instalação do\n' +
+    'sistema no Windows para a raiz antes de gerar um novo pacote.');
 }
 
 const arquivos = versionados.map(rel => ({
   nome: `${PASTA}/${rel}`,
   dados: fs.readFileSync(path.join(RAIZ, rel))
 }));
-arquivos.push({ nome: `${PASTA}/node.exe`, dados: acharNodeExe() });
+/* Falta de node.exe é o tropeço mais comum aqui — avisa como o resto do
+   script avisa, em vez de despejar um stack trace. */
+try {
+  arquivos.push({ nome: `${PASTA}/node.exe`, dados: acharNodeExe() });
+} catch (e) {
+  console.error('\n' + e.message + '\n');
+  process.exit(1);
+}
 
 /* entradas de pasta, para o Expand-Archive do Windows não reclamar */
 const pastas = new Set([`${PASTA}/`]);
