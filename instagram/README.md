@@ -13,6 +13,10 @@ e em moradoras da região.
 - `build/assets/unhas-01.jpg` — foto original enviada pelo salão
 - `build/config.json` — nome, @, WhatsApp e endereço do salão
 - `build/render.py` — gera os PNGs a partir dos templates
+- `guia/guia-turbinar-post-salao-bless.pdf` — guia passo a passo do impulsionamento,
+  em PDF, para enviar por WhatsApp
+- `guia/guia-turbinar.html` — fonte do guia
+- `build/render-guia.py` — gera o PDF do guia
 
 ## Como regerar as artes com os dados reais
 
