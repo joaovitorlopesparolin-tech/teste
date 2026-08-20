@@ -44,6 +44,10 @@ function ok(cond, msg){
   const estado = { conflito: false, posts: [] };
 
   async function prepararPagina(context){
+    // o site do fornecedor é simulado: o clique no link de exemplo precisa
+    // abrir uma página de verdade, sem depender da internet
+    await context.route("https://fornecedor.com/**", route =>
+      route.fulfill({ status: 200, contentType: "text/html", body: "<h1>Produto do fornecedor</h1>" }));
     const page = await context.newPage();
     page.on("pageerror", e => { console.error("  ERRO JS na página:", e.message); falhas++; });
     await page.route("**/rest/v1/**", route => {
@@ -83,6 +87,17 @@ function ok(cond, msg){
   const desktop = await browser.newContext({ viewport: { width: 1920, height: 1000 } });
   const page = await prepararPagina(desktop);
 
+  console.log("— identidade no navegador —");
+  const icones = await page.evaluate(() => ({
+    svg: !!document.querySelector('link[rel="icon"][type="image/svg+xml"]'),
+    png: !!document.querySelector('link[rel="icon"][type="image/png"]'),
+    apple: !!document.querySelector('link[rel="apple-touch-icon"]'),
+    tema: (document.querySelector('meta[name="theme-color"]') || {}).content,
+    titulo: document.title,
+  }));
+  ok(icones.svg && icones.png && icones.apple, "favicon SVG, fallback PNG e ícone de tela de início presentes");
+  ok(icones.tema === "#242528" && /Martins Notari/.test(icones.titulo), "cor de tema e título da aba com a identidade da marca");
+
   console.log("— layout —");
   const layout = await page.evaluate(() => ({
     largura: document.querySelector(".sheet").getBoundingClientRect().width,
@@ -120,6 +135,46 @@ function ok(cond, msg){
     return p && p.link === "https://fornecedor.com/novo-produto";
   }, "salvou o link normalizado com https://");
   await page.waitForFunction(() => !document.querySelector("#dlgForm").open);
+
+  console.log("— folha de pedido —");
+  await page.check('input[data-sel="i0"]');   // item com link
+  await page.check('input[data-sel="i1"]');   // item sem link
+  await page.click("#btnFolha");
+  await page.waitForSelector("#overlay:not([hidden]) .folha table");
+  const folha = await page.evaluate(() => {
+    const a = document.querySelector(".folha a.f-link");
+    const linhas = [...document.querySelectorAll(".folha tbody tr")];
+    return {
+      total: linhas.length,
+      comLink: document.querySelectorAll(".folha a.f-link").length,
+      href: a && a.getAttribute("href"),
+      texto: a && a.textContent.trim(),
+      alvo: a && a.getAttribute("target"),
+      naLinhaCerta: !!(a && a.closest("tr") === linhas[0]),
+    };
+  });
+  ok(folha.total === 2 && folha.comLink === 1, "só o item com link mostra o endereço na folha");
+  ok(folha.href === "https://fornecedor.com/novo-produto" && folha.naLinhaCerta, "link da folha aponta para o endereço do item, na linha dele");
+  ok(/exemplo do que comprar/.test(folha.texto || ""), "folha identifica o endereço como exemplo do que comprar");
+  ok(folha.alvo === "_blank", "link da folha abre em nova aba");
+  // clicar de fato abre o endereço numa nova aba (não navega para fora da folha)
+  const [nova] = await Promise.all([
+    page.context().waitForEvent("page", { timeout: 5000 }).catch(() => null),
+    page.click(".folha a.f-link"),
+  ]);
+  ok(nova !== null && nova.url().startsWith("https://fornecedor.com/novo-produto"), "clicar no link da folha abre a página do exemplo");
+  if (nova) await nova.close();
+  ok(!(await page.locator("#overlay").isHidden()), "a folha continua aberta depois do clique");
+  // a folha é um documento branco: o zebrado escuro da tela não pode vazar para ela
+  const claridadeZebra = await page.evaluate(() => {
+    const td = document.querySelectorAll(".folha tbody tr")[1].querySelector("td");
+    const [r, g, b] = getComputedStyle(td).backgroundColor.match(/\d+/g).map(Number);
+    return (r + g + b) / 3;
+  });
+  ok(claridadeZebra > 200, "linhas pares da folha ficam claras e legíveis");
+  await page.click("#btnFecharFolha");
+  await page.uncheck('input[data-sel="i0"]');
+  await page.uncheck('input[data-sel="i1"]');
 
   console.log("— troca de situação + desfazer —");
   const id1 = await page.evaluate(() => document.querySelector("select.sel-sit.pedir").dataset.sit);

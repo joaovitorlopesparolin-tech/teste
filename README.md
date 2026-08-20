@@ -10,8 +10,9 @@ materiais e diário de obra (RDO), sincronizado entre computadores via Supabase.
   para os itens selecionados, filtro por situação nos contadores do rodapé,
   destaque de pedidos enviados há mais de 7 dias sem entrega, desfazer de
   alterações, link de exemplo opcional por insumo (referência do produto
-  que deve ser comprado, com ícone clicável na descrição), folha de pedido
-  imprimível e exportação CSV.
+  que deve ser comprado, com ícone clicável na descrição e endereço
+  clicável na folha de pedido), folha de pedido imprimível e exportação
+  CSV.
 - **Diário de obra**: registro diário (clima, efetivo, equipamentos,
   atividades, ocorrências, fotos), galeria com calendário e RDO imprimível.
 - **Sincronização**: estado compartilhado no Supabase com cópia local para
