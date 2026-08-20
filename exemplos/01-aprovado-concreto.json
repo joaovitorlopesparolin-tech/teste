@@ -1,0 +1,36 @@
+{
+  "numero": "SC-2026-00871",
+  "solicitante": "eng. responsável pela obra",
+  "insumo": "Concreto Usinado FCK 30 MPa",
+  "centro_de_custo": "02.01.03 - Estrutura",
+  "projeto": "Projeto Recanto",
+  "quantidade": 48.0,
+  "unidade": "m³",
+  "data_solicitacao": "2026-03-10",
+  "valor_unitario": 465.0,
+  "saldo_orcamentario": 90000.0,
+  "quantitativo_modelo": {
+    "quantidade": 47.2,
+    "unidade": "m³",
+    "fonte": "Eberick",
+    "data_extracao": "2026-03-05"
+  },
+  "compras_recentes": [
+    {
+      "insumo": "Concreto Usinado FCK 30 MPa",
+      "centro_de_custo": "02.01.03 - Estrutura",
+      "data_faturamento": "2026-01-28",
+      "quantidade": 52.0,
+      "unidade": "m³",
+      "documento": "NF 118420"
+    },
+    {
+      "insumo": "Aço CA-50 10,0mm",
+      "centro_de_custo": "02.01.03 - Estrutura",
+      "data_faturamento": "2026-03-06",
+      "quantidade": 4200.0,
+      "unidade": "kg",
+      "documento": "NF 119003"
+    }
+  ]
+}

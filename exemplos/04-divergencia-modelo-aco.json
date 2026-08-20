@@ -1,0 +1,11 @@
+{
+  "numero": "SC-2026-00930",
+  "insumo": "Vergalhão CA-50 10,0 mm",
+  "centro_de_custo": "02.01.03 - Estrutura",
+  "quantidade": 12000,
+  "unidade": "kg",
+  "data_solicitacao": "2026-04-08",
+  "valor_unitario": 7.4,
+  "quantitativo_modelo": { "quantidade": 9800, "unidade": "kg", "fonte": "Eberick", "data_extracao": "2026-04-01" },
+  "compras_recentes": []
+}

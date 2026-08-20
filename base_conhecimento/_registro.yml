@@ -1,0 +1,13 @@
+# Registro de entidades usadas para interligar automaticamente os nós de
+# conhecimento com wikilinks ([[...]]). Softwares padrão (Revit, Eberick,
+# AutoCAD, Navisworks, SketchUp, TQS, Sienge...) já são reconhecidos pelo motor.
+projetos:
+  - Projeto Recanto
+  - Projeto Aurora
+  - Obra Sede Administrativa
+softwares:
+  - Revit
+  - Eberick
+  - Sienge
+  - AutoCAD
+  - Navisworks

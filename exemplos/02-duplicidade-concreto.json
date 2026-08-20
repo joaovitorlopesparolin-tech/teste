@@ -1,0 +1,19 @@
+{
+  "numero": "SC-2026-00902",
+  "insumo": "CONCRETO USINADO 30MPA",
+  "centro_de_custo": "02.01.03",
+  "quantidade": 30.0,
+  "unidade": "m³",
+  "data_solicitacao": "2026-03-12",
+  "quantitativo_modelo": { "quantidade": 30.0, "unidade": "m³", "fonte": "Eberick" },
+  "compras_recentes": [
+    {
+      "insumo": "Concreto Usinado FCK 30 MPa",
+      "centro_de_custo": "02.01.03 - Estrutura",
+      "data_faturamento": "2026-03-05",
+      "quantidade": 52.0,
+      "unidade": "m³",
+      "documento": "NF 118995"
+    }
+  ]
+}

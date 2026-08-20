@@ -1,0 +1,10 @@
+Insumo: Aço CA-50 10,0mm
+Unidade Sienge: kg
+Centro de Custo: 02.01.03 - Estrutura
+Vigência: 2026-01-05
+
+A quantidade de aço CA-50 solicitada deve ser igual ao resumo de aço emitido pelo Eberick para o pavimento em concretagem, sem tolerância de arredondamento acima de 5%.
+Pedidos em unidades como barra, fardo ou carreta não são aceitos: o Sienge cadastra o insumo em kg.
+Nova compra do mesmo insumo no mesmo centro de custo dentro de 15 dias fica bloqueada até a conferência do saldo de pátio.
+O teto orçamentário do pacote de armadura do Projeto Recanto é de R$ 250.000,00 por pavimento.
+Toda entrega deve vir acompanhada do certificado de qualidade do lote e da nota de corte e dobra aprovada pelo projetista.

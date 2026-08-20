@@ -1,0 +1,19 @@
+{
+  "numero": "SC-2026-00944",
+  "insumo": "Cimento Portland CP II-Z-32",
+  "centro_de_custo": "02.01.05 - Alvenaria e Revestimentos",
+  "quantidade": 600,
+  "unidade": "sc",
+  "data_solicitacao": "2026-04-15",
+  "valor_unitario": 47.9,
+  "saldo_orcamentario": 20000.0,
+  "compras_recentes": [
+    {
+      "insumo": "Cimento Portland CP II-Z-32",
+      "centro_de_custo": "02.01.05 - Alvenaria e Revestimentos",
+      "data_faturamento": "2026-02-20",
+      "quantidade": 400,
+      "unidade": "sc"
+    }
+  ]
+}

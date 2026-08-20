@@ -1,0 +1,9 @@
+Insumo: Cimento Portland CP II-Z-32
+Unidade Sienge: sc
+Centro de Custo: 02.01.05 - Alvenaria e Revestimentos
+Vigência: 2026-02-01
+
+O cimento é cadastrado no Sienge em sc (saco de 50 kg); solicitações em pallet, tonelada ou caminhão devem ser convertidas antes do lançamento.
+Não solicitar novo carregamento do mesmo insumo para o mesmo centro de custo com menos de 15 dias do último faturamento sem apresentar o saldo do almoxarifado.
+O preço unitário máximo aceito é de R$ 42,00 por saco.
+Armazenagem limitada a 10 sacos empilhados e consumo em até 90 dias da data de fabricação.
