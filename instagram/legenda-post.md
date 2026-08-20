@@ -8,10 +8,6 @@ Duas artes para testar (1080×1080, feed):
 Suba as duas com 2 a 3 dias de diferença, com a mesma legenda. A que trouxer mais
 conversa no WhatsApp é a que você impulsiona.
 
-> ⚠️ **Confirmar o WhatsApp.** O número enviado foi 99019777 — 8 dígitos. Celular no
-> Brasil tem 9. Nas artes está como **(45) 9901-9777**; me diga o dígito que falta
-> (provavelmente um 9 na frente: (45) 9 9901-9777) que eu regero as duas em um minuto.
-
 ---
 
 ## Legenda (versão principal)
@@ -28,9 +24,11 @@ conversa no WhatsApp é a que você impulsiona.
 > ✷ Agenda por horário, sem fila de espera
 >
 > 📍 Rua Tarobá, 746 — Centro, Foz do Iguaçu
-> 💬 WhatsApp (45) 9901-9777 — chama que a gente te passa os horários de hoje.
+> 💬 WhatsApp (45) 99901-9777 — chama que a gente te passa os horários de hoje.
 >
 > Comenta **"CENTRO"** aqui embaixo que eu te chamo no direct. 💅
+>
+> @cris.clopes
 
 ### Variação B (mais direta ao turista)
 
@@ -39,7 +37,7 @@ conversa no WhatsApp é a que você impulsiona.
 > Salão Bless, Rua Tarobá, 746 — bem no Centro de Foz, pertinho do seu hotel.
 > Hora marcada, sem espera, para você não perder nada do roteiro.
 >
-> 💬 (45) 9901-9777
+> 💬 (45) 99901-9777
 
 ### Variação C (para a arte com foto — destaca o efeito pérola)
 
@@ -49,7 +47,7 @@ conversa no WhatsApp é a que você impulsiona.
 > você já está. Se você está de passagem pela cidade, dá tempo antes do próximo passeio.
 >
 > 📍 Rua Tarobá, 746 — Centro
-> 💬 (45) 9901-9777
+> 💬 (45) 99901-9777
 >
 > Comenta **"PÉROLA"** que eu te mando os horários de hoje. 🤍
 
@@ -97,13 +95,36 @@ quando o turista está planejando o resto do dia.
 - [ ] Bio com "Centro de Foz do Iguaçu" escrito por extenso (é o que aparece na busca)
 - [ ] Perfil do Salão Bless no **Google Meu Negócio** atualizado — turista pesquisa
       "manicure perto de mim" no Maps antes de procurar no Instagram
-- [ ] Link direto pronto (confirmar o número antes):
+- [ ] Link direto no perfil:
       `https://wa.me/5545999019777?text=Oi!%20Vi%20o%20post%20e%20quero%20agendar`
 
 ## Resposta pronta para quem chamar no direct ou no WhatsApp
 
 > Oi! Que bom te ver por aqui 💛 Somos o Salão Bless, na Rua Tarobá, 746 — Centro.
 > Mão e pé leva 1 hora. Tenho horário hoje às __h e às __h — qual fica melhor pra você?
+
+---
+
+## Atendimento a estrangeiro (sem falar espanhol)
+
+O Bless atende estrangeiro mas não conversa em espanhol — então a arte **não** leva
+"Se habla español", para não prometer o que não se entrega. O que resolve na prática:
+
+- **Cardápio visual de serviços.** Uma folha plastificada (ou um álbum no celular) com
+  foto de cada serviço, o tempo e o preço. Argentina e paraguaia apontam e resolvem
+  sem uma palavra de espanhol.
+- **Frases prontas no WhatsApp.** Deixe salvas como respostas rápidas:
+  - *"¡Hola! Somos Salão Bless, Rua Tarobá 746, Centro. Manos y pies: 1 hora."*
+  - *"Tengo horario hoy a las __ y a las __. ¿Cuál prefieres?"*
+  - *"Aceptamos pix, tarjeta y efectivo (real y peso)."*
+- **Deixe claro se aceita peso argentino ou guarani** — em Foz isso decide a visita.
+- **Tradutor do Google no modo conversa** dá conta do resto. Não precisa fluência,
+  precisa de boa vontade e de o preço estar claro antes de começar.
+
+Se um dia você quiser puxar esse público de propósito, aí sim vale um post separado
+escrito em espanhol — mas só depois que o atendimento estiver preparado.
+
+---
 
 **Sem preço na arte** (como você pediu): quando perguntarem valor, responda com o preço
 **junto do horário** — "Mão e pé fica R$ __, tenho hoje às 15h. Reservo pra você?".

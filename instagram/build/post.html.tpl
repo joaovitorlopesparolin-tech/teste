@@ -42,11 +42,12 @@
   .a4 { height:104px; background:#D3B197; }
   .a5 { height:78px;  background:#E3CDBB; }
 
-  .foot { margin-top:auto; display:flex; flex-direction:column; align-items:center; gap:20px; }
+  .foot { margin-top:auto; display:flex; flex-direction:column; align-items:center; gap:16px; }
   .cta { border:1px solid #2E2823; border-radius:999px;
     padding:19px 46px; font-size:22px; letter-spacing:.2em;
     text-transform:uppercase; font-weight:400; }
   .meta { font-size:22px; letter-spacing:.06em; color:#7C6C5D; font-weight:300; }
+  .ig { font-size:21px; letter-spacing:.22em; color:#7C6C5D; font-weight:300; }
   .handle { font-family:'Cormorant Garamond',serif; font-size:40px;
     letter-spacing:.16em; text-transform:uppercase; color:#2E2823; font-weight:400; }
 </style>
@@ -70,6 +71,7 @@
   <div class="foot">
     <div class="cta">Agende pelo WhatsApp</div>
     <div class="meta">__WHATSAPP__ &nbsp;·&nbsp; __ENDERECO__</div>
-    <div class="handle">__ARROBA__</div>
+    <div class="handle">__SALAO__</div>
+    <div class="ig">__ARROBA__</div>
   </div>
 </div>
