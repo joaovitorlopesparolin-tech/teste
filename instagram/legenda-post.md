@@ -1,6 +1,12 @@
 # Post — Manicure express no Centro de Foz do Iguaçu
 
-Arte: `out/post-manicure-centro-foz.png` (1080×1080, feed)
+Duas artes para testar (1080×1080, feed):
+
+- **A —** `out/post-manicure-centro-foz.png` — só tipografia, fundo nude
+- **B —** `out/post-manicure-centro-foz-foto.png` — foto real do trabalho + texto
+
+Suba as duas com 2 a 3 dias de diferença, com a mesma legenda. A que trouxer mais
+conversa no WhatsApp é a que você impulsiona.
 
 ---
 
@@ -29,6 +35,17 @@ Arte: `out/post-manicure-centro-foz.png` (1080×1080, feed)
 >
 > 💬 WhatsApp (45) 9 0000-0000 · 📍 Av. Brasil, 000 — Centro, Foz do Iguaçu
 
+### Variação C (para a arte com foto — destaca o efeito pérola)
+
+> Esse efeito pérola dura de 15 a 20 dias. E sai em 40 minutos.
+>
+> Estamos no Centro de Foz do Iguaçu, com hora marcada — a poucos minutos de onde você já está.
+> Se você está de passagem pela cidade, dá tempo antes do próximo passeio.
+>
+> 💬 WhatsApp (45) 9 0000-0000 · 📍 Av. Brasil, 000 — Centro, Foz do Iguaçu
+>
+> Comenta **"PÉROLA"** que eu te mando os horários de hoje. 🤍
+
 ---
 
 ## Hashtags
@@ -36,7 +53,7 @@ Arte: `out/post-manicure-centro-foz.png` (1080×1080, feed)
 ```
 #fozdoiguacu #centrodefoz #manicurefozdoiguacu #unhasfoz #nailsfoz
 #fozdoiguaçu #esmalterianofoz #turismofozdoiguacu #cataratasdoiguacu
-#unhasdasemana #manicureepedicure #belezafoz #fozdoiguaçupr #salaodebelezafoz
+#unhasperola #efeitosereia #unhasdasemana #manicureepedicure #belezafoz #fozdoiguaçupr #salaodebelezafoz
 ```
 
 ---
