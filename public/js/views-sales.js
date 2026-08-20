@@ -192,7 +192,7 @@ App.registerView('sales', async (view, args) => {
     const list = sales.filter(s => !f || s.status === f);
     document.getElementById('s-table').innerHTML = App.table(list, [
       { h: 'Pedido', cell: s => `<b>nº ${s.numero}</b><div class="small muted">${App.date(s.dataPedido)}</div>` },
-      { h: 'Cliente', cell: s => `${App.esc(App.clientName(s.clienteId, clients))}<div class="small muted">${App.esc(s.cidade || '')}/${App.esc(s.estado || '')}</div>` },
+      { h: 'Cliente', cell: s => App.clientCell(s.clienteId, clients) + `<div class="small muted">${App.esc(s.cidade || '')}/${App.esc(s.estado || '')}</div>` },
       { h: 'Itens', cell: s => s.itens.map(i => i.kind === 'peca'
           ? `${i.qtd}× ${App.esc(i.produto)}<div class="small muted">peça do estoque</div>`
           : `${i.qtd}× ${App.esc(i.produto)}<div class="small muted">comando ${i.comando} · tucho ${i.tucho} mm</div>`).join('') },
