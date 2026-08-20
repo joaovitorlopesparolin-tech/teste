@@ -89,13 +89,12 @@ function ok(cond, msg){
 
   console.log("— identidade no navegador —");
   const icones = await page.evaluate(() => ({
-    svg: !!document.querySelector('link[rel="icon"][type="image/svg+xml"]'),
-    png: !!document.querySelector('link[rel="icon"][type="image/png"]'),
+    tamanhos: [...document.querySelectorAll('link[rel="icon"]')].map(l => l.sizes.value).sort(),
     apple: !!document.querySelector('link[rel="apple-touch-icon"]'),
     tema: (document.querySelector('meta[name="theme-color"]') || {}).content,
     titulo: document.title,
   }));
-  ok(icones.svg && icones.png && icones.apple, "favicon SVG, fallback PNG e ícone de tela de início presentes");
+  ok(icones.tamanhos.join() === "16x16,32x32" && icones.apple, "favicons 16px e 32px e ícone de tela de início presentes");
   ok(icones.tema === "#242528" && /Martins Notari/.test(icones.titulo), "cor de tema e título da aba com a identidade da marca");
 
   console.log("— layout —");
