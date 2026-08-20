@@ -240,7 +240,7 @@ App.registerView('receivables', async (view) => {
       `${list.length} lançamento(s) · R$ ${App.money(soma)} em aberto`;
     document.getElementById('r-table').innerHTML = App.table(list, [
       { h: 'Origem', cell: r => `${selo(r)}<div class="small muted">${App.esc(refDe(r))}</div>` },
-      { h: 'Cliente', cell: r => `<b>${App.esc(App.clientName(r.clienteId, clients))}</b>` },
+      { h: 'Cliente', cell: r => `<b>${App.esc(App.clientName(r.clienteId, clients))}</b>` + (App.clientCode(r.clienteId, clients) ? `<div class="small muted mono">${App.esc(App.clientCode(r.clienteId, clients))}</div>` : '') },
       { h: 'Descrição', cell: r => `<span class="small">${App.esc(r.descricao)}</span>` },
       { h: 'Forma', cell: r => App.esc(r.forma || '—') },
       { h: 'Parcela', cell: r => r.parcelas > 1 ? `${r.parcela}/${r.parcelas}` : 'única' },

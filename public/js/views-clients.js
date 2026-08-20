@@ -81,6 +81,7 @@ App.registerView('clients', async (view, args) => {
   /* Ordenação: alfabética por padrão; o seletor oferece as demais. */
   const ORDENS = {
     nome: (a, b) => (a.nome || '').localeCompare(b.nome || '', 'pt-BR'),
+    codigo: (a, b) => (a.codigo || '').localeCompare(b.codigo || '', 'pt-BR'),
     recentes: (a, b) => b.id - a.id,
     cidade: (a, b) => (a.cidade || '').localeCompare(b.cidade || '', 'pt-BR') || (a.nome || '').localeCompare(b.nome || '', 'pt-BR'),
     estado: (a, b) => (a.estado || '').localeCompare(b.estado || '', 'pt-BR') || (a.nome || '').localeCompare(b.nome || '', 'pt-BR')
@@ -92,12 +93,16 @@ App.registerView('clients', async (view, args) => {
     clients.sort(ORDENS[ordem] || ORDENS.nome);
     const f = (filter || '').toLowerCase().trim();
     const fd = App.digits(f); // busca por documento ignora pontos, barras e traços
+    const fc = f.replace(/[^a-z0-9]/g, ''); // "cli-000012", "CLI 12" ou só "12" acham o mesmo
+    const codigo = c => (c.codigo || '').toLowerCase().replace(/[^a-z0-9]/g, '');
     const base = verInativos ? clients : App.ativos(clients);
     const list = base.filter(c =>
       !f || (c.nome || '').toLowerCase().includes(f) || (c.cidade || '').toLowerCase().includes(f) ||
+      (fc && codigo(c).includes(fc)) ||
       (fd && App.digits(c.cpfCnpj).includes(fd)) || (fd && App.digits(c.cep).includes(fd)) ||
       (c.estado || '').toLowerCase() === f);
     document.getElementById('clients-table').innerHTML = App.table(list, [
+      { h: 'Código', cell: c => c.codigo ? `<span class="mono">${App.esc(c.codigo)}</span>` : '<span class="muted">—</span>' },
       { h: 'Nome / Razão social', cell: c => `<b>${App.esc(c.nome)}</b>${App.seloInativo(c)}<div class="small muted">${App.esc(c.tipo || '')}</div>` },
       { h: 'CPF / CNPJ', cell: c => c.cpfCnpj ? `<span class="mono">${App.esc(App.fmtCpfCnpj(c.cpfCnpj))}</span>` : '<span class="muted">—</span>' },
       { h: 'Telefone / WhatsApp', cell: c => `${App.esc(c.telefone || '—')}${c.whatsapp ? `<div class="small muted">WhatsApp: ${App.esc(c.whatsapp)}</div>` : ''}` },
@@ -115,9 +120,10 @@ App.registerView('clients', async (view, args) => {
   view.innerHTML = `
     <div class="toolbar">
       <button class="btn primary" onclick="Clients.edit()">+ Novo cliente</button>
-      <input class="search" id="client-search" placeholder="Buscar por nome, cidade, UF ou CPF/CNPJ…">
+      <input class="search" id="client-search" placeholder="Buscar por código, nome, cidade, UF ou CPF/CNPJ…">
       <select id="client-sort" style="max-width:170px" title="Ordenar por">
         <option value="nome">A–Z por nome</option>
+        <option value="codigo">Por código</option>
         <option value="recentes">Mais recentes</option>
         <option value="cidade">Por cidade</option>
         <option value="estado">Por estado</option>
@@ -151,7 +157,10 @@ App.registerView('clients', async (view, args) => {
     },
     edit(id) {
       const c = id ? clients.find(x => x.id === id) : {};
-      clientForm(id ? 'Editar cliente' : 'Novo cliente', c, async d => {
+      const titulo = id
+        ? 'Editar cliente' + (c && c.codigo ? ' · ' + c.codigo : '')
+        : 'Novo cliente (o código é gerado ao salvar)';
+      clientForm(titulo, c, async d => {
         if (id) await App.put('/clients/' + id, d);
         else await App.post('/clients', d);
         App.closeModal(); App.toast('Cliente salvo', 'ok'); App.route();
@@ -164,7 +173,10 @@ App.registerView('clients', async (view, args) => {
 async function clientProfile(view, id) {
   const p = await App.get('/clients/' + id + '/profile');
   const c = p.cliente;
-  App.setTitle(c.nome, `${c.cidade || ''}${c.estado ? ' / ' + c.estado : ''} · ${c.cpfCnpj ? App.fmtCpfCnpj(c.cpfCnpj) : 'sem CPF/CNPJ'}`);
+  App.setTitle(c.nome, [
+    c.codigo, `${c.cidade || ''}${c.estado ? ' / ' + c.estado : ''}`.trim(),
+    c.cpfCnpj ? App.fmtCpfCnpj(c.cpfCnpj) : 'sem CPF/CNPJ'
+  ].filter(Boolean).join(' · '));
 
   const fin = p.financeiro;
   const tabs = {

@@ -27,7 +27,7 @@ App.registerView('entries', async (view) => {
     document.getElementById('entries-table').innerHTML = App.table(list, [
       { h: 'Identificação', cell: e => `<b>${App.esc(e.codigo)}</b>${e.entradaDireta ? ' <span class="badge warn" title="Entrou sem orçamento">exceção</span>' : ''}` },
       { h: 'Chegada', cell: e => App.date(e.dataChegada) },
-      { h: 'Cliente', cell: e => App.esc(App.clientName(e.clienteId, clients)) },
+      { h: 'Cliente', cell: e => App.clientCell(e.clienteId, clients) },
       { h: 'Cidade/UF', cell: e => `${App.esc(e.cidade || '—')}/${App.esc(e.estado || '—')}` },
       { h: 'Peça / Modelo', cell: e => `${App.esc(e.peca)}<div class="small muted">${App.esc(e.modelo || '')}</div>` },
       { h: 'Problema relatado', cell: e => `<span class="small">${App.esc((e.defeito || '—').slice(0, 80))}</span>` },
@@ -126,7 +126,7 @@ App.registerView('assets', async (view) => {
     </div>
     ${App.table(inHouse, [
       { h: 'Identificação', cell: a => `<b>${App.esc(a.identificacao)}</b>` },
-      { h: 'Cliente', cell: a => App.esc(App.clientName(a.clienteId, clients)) },
+      { h: 'Cliente', cell: a => App.clientCell(a.clienteId, clients) },
       { h: 'Entrada', cell: a => App.date(a.dataEntrada) },
       { h: 'Motivo', cell: a => App.esc(a.motivo || '—') },
       { h: 'OS', cell: a => a.osId ? 'OS #' + a.osId : '<span class="muted">—</span>' },
@@ -138,7 +138,7 @@ App.registerView('assets', async (view) => {
     ], { emptyMsg: 'Nenhum bem de terceiro na empresa no momento' })}
     ${returned.length ? `<div class="section-title muted">Devolvidos recentemente</div>` + App.table(returned, [
       { h: 'Identificação', cell: a => App.esc(a.identificacao) },
-      { h: 'Cliente', cell: a => App.esc(App.clientName(a.clienteId, clients)) },
+      { h: 'Cliente', cell: a => App.clientCell(a.clienteId, clients) },
       { h: 'Saída', cell: a => App.date(a.dataSaida) },
       { h: 'NF de retorno', cell: a => App.esc(a.nfRetorno || '—') },
       { h: 'Status', cell: a => App.badge(a.status) }
@@ -199,7 +199,7 @@ App.registerView('quotes', async (view, args) => {
     const list = quotes.filter(q => !f || q.status === f);
     document.getElementById('q-table').innerHTML = App.table(list, [
       { h: 'Nº', cell: q => `<b>${q.numero}</b>` },
-      { h: 'Cliente', cell: q => App.esc(App.clientName(q.clienteId, clients)) },
+      { h: 'Cliente', cell: q => App.clientCell(q.clienteId, clients) },
       { h: 'Modelo', cell: q => App.esc(q.modelo || '—') },
       { h: 'Data', cell: q => App.date(q.dataOrcamento) },
       { h: 'Validade', cell: q => {

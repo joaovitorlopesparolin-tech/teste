@@ -717,3 +717,67 @@ hr.sep { border: none; border-top: 1px solid var(--line-soft); margin: 14px 0; }
   background: var(--bg-3); border: 1px solid var(--accent);
   border-radius: 8px; padding: 10px 12px; font-size: 12.5px; color: var(--text-1);
 }
+
+/* ---------- Agenda financeira (calendário de pagar × receber) ---------- */
+.ag-legenda { display: flex; gap: 16px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
+.ag-legenda i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 5px; vertical-align: 0; }
+.ag-p.receber { background: var(--ok); }
+.ag-p.pagar { background: var(--danger); }
+
+.ag-mes { margin-bottom: 14px; padding: 14px; }
+/* minmax(0,…) deixa a célula encolher: sem isso o valor escrito empurra a
+   grade para fora da tela no celular. */
+.ag-grade { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; }
+.ag-cab {
+  text-align: center; font-size: 11px; text-transform: uppercase; letter-spacing: 1px;
+  color: var(--text-3); padding-bottom: 4px;
+}
+
+.ag-dia {
+  min-height: 78px; min-width: 0; border: 1px solid var(--line-soft); border-radius: 7px;
+  background: var(--bg-1); padding: 5px 6px; display: flex; flex-direction: column; gap: 3px;
+}
+.ag-dia.tem { cursor: pointer; border-color: var(--line); background: var(--bg-2); }
+.ag-dia.tem:hover { border-color: var(--accent); background: var(--bg-3); }
+.ag-dia.fora { opacity: .32; }
+.ag-dia.fora-periodo { opacity: .18; cursor: default; }
+.ag-dia.hoje { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent-dim); }
+
+.ag-num {
+  font-size: 12px; font-weight: 600; color: var(--text-2);
+  display: flex; align-items: center; justify-content: space-between;
+}
+.ag-dia.hoje .ag-num { color: var(--accent-strong); }
+.ag-vazio { flex: 1; }
+
+.ag-l {
+  font-size: 11.5px; font-variant-numeric: tabular-nums; border-radius: 4px;
+  padding: 1px 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ag-l.receber { background: var(--ok-bg); color: var(--ok); }
+.ag-l.pagar { background: var(--danger-bg); color: var(--danger); }
+.ag-ok { margin-left: 4px; opacity: .8; }
+.ag-alerta {
+  background: var(--danger); color: #fff; font-size: 10px; font-weight: 700;
+  width: 14px; height: 14px; border-radius: 50%; display: inline-flex;
+  align-items: center; justify-content: center;
+}
+
+@media (max-width: 700px) {
+  .ag-dia { min-height: 58px; padding: 3px 4px; }
+  .ag-grade { gap: 3px; }
+  .ag-l { font-size: 10px; padding: 0 3px; }
+}
+/* Celular estreito: o valor não cabe legível — fica a faixa colorida, e o
+   valor exato aparece ao tocar no dia. */
+@media (max-width: 520px) {
+  .ag-mes { padding: 10px 8px; }
+  .ag-l { font-size: 0; height: 6px; padding: 0; border-radius: 3px; }
+  .ag-l.receber { background: var(--ok); }
+  .ag-l.pagar { background: var(--danger); }
+  .ag-ok { display: none; }
+}
+@media print {
+  .ag-dia { min-height: 62px; break-inside: avoid; }
+  .ag-mes { break-inside: avoid; }
+}

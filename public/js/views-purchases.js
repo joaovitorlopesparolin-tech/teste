@@ -427,7 +427,7 @@ App.registerView('suppliers', async (view) => {
         ${App.table(list, [
           { h: 'Data', cell: e => App.date(e.data) },
           { h: 'Descrição', cell: e => App.esc(e.descricao) },
-          { h: 'Cliente', cell: e => e.clienteId ? App.esc(App.clientName(e.clienteId, clients)) : '—' },
+          { h: 'Cliente', cell: e => e.clienteId ? App.clientCell(e.clienteId, clients) : '—' },
           { h: 'OS/Pedido', cell: e => App.esc(e.osRef || '—') },
           { h: 'Valor', class: 'num', cell: e => 'R$ ' + App.money(e.valor) }
         ], { emptyMsg: 'Nada em aberto' })}
@@ -509,7 +509,7 @@ App.registerView('freights', async (view) => {
     </div>
     ${freights.length ? App.table(freights, [
       { h: 'Envio', cell: f => App.date(f.dataEnvio) },
-      { h: 'Cliente', cell: f => `<b>${App.esc(App.clientName(f.clienteId, clients))}</b>` },
+      { h: 'Cliente', cell: f => `<b>${App.esc(App.clientName(f.clienteId, clients))}</b>` + (App.clientCode(f.clienteId, clients) ? `<div class="small muted mono">${App.esc(App.clientCode(f.clienteId, clients))}</div>` : '') },
       { h: 'Pedido', cell: f => {
         const v = sales.find(x => x.id === f.saleId);
         return v ? `nº ${v.numero}` : '<span class="muted">—</span>'; } },

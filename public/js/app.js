@@ -195,7 +195,12 @@ const App = {
   put(p, b) { return this.api('PUT', p, b); },
   del(p, extraHeaders) { return this.api('DELETE', p, undefined, extraHeaders); },
 
-  can(perm) { return this.permissions.includes(perm) || this.permissions.includes('admin'); },
+  can(perm) {
+    // Lista de permissões = qualquer uma serve (a agenda financeira abre para
+    // quem vê contas a pagar ou a receber).
+    if (Array.isArray(perm)) return perm.some(p => this.can(p));
+    return this.permissions.includes(perm) || this.permissions.includes('admin');
+  },
 
   /* ---------------- Formatação ---------------- */
   money(v) {
@@ -742,6 +747,7 @@ const App = {
       ['suppliers', 'Fornecedores', '🏭', 'suppliers']
     ]],
     ['Financeiro', [
+      ['agenda', 'Agenda financeira', '🗓', ['payables', 'receivables']],
       ['payables', 'Contas a pagar', '↥', 'payables'],
       ['freights', 'Fretes', '🚚', 'payables'],
       ['receivables', 'Contas a receber', '↧', 'receivables'],
@@ -994,6 +1000,20 @@ const App = {
   clientOptions(clients, selected) {
     return [{ value: '', label: '— selecione —' }].concat(
       this.ativos(clients, selected).slice().sort((a, b) => (a.nome || '').localeCompare(b.nome || '', 'pt-BR'))
-        .map(c => ({ value: c.id, label: c.nome + (c.ativo === false ? ' (inativo)' : '') })));
+        .map(c => ({ value: c.id,
+          // O código vai junto: é ele que separa dois clientes de mesmo nome.
+          label: c.nome + (c.codigo ? ' · ' + c.codigo : '') + (c.ativo === false ? ' (inativo)' : '') })));
+  },
+
+  /* ---------------- Código interno do cliente ---------------- */
+  clientCode(id, clients) {
+    const c = (clients || this.cache.clients || []).find(x => x.id === id);
+    return (c && c.codigo) || '';
+  },
+  /** Nome com o código logo abaixo — para colunas "Cliente" de qualquer tela. */
+  clientCell(id, clients) {
+    const cod = this.clientCode(id, clients);
+    return this.esc(this.clientName(id, clients)) +
+      (cod ? `<div class="small muted mono">${this.esc(cod)}</div>` : '');
   }
 };

@@ -180,6 +180,47 @@ function withOverdue(list) {
   });
 }
 
+/* ---- código interno do cliente (CLI-000001) ----------------------------
+   Identificador do próprio sistema: nasce no cadastro, nunca muda e nunca se
+   repete. O nome pode ser corrigido, e dois clientes podem ter nomes iguais —
+   o código é o que os separa em vendas, serviços, orçamentos e financeiro.
+   Não é o CPF/CNPJ: o cadastro pode existir sem documento, e o documento
+   pertence ao cliente, não à numeração da empresa. */
+
+const CODIGO_CLIENTE_RE = /^CLI-(\d+)$/;
+
+function formatCodigoCliente(seq) { return 'CLI-' + String(seq).padStart(6, '0'); }
+
+/** Próximo código livre. Nunca reaproveita um código já usado por outro cadastro. */
+function proximoCodigoCliente() {
+  const usados = new Set(db.all('clients').map(c => c.codigo).filter(Boolean));
+  let codigo;
+  do { codigo = formatCodigoCliente(db.nextNumber('cliente', 1)); } while (usados.has(codigo));
+  return codigo;
+}
+
+/**
+ * Cadastros anteriores a esta versão — ou vindos de um backup — recebem o
+ * código que falta, na ordem em que foram criados. A sequência é adiantada
+ * para depois do maior código existente, para que a numeração nunca volte
+ * atrás depois de uma restauração.
+ */
+function garantirCodigosDeCliente() {
+  const clients = db.all('clients');
+  let maior = 0;
+  for (const c of clients) {
+    const m = CODIGO_CLIENTE_RE.exec(String(c.codigo || ''));
+    if (m) maior = Math.max(maior, Number(m[1]));
+  }
+  const seq = db.load()._seq;
+  if ((seq['num:cliente'] || 0) < maior) seq['num:cliente'] = maior;
+
+  const semCodigo = clients.filter(c => !c.codigo).sort((a, b) => a.id - b.id);
+  for (const c of semCodigo) db.update('clients', c.id, { codigo: proximoCodigoCliente() });
+  if (semCodigo.length || maior) db.save();
+  return semCodigo.length;
+}
+
 /**
  * Sugere um responsável: primeiro usuário ativo cujo perfil tem a permissão
  * pedida (preferindo perfis específicos — Financeiro, Produção — antes do
@@ -937,6 +978,7 @@ route('POST', '/api/backup/restore', 'admin', async (req, res, user) => {
   fs.writeFileSync(tmp, JSON.stringify(novo, null, 1));
   fs.renameSync(tmp, db.DB_FILE);
   db.reload();
+  garantirCodigosDeCliente(); // backup de uma versão sem código não fica sem ele
 
   console.log('Banco restaurado. Cópia do anterior:', salvaguarda);
   audit(user, 'restore', 'settings', 1,
@@ -3417,6 +3459,135 @@ route('POST', '/api/receivables/:id/cancel', 'receivables', async (req, res, use
   ok(res, { ok: true });
 });
 
+/* ---- agenda financeira (contas a pagar + a receber no calendário) ---- */
+/* A agenda não guarda nada de si: lê o que já está em Contas a pagar e em
+   Contas a receber e devolve agrupado por dia. É por isso que nenhum
+   compromisso precisa ser cadastrado duas vezes — o que entra nos módulos
+   financeiros aparece aqui sozinho, e a baixa lá some daqui na hora.
+
+   base=vencimento (padrão): o dia em que o compromisso vence.
+   base=caixa: o dia em que o dinheiro se move — nas contas a pagar é a
+   sexta-feira programada (ou a data em que foi efetivamente pago), que é
+   como a oficina organiza os pagamentos de verdade. */
+
+const AGENDA_BASES = ['vencimento', 'caixa'];
+
+function fimDoMesDe(iso) {
+  const d = new Date(iso.slice(0, 8) + '01T12:00:00');
+  d.setMonth(d.getMonth() + 1);
+  d.setDate(0);
+  return d.toISOString().slice(0, 10);
+}
+
+function agendaDataDe(item, base) {
+  return base === 'caixa'
+    ? (item.dataBaixa || item.dataProgramada || item.vencimento)
+    : (item.vencimento || item.dataProgramada || item.dataBaixa);
+}
+
+function agendaItemPagar(p) {
+  const forn = p.fornecedorId ? db.get('suppliers', p.fornecedorId) : null;
+  return {
+    tipo: 'pagar', id: p.id,
+    descricao: p.descricao || '',
+    contraparte: forn ? forn.nome : '',
+    contraparteId: forn ? forn.id : null,
+    valor: Number(p.valor) || 0,
+    vencimento: p.vencimento || null,
+    dataProgramada: p.dataProgramada || null,
+    dataBaixa: p.dataPagamento || null,
+    status: p.status,
+    liquidado: p.status === 'pago',
+    cancelado: false,
+    categoria: p.categoria || '',
+    documento: p.documento || '',
+    observacoes: p.observacoes || ''
+  };
+}
+
+function agendaItemReceber(r) {
+  const c = r.clienteId ? db.get('clients', r.clienteId) : null;
+  return {
+    tipo: 'receber', id: r.id,
+    descricao: r.descricao || '',
+    contraparte: c ? c.nome : '',
+    contraparteId: c ? c.id : null,
+    contraparteCodigo: c ? (c.codigo || '') : '',
+    valor: Number(r.valor) || 0,
+    vencimento: r.vencimento || null,
+    dataProgramada: null,
+    dataBaixa: r.dataRecebimento || null,
+    status: r.status,
+    liquidado: r.status === 'paga',
+    cancelado: r.status === 'cancelada',
+    forma: r.forma || '',
+    origem: r.origem || '',
+    refType: r.refType || null, refId: r.refId || null
+  };
+}
+
+route('GET', '/api/agenda', ['payables', 'receivables'], async (req, res, user, params, query) => {
+  const base = AGENDA_BASES.includes(query.base) ? query.base : 'vencimento';
+  const hoje = domain.today();
+  const dia = v => (/^\d{4}-\d{2}-\d{2}$/.test(v || '') ? v : null);
+  const de = dia(query.de) || hoje.slice(0, 8) + '01';
+  const ate = dia(query.ate) || fimDoMesDe(de);
+  if (ate < de) return bad(res, 'O fim do período não pode ser antes do início');
+
+  /* Cada perfil recebe só o lado que já pode ver: quem não enxerga contas a
+     pagar continua sem enxergá-las aqui. */
+  const podeVerPagar = can(user, 'payables');
+  const podeVerReceber = can(user, 'receivables');
+  const itens = []
+    .concat(podeVerPagar ? withOverdue(db.all('payables')).map(agendaItemPagar) : [])
+    .concat(podeVerReceber ? withOverdue(db.all('receivables')).map(agendaItemReceber) : []);
+
+  const dias = new Map();
+  const totais = {
+    pagar: 0, receber: 0, saldo: 0,
+    pagarAberto: 0, pagarLiquidado: 0, receberAberto: 0, receberLiquidado: 0,
+    vencidos: 0, vencidosValor: 0, qtd: 0
+  };
+
+  for (const it of itens) {
+    const data = agendaDataDe(it, base);
+    if (!data || data < de || data > ate) continue;
+    it.data = data;
+    if (!dias.has(data)) {
+      dias.set(data, { data, pagar: 0, receber: 0, pagarAberto: 0, receberAberto: 0,
+                       liquidados: 0, vencidos: 0, saldo: 0, itens: [] });
+    }
+    const d = dias.get(data);
+    d.itens.push(it);
+    // Cancelado continua visível no detalhe do dia, mas não entra em soma alguma.
+    if (it.cancelado) continue;
+    totais.qtd++;
+    if (it.tipo === 'pagar') {
+      d.pagar += it.valor; totais.pagar += it.valor;
+      if (it.liquidado) { d.liquidados++; totais.pagarLiquidado += it.valor; }
+      else { d.pagarAberto += it.valor; totais.pagarAberto += it.valor; }
+    } else {
+      d.receber += it.valor; totais.receber += it.valor;
+      if (it.liquidado) { d.liquidados++; totais.receberLiquidado += it.valor; }
+      else { d.receberAberto += it.valor; totais.receberAberto += it.valor; }
+    }
+    if (it.status === 'vencida') { d.vencidos++; totais.vencidos++; totais.vencidosValor += it.valor; }
+  }
+
+  for (const d of dias.values()) {
+    d.saldo = d.receber - d.pagar;
+    // A receber primeiro, e dentro de cada lado o maior valor no topo.
+    d.itens.sort((a, b) => (a.tipo === b.tipo ? b.valor - a.valor : a.tipo === 'receber' ? -1 : 1));
+  }
+  totais.saldo = totais.receber - totais.pagar;
+
+  ok(res, {
+    de, ate, base, hoje, podeVerPagar, podeVerReceber,
+    dias: [...dias.values()].sort((a, b) => (a.data < b.data ? -1 : 1)),
+    totais
+  });
+});
+
 /* ---- financeiro: projeção e DRE ---- */
 route('GET', '/api/projection', 'projection', async (req, res) => ok(res, domain.projection()));
 route('GET', '/api/dre', 'dre', async (req, res, user, params, query) => {
@@ -3646,6 +3817,8 @@ async function handleRest(req, res, user, collection, id) {
   if (method === 'POST') {
     const body = await readBody(req);
     delete body.id;
+    // O código do cliente é gerado pelo sistema — não vem do formulário.
+    if (collection === 'clients') body.codigo = proximoCodigoCliente();
     const rec = db.insert(collection, body);
     audit(user, 'criou', collection, rec.id, cfg.label + (body.nome ? ': ' + body.nome : body.titulo ? ': ' + body.titulo : ' #' + rec.id));
     return ok(res, rec);
@@ -3663,6 +3836,8 @@ async function handleRest(req, res, user, collection, id) {
   if (method === 'PUT') {
     const body = await readBody(req);
     delete body.id; delete body.createdAt;
+    // O código acompanha o cliente para sempre: corrigir o nome não o altera.
+    if (collection === 'clients') delete body.codigo;
     const before = db.get(collection, id);
     if (!before) return notFound(res);
     const changed = Object.keys(body).filter(k => JSON.stringify(before[k]) !== JSON.stringify(body[k]));
@@ -3767,7 +3942,10 @@ const server = http.createServer(async (req, res) => {
       if (r.perm !== null) {
         user = authUser(req);
         if (!user) return send(res, 401, { error: 'Sessão expirada — faça login novamente' });
-        if (!can(user, r.perm)) return forbidden(res);
+        // Uma lista de permissões vale como "qualquer uma serve": a agenda
+        // financeira abre para quem enxerga contas a pagar OU a receber.
+        const liberado = Array.isArray(r.perm) ? r.perm.some(x => can(user, x)) : can(user, r.perm);
+        if (!liberado) return forbidden(res);
       }
       return await r.handler(req, res, user, m.groups || {}, query);
     }
@@ -3860,6 +4038,14 @@ function reconciliarProducaoEFinanceiro(user) {
 
 /* Roda uma vez sozinha ao subir a versão nova; depois é só pelo botão. */
 function reconciliacaoInicial() {
+  // Códigos de cliente: conferido em toda subida, porque um backup restaurado
+  // pode trazer cadastros de uma versão que ainda não os tinha.
+  try {
+    const n = garantirCodigosDeCliente();
+    if (n) console.log(`Código interno atribuído a ${n} cliente(s).`);
+  } catch (e) {
+    console.error('Falha ao gerar códigos de cliente:', e.message);
+  }
   if (db.settings.reconciliacaoProducaoV1) return;
   try {
     const r = reconciliarProducaoEFinanceiro();
