@@ -33,6 +33,7 @@
     align-items:center; }
 
   h1 { font-family:'Cormorant Garamond',serif; font-weight:300;
+    font-variant-numeric:lining-nums; font-feature-settings:'lnum' 1;
     font-size:88px; line-height:1.03; letter-spacing:-.5px; }
   h1 em { font-style:italic; font-weight:400; }
 
@@ -43,8 +44,8 @@
     padding:18px 44px; font-size:21px; letter-spacing:.2em; text-transform:uppercase; }
   .meta { margin-top:20px; font-size:21px; letter-spacing:.05em;
     color:#7C6C5D; font-weight:300; }
-  .handle { margin-top:15px; font-size:22px; letter-spacing:.26em;
-    text-transform:uppercase; }
+  .handle { margin-top:14px; font-family:'Cormorant Garamond',serif;
+    font-size:39px; letter-spacing:.16em; text-transform:uppercase; font-weight:400; }
 </style>
 <div class="wrap">
   <img src="assets/unhas-01-crop.jpg" alt="">
@@ -52,7 +53,7 @@
   <div class="content">
     <div class="tag">Centro &middot; Foz do Iguaçu</div>
     <div class="block">
-      <h1>Mãos e pés<br><em>prontos em 40 min</em></h1>
+      <h1>Mãos e pés<br><em>prontos em 1 hora</em></h1>
       <p class="sub">Hora marcada, a poucos minutos de onde você já está.</p>
       <div class="cta">Agende pelo WhatsApp</div>
       <div class="meta">__WHATSAPP__ &nbsp;·&nbsp; __ENDERECO__</div>

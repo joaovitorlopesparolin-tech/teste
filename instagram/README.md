@@ -1,4 +1,4 @@
-# Instagram — Salão de manicure, Centro de Foz do Iguaçu
+# Instagram — Salão Bless, Centro de Foz do Iguaçu
 
 Conteúdo para captação de leads locais, com foco em turistas hospedados no Centro
 e em moradoras da região.

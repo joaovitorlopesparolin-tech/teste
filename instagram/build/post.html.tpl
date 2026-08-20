@@ -27,6 +27,7 @@
   .rule { width:1px; height:48px; background:rgba(46,40,35,.25); margin:30px 0 34px; }
 
   h1 { font-family:'Cormorant Garamond',serif; font-weight:300;
+    font-variant-numeric:lining-nums; font-feature-settings:'lnum' 1;
     font-size:97px; line-height:1.04; letter-spacing:-.5px; }
   h1 em { font-style:italic; font-weight:400; }
 
@@ -46,7 +47,8 @@
     padding:19px 46px; font-size:22px; letter-spacing:.2em;
     text-transform:uppercase; font-weight:400; }
   .meta { font-size:22px; letter-spacing:.06em; color:#7C6C5D; font-weight:300; }
-  .handle { font-size:23px; letter-spacing:.26em; text-transform:uppercase; color:#2E2823; }
+  .handle { font-family:'Cormorant Garamond',serif; font-size:40px;
+    letter-spacing:.16em; text-transform:uppercase; color:#2E2823; font-weight:400; }
 </style>
 <div class="wrap">
   <div class="grain"></div>
@@ -55,7 +57,7 @@
   <div class="kicker">Centro &middot; Foz do Iguaçu</div>
   <div class="rule"></div>
 
-  <h1>Mãos e pés<br><em>prontos em 40 min</em></h1>
+  <h1>Mãos e pés<br><em>prontos em 1 hora</em></h1>
 
   <p class="sub">Para quem está de passagem e para quem mora aqui:
      hora marcada, a poucos minutos de onde você já está.</p>
