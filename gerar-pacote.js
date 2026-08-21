@@ -90,7 +90,20 @@ function criarZip(entradas, destino) {
   fim.writeUInt32LE(central.length, 12);
   fim.writeUInt32LE(deslocamento, 16);
 
-  fs.writeFileSync(destino, Buffer.concat([...locais, central, fim]));
+  /* Escreve em um arquivo temporário e só então substitui o pacote antigo.
+     O pacote anterior é a única cópia do node.exe que existe no repositório
+     (ele não é versionado); se a escrita morrer no meio — disco cheio, o
+     processo interrompido — sobrescrever direto destruiria essa cópia e
+     nenhuma máquina Windows nova poderia mais ser instalada. O rename é
+     atômico: ou o pacote novo entra inteiro, ou o antigo continua intacto. */
+  const temporario = destino + '.parcial';
+  try {
+    fs.writeFileSync(temporario, Buffer.concat([...locais, central, fim]));
+    fs.renameSync(temporario, destino);
+  } catch (e) {
+    try { fs.unlinkSync(temporario); } catch (_) { /* nada a limpar */ }
+    throw e;
+  }
 }
 
 /* ---------------- montagem da lista ---------------- */
@@ -173,10 +186,40 @@ function lerDoZip(caminhoZip, nomeInterno) {
   return null;
 }
 
+/* O node.exe entregue no pacote é o que faz o sistema abrir no Windows sem
+   instalar nada. Como ele não é versionado, o pacote anterior é a única cópia
+   que sobra — um binário errado ou truncado aqui quebra toda instalação nova
+   e não há de onde recuperar. Antes de empacotar, confere que é mesmo um
+   executável de Windows 64 bits inteiro. */
+const NODE_EXE_MIN_MB = 40;
+
+function conferirNodeExe(dados, origem) {
+  const mb = (dados.length / 1048576).toFixed(0);
+  const recado = (motivo) =>
+    `O node.exe ${origem} não serve: ${motivo}\n` +
+    'Copie o node.exe de uma instalação do sistema no Windows para a raiz do\n' +
+    'projeto e gere o pacote de novo. O pacote atual não foi alterado.';
+
+  if (dados.length < NODE_EXE_MIN_MB * 1048576) {
+    throw new Error(recado(`tem só ${mb} MB (o real passa de ${NODE_EXE_MIN_MB} MB) — veio truncado.`));
+  }
+  /* Cabeçalho de executável do Windows: "MZ" no início e, no deslocamento
+     que ele aponta, a assinatura "PE\0\0" seguida do tipo de máquina. */
+  if (dados.readUInt16LE(0) !== 0x5a4d) throw new Error(recado('não é um executável do Windows.'));
+  const pe = dados.readUInt32LE(0x3c);
+  if (pe + 6 > dados.length || dados.readUInt32LE(pe) !== 0x00004550) {
+    throw new Error(recado('não é um executável do Windows.'));
+  }
+  if (dados.readUInt16LE(pe + 4) !== 0x8664) {
+    throw new Error(recado('não é de 64 bits (x64) — não roda nos computadores da empresa.'));
+  }
+  return dados;
+}
+
 /* node.exe: da raiz, ou reaproveitado do pacote anterior */
 function acharNodeExe() {
   const local = path.join(RAIZ, 'node.exe');
-  if (fs.existsSync(local)) return fs.readFileSync(local);
+  if (fs.existsSync(local)) return conferirNodeExe(fs.readFileSync(local), 'da raiz do projeto');
 
   /* Não está na raiz: aproveita o binário que já foi entregue no pacote
      anterior — é exatamente o mesmo arquivo. Sem isso seria preciso caçá-lo
@@ -192,6 +235,7 @@ function acharNodeExe() {
         'do projeto e gere o pacote de novo.');
     }
     if (dados) {
+      conferirNodeExe(dados, 'do pacote anterior');
       console.log(`node.exe reaproveitado do pacote anterior (${(dados.length / 1048576).toFixed(0)} MB).`);
       return dados;
     }
