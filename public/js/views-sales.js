@@ -187,28 +187,48 @@ App.registerView('sales', async (view, args) => {
     </div>
     <div id="s-table"></div>`;
 
+  /* Nome curto da configuração, do jeito que a equipe fala: "Unilateral
+     Stage 1", "Fluxo cruzado Stage 2". Comando e tucho não entram aqui —
+     são detalhe do pedido, não identificação do produto. */
+  const configLabel = (i) => `${i.tipo === 'crossflow' ? 'Fluxo cruzado' : 'Unilateral'} Stage ${i.stage}`;
+
+  const cabecotes = (s) => (s.itens || []).filter(i => i.kind !== 'peca');
+  const pecas = (s) => (s.itens || []).filter(i => i.kind === 'peca');
+  const qtdCabecotes = (s) => cabecotes(s).reduce((a, i) => a + (Number(i.qtd) || 1), 0);
+
+  /* Resumo do pedido em poucas linhas — "2× Unilateral Stage 1" — somando as
+     configurações iguais. É o que permite enxergar vários pedidos de uma vez;
+     o detalhe completo abre no botão Detalhes. */
+  const resumoConfigs = (s) => {
+    const grupos = [];
+    const idx = new Map();
+    for (const i of cabecotes(s)) {
+      const nome = configLabel(i);
+      if (idx.has(nome)) grupos[idx.get(nome)].qtd += (Number(i.qtd) || 1);
+      else { idx.set(nome, grupos.length); grupos.push({ nome, qtd: Number(i.qtd) || 1 }); }
+    }
+    /* Uma configuração por linha, sem quebrar no meio do nome — é o que
+       mantém a altura da linha proporcional ao que o pedido realmente tem. */
+    const linhas = grupos.map(g => `${g.qtd}× ${App.esc(g.nome)}`);
+    const np = pecas(s).reduce((a, i) => a + (Number(i.qtd) || 1), 0);
+    if (np) linhas.push(`<span class="muted">${np}× peça(s) do estoque</span>`);
+    return linhas.length
+      ? linhas.map(l => `<div style="white-space:nowrap">${l}</div>`).join('')
+      : '<span class="muted">—</span>';
+  };
+
   const render = () => {
     const f = document.getElementById('sf').value;
     const list = sales.filter(s => !f || s.status === f);
     document.getElementById('s-table').innerHTML = App.table(list, [
       { h: 'Pedido', cell: s => `<b>nº ${s.numero}</b><div class="small muted">${App.date(s.dataPedido)}</div>` },
-      { h: 'Cliente', cell: s => App.clientCell(s.clienteId, clients) + `<div class="small muted">${App.esc(s.cidade || '')}/${App.esc(s.estado || '')}</div>` },
-      { h: 'Itens', cell: s => s.itens.map(i => i.kind === 'peca'
-          ? `${i.qtd}× ${App.esc(i.produto)}<div class="small muted">peça do estoque</div>`
-          : `${i.qtd}× ${App.esc(i.produto)}<div class="small muted">comando ${i.comando} · tucho ${i.tucho} mm</div>`).join('') },
-      ...(verValores ? [
-        { h: 'Total', class: 'num', cell: s => App.moneyHtml(s.valorTotal) },
-        { h: 'Pagamento', cell: s => `${App.esc((s.pagamento && s.pagamento.forma) || '—')}${s.pagamento && s.pagamento.parcelas > 1 ? ` ${s.pagamento.parcelas}x` : ''}` }] : []),
-      ...(verValores ? [{ h: 'Recebido', class: 'num', cell: s => {
-        const rec = (s.recebimentos || []).reduce((a, r) => a + r.valor, 0);
-        const saldo = Math.round((s.valorTotal - rec) * 100) / 100;
-        if (!rec) return '<span class="muted small">—</span>';
-        return `<span class="pos">R$ ${App.money(rec)}</span>` +
-          (saldo > 0.005 ? `<div class="small neg">falta R$ ${App.money(saldo)}</div>` : '<div class="small pos">quitado</div>');
-      } }] : []),
+      { h: 'Cliente', cell: s => App.clientCell(s.clienteId, clients) },
+      { h: 'Qtd', class: 'num', cell: s => `<b>${qtdCabecotes(s)}</b>` },
+      { h: 'Configurações', cell: s => resumoConfigs(s) },
       { h: 'Previsão', cell: s => App.date(s.previsaoEntrega) },
       { h: 'Status', cell: s => App.badge(s.status) },
       { h: '', class: 'num', cell: s => `
+        <button class="btn sm" onclick="Sales.detalhes(${s.id})" title="Ver comando, tucho, pagamento e demais dados">Detalhes</button>
         <button class="btn sm ghost" onclick="Sales.status(${s.id})">Status</button>
         ${verValores ? `<button class="btn sm ghost" onclick="Sales.receber(${s.id})" title="Registrar recebimento (entrada / saldo)">💵</button>` : ''}
         <button class="btn sm ghost wa" onclick="Sales.wa(${s.id})" title="Avisar o cliente no WhatsApp">✆</button>
@@ -217,12 +237,62 @@ App.registerView('sales', async (view, args) => {
         <button class="btn sm ghost" onclick="location.hash='#/sales/nova/${s.id}'" title="Editar venda">✏️</button>
         <button class="btn sm ghost" onclick="Sales.duplicar(${s.id})" title="Duplicar venda">📋</button>
         <button class="btn sm ghost" onclick="Sales.excluir(${s.id})" title="Excluir venda">🗑</button>` }
-    ]);
+    ], { onRow: s => Sales.detalhes(s.id) });
   };
   render();
   document.getElementById('sf').addEventListener('change', render);
 
   window.Sales = {
+    /* Tudo que saiu da listagem para ela caber na tela: comando, tucho,
+       valores, pagamento e recebimentos de um pedido só. Quem não enxerga
+       financeiro continua sem ver valor nenhum aqui. */
+    detalhes(id) {
+      const s = sales.find(x => x.id === id);
+      if (!s) return;
+      const rec = (s.recebimentos || []).reduce((a, r) => a + r.valor, 0);
+      const saldo = Math.round((s.valorTotal - rec) * 100) / 100;
+      const pg = s.pagamento || {};
+      App.modal(`
+        <h2>Pedido nº ${s.numero} — ${App.esc(App.clientName(s.clienteId, clients))}</h2>
+        <p class="small muted">${App.esc(s.cidade || '—')}${s.estado ? '/' + App.esc(s.estado) : ''}
+          · pedido em ${App.date(s.dataPedido)}
+          · previsão ${App.date(s.previsaoEntrega)}
+          ${s.dataEnvio ? '· enviado em ' + App.date(s.dataEnvio) : ''}
+          · ${App.badge(s.status)}</p>
+
+        <h3 class="section-title">Itens</h3>
+        ${App.table(s.itens || [], [
+          { h: 'Qtd', class: 'num', cell: i => i.qtd },
+          { h: 'Produto', cell: i => `<b>${App.esc(i.produto)}</b>` },
+          { h: 'Configuração', cell: i => i.kind === 'peca'
+              ? '<span class="muted">peça do estoque</span>'
+              : `${App.esc(configLabel(i))}<div class="small muted">comando ${App.esc(i.comando || '—')} · tucho ${App.esc(String(i.tucho || '—'))} mm</div>` },
+          ...(verValores ? [
+            { h: 'Unitário', class: 'num', cell: i => App.moneyHtml(i.valorUnit) },
+            { h: 'Total', class: 'num', cell: i => App.moneyHtml(i.total) }] : [])
+        ], { emptyMsg: 'Sem itens' })}
+
+        ${verValores ? `
+          <h3 class="section-title">Valores e pagamento</h3>
+          <table style="font-size:13.5px">
+            <tr><td>Valor total</td><td class="num"><b>R$ ${App.money(s.valorTotal)}</b></td></tr>
+            ${(s.custosAdicionais || []).map(c => `<tr><td class="muted">Custo adicional — ${App.esc(c.desc || '')}</td>
+              <td class="num muted">R$ ${App.money(c.valor)}</td></tr>`).join('')}
+            <tr><td>Forma</td><td class="num">${App.esc(pg.forma || '—')}${pg.parcelas > 1 ? ` · ${pg.parcelas}x` : ''}${pg.condicao ? ` · ${App.esc(pg.condicao)}` : ''}</td></tr>
+            ${pg.taxa ? `<tr><td>Taxa da operadora</td><td class="num neg">R$ ${App.money(pg.taxa)}</td></tr>
+              <tr><td>Valor líquido</td><td class="num">R$ ${App.money(pg.valorLiquido)}</td></tr>` : ''}
+            <tr><td>Já recebido</td><td class="num pos">R$ ${App.money(rec)}</td></tr>
+            <tr><td><b>Saldo em aberto</b></td><td class="num"><b class="${saldo > 0.005 ? 'neg' : 'pos'}">R$ ${App.money(saldo)}</b></td></tr>
+          </table>` : ''}
+
+        ${s.observacoes ? `<h3 class="section-title">Observações</h3><p>${App.esc(s.observacoes)}</p>` : ''}
+
+        <div class="actions">
+          <button class="btn" onclick="App.closeModal()">Fechar</button>
+          <button class="btn primary" onclick="App.closeModal();location.hash='#/sales/nova/${s.id}'">✏️ Editar pedido</button>
+        </div>`, { wide: true });
+    },
+
     /* Recebimento em etapas: entrada agora, saldo na entrega.
        O que falta continua em Contas a receber e na projeção. */
     receber(id) {
@@ -355,7 +425,9 @@ App.registerView('sales', async (view, args) => {
         `<table><tr><th>Nº</th><th>Data</th><th>Cliente</th><th>Itens</th>${verValores ? '<th class="num">Total</th>' : ''}<th>Previsão</th><th>Status</th></tr>
         ${list.map(s => `<tr><td>${s.numero}</td><td>${App.date(s.dataPedido)}</td>
         <td>${App.esc(App.clientName(s.clienteId, clients))}</td>
-        <td>${s.itens.map(i => `${i.qtd}× ${App.esc(i.produto)} (${i.comando}, tucho ${i.tucho})`).join('; ')}</td>
+        <td>${s.itens.map(i => i.kind === 'peca'
+          ? `${i.qtd}× ${App.esc(i.produto)}`
+          : `${i.qtd}× ${App.esc(i.produto)} (${App.esc(i.comando || '—')}, tucho ${App.esc(String(i.tucho || '—'))} mm)`).join('; ')}</td>
         ${verValores ? `<td class="num">R$ ${App.money(s.valorTotal)}</td>` : ''}<td>${App.date(s.previsaoEntrega)}</td>
         <td>${(App.STATUS[s.status] || [s.status])[0]}</td></tr>`).join('')}</table>`,
         list.length + ' pedido(s)');
@@ -813,23 +885,77 @@ App.registerView('production', async (view) => {
         '<div class="sig"><div>Executado por</div><div>Controle de qualidade</div></div>',
         `Responsável: ${App.userName(p.responsavelId)}`);
     },
+    /* Impressão para a equipe: uma tabela compacta de "o que precisa ser
+       feito", nos moldes da impressão da Ordem de Serviço. O checklist por
+       etapa fica só na tela — no papel ele ocupava páginas e atrapalhava.
+       Nada de dinheiro aqui: a produção não vê preço, custo nem pagamento. */
     print() {
       const list = pos.filter(p =>
         p.status !== 'cancelado' &&
         (!filtroStatus || p.status === filtroStatus) &&
         (!filtroTipo || (filtroTipo === 'servico' ? p.origem === 'servico' : p.origem !== 'servico')) &&
         (!filtroEtapa || p.etapaAtual === filtroEtapa));
-      App.print('Ordens de produção' + (filtroStatus ? ' — ' + (App.STATUS[filtroStatus] || [filtroStatus])[0] : ''),
-        list.map(p => `
-          <h3>OP #${p.id} — ${p.origem === 'servico'
-            ? `Serviço · OS nº ${p.osNumero} · ${App.esc(p.produto || '')}`
-            : `${App.esc(p.produto)} · comando ${App.esc(p.comando || '')} · tucho ${App.esc(String(p.tucho || ''))} mm`}
-            <span class="badge">${(App.STATUS[p.status] || [p.status])[0]}</span></h3>
-          <p style="font-size:11px;color:#555">${p.origem === 'servico' ? 'OS nº ' + p.osNumero : 'Pedido nº ' + p.pedidoNumero}
-            — ${App.esc(p.clienteNome || '')} — previsão ${App.date(p.previsaoEntrega)}</p>
-          <ul class="check">${p.checklist.filter(c => !c.done)
-            .map(c => `<li>${App.esc(c.item)}</li>`).join('') || '<li style="list-style:none">— tudo concluído —</li>'}</ul>`).join(''),
-        list.length + ' ordem(ns) — somente itens pendentes listados');
+
+      /* Cada cabeçote vendido gera uma ordem por unidade. Juntar as
+         idênticas é o que faz a coluna "Qtd" dizer alguma coisa: em vez de
+         três linhas iguais de 1, uma linha de 3. */
+      const grupos = [];
+      const porChave = new Map();
+      for (const p of list) {
+        const chave = [p.origem, p.pedidoNumero, p.osNumero, p.produto, p.tipo, p.stage,
+          p.comando, p.tucho, p.identificacao, p.status, p.previsaoEntrega,
+          (p.operacoes || []).map(o => o.qtd + '×' + o.nome).join('|')].join('§');
+        const achado = porChave.get(chave);
+        if (achado) { achado.qtd++; achado.ids.push(p.id); }
+        else { const g = { p, qtd: 1, ids: [p.id] }; porChave.set(chave, g); grupos.push(g); }
+      }
+
+      const linha = (g) => {
+        const p = g.p;
+        const servico = p.origem === 'servico';
+        const origem = servico ? `OS nº ${App.esc(String(p.osNumero || '—'))}`
+                               : `Pedido nº ${App.esc(String(p.pedidoNumero || '—'))}`;
+        /* Nas vendas o nome do produto do catálogo é sempre "Cabeçote
+           Unilateral — Stage 1" e afins, ou seja, repetiria tipo e stage.
+           Só entra como segunda linha se disser algo diferente. */
+        const tipoStage = `${p.tipo === 'crossflow' ? 'Fluxo cruzado' : 'Unilateral'} · Stage ${p.stage || '—'}`;
+        const normaliza = (t) => String(t || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+        const cabecote = servico
+          ? App.esc(p.produto || 'Cabeçote de cliente') +
+            (p.identificacao ? `<div class="sub">${App.esc(p.identificacao)}</div>` : '')
+          : App.esc(tipoStage) +
+            (p.produto && !normaliza(p.produto).includes(normaliza(tipoStage))
+              ? `<div class="sub">${App.esc(p.produto)}</div>` : '');
+        /* O "o que fazer" resumido: a configuração no caso do cabeçote
+           vendido, as operações no caso do serviço de cliente. */
+        const fazer = servico
+          ? ((p.operacoes || []).length
+              ? p.operacoes.map(o => App.esc((o.qtd > 1 ? o.qtd + '× ' : '') + o.nome)).join(' · ')
+              : App.esc(p.descricaoServico || p.problema || '—')) +
+            ((p.pecas || []).length ? `<div class="sub">Peças: ${p.pecas.map(x => App.esc(x)).join(' · ')}</div>` : '')
+          : `Comando <b>${App.esc(p.comando || '—')}</b> · tucho <b>${App.esc(String(p.tucho || '—'))} mm</b>`;
+        return `<tr>
+          <td>${origem}<div class="sub">${g.ids.map(i => 'OP #' + i).join(', ')}</div></td>
+          <td>${App.esc(p.clienteNome || '—')}</td>
+          <td>${cabecote}</td>
+          <td>${fazer}</td>
+          <td class="num">${g.qtd}</td>
+          <td>${App.date(p.previsaoEntrega)}</td>
+          <td>${(App.STATUS[p.status] || [p.status])[0]}</td>
+        </tr>`;
+      };
+
+      const totalCabecotes = grupos.reduce((s, g) => s + g.qtd, 0);
+      App.print('Produção — lista de trabalho' + (filtroStatus ? ' — ' + (App.STATUS[filtroStatus] || [filtroStatus])[0] : ''),
+        (grupos.length
+          ? `<table>
+              <tr><th>Origem</th><th>Cliente</th><th>Cabeçote</th><th>O que fazer</th>
+                  <th class="num">Qtd</th><th>Previsão</th><th>Status</th></tr>
+              ${grupos.map(linha).join('')}
+             </table>`
+          : '<p>Nenhuma ordem de produção nesta situação.</p>') +
+        '<div class="sig"><div>Executado por</div><div>Conferido por</div></div>',
+        `${totalCabecotes} cabeçote(s) em ${grupos.length} linha(s)`);
     }
   };
 });

@@ -482,7 +482,10 @@ const App = {
         th { text-align: left; background: #eef1f5; border: 1px solid #c6ccd6; padding: 6px 8px;
              font-size: 10px; text-transform: uppercase; letter-spacing: .8px; }
         td { border: 1px solid #d8dde5; padding: 6px 8px; }
-        .num { text-align: right; } .sig { margin-top: 46px; display: flex; gap: 40px; }
+        .num { text-align: right; }
+        /* Segunda linha dentro da célula: detalhe que ajuda sem pesar na tabela. */
+        .sub { font-size: 10px; color: #666; margin-top: 2px; }
+        .sig { margin-top: 46px; display: flex; gap: 40px; }
         .sig div { flex: 1; border-top: 1px solid #888; padding-top: 5px; font-size: 11px; text-align: center; color: #444; }
         h3 { font-size: 13px; margin: 18px 0 4px; border-bottom: 1px solid #ccc; padding-bottom: 3px; }
         .badge { border: 1px solid #999; border-radius: 10px; padding: 1px 8px; font-size: 10px; white-space: nowrap; }
