@@ -14,6 +14,14 @@ const CATS_PAG = [
   ['despesa_operacional', 'Outras despesas operacionais'], ['despesa_financeira', 'Outras despesas financeiras']
 ];
 
+/* De onde vêm os lançamentos que o sistema cria sozinho no caixa — usado
+   para dizer à pessoa onde desfazer, em vez de só bloquear a ação. */
+const CF_ORIGEM = {
+  payables: 'Contas a pagar', receivables: 'Contas a receber', sales: 'Vendas',
+  serviceOrders: 'Ordens de serviço', hrPayments: 'RH', freights: 'Fretes',
+  purchases: 'Compras'
+};
+
 /* ================= CONTAS A PAGAR ================= */
 App.registerView('payables', async (view) => {
   App.setTitle('Contas a pagar', 'Agenda de pagamentos às sextas-feiras + pagamentos imediatos');
@@ -54,7 +62,9 @@ App.registerView('payables', async (view) => {
           { h: 'Valor', class: 'num', cell: p => App.moneyHtml(p.valor) },
           { h: 'Status', cell: p => App.badge(p.status) },
           { h: '', class: 'num', cell: p => `<button class="btn sm primary" onclick="Pay.pay(${p.id})">✓ Pagar</button>
-            ${podeEditar ? `<button class="btn sm ghost" onclick="Pay.edit(${p.id})" title="Corrigir esta conta (Direção)">✎</button>` : ''}` }
+            ${podeEditar ? `
+              <button class="btn sm ghost" onclick="Pay.edit(${p.id})" title="Editar esta conta">✏️ Editar</button>
+              <button class="btn sm ghost" onclick="Pay.excluir(${p.id})" title="Excluir esta conta">🗑️ Excluir</button>` : ''}` }
         ])}
       </div>`).join('') : '<div class="card"><div class="empty">Nenhuma conta em aberto 🎉</div></div>'}
 
@@ -65,7 +75,9 @@ App.registerView('payables', async (view) => {
       { h: 'Valor', class: 'num', cell: p => App.moneyHtml(p.valor) },
       { h: 'Status', cell: p => App.badge('pago') },
       ...(podeEditar ? [{ h: '', class: 'num', cell: p => `
-        <button class="btn sm ghost" onclick="Pay.edit(${p.id})" title="Corrigir esta conta (Direção)">✎ Corrigir</button>` }] : [])
+        <button class="btn sm ghost" onclick="Pay.unpay(${p.id})" title="Desfazer o pagamento — a conta volta para a agenda e a saída sai do caixa">↩ Desfazer pagamento</button>
+        <button class="btn sm ghost" onclick="Pay.edit(${p.id})" title="Editar esta conta">✏️ Editar</button>
+        <button class="btn sm ghost" onclick="Pay.excluir(${p.id})" title="Excluir esta conta">🗑️ Excluir</button>` }] : [])
     ], { emptyMsg: 'Nenhum pagamento ainda' })}`;
 
   window.Pay = {
@@ -133,6 +145,25 @@ App.registerView('payables', async (view) => {
           : 'Conta corrigida', 'ok');
         App.route();
       });
+    },
+    /* Exclusão de conta lançada errada ou em duplicidade. O servidor confere
+       o que está pendurado nela e pede a segunda confirmação quando é o caso;
+       apagar uma duplicada não encosta na conta correta. */
+    excluir(id) {
+      const p = payables.find(x => x.id === id);
+      App.excluirLancamento(`/payables/${id}`, 'esta conta',
+        { nome: p ? `${p.descricao} — R$ ${App.money(p.valor)} (venc. ${App.date(p.vencimento)})` : null });
+    },
+    async unpay(id) {
+      const p = payables.find(x => x.id === id);
+      if (!await App.confirm(`Desfazer o pagamento de <b>${App.esc(p.descricao)}</b>?<br><br>
+        <span class="small">A conta volta para a agenda e a saída correspondente sai do fluxo de caixa.</span>`,
+        { html: true })) return;
+      try {
+        await App.post(`/payables/${id}/unpay`, {});
+        App.toast('Pagamento desfeito — a conta voltou para a agenda', 'ok');
+        App.route();
+      } catch (e) { App.toast(e.message, 'err'); }
     },
     pay(id) {
       const p = payables.find(x => x.id === id);
@@ -545,6 +576,12 @@ App.registerView('cashflow', async (view) => {
   App.setTitle('Fluxo de caixa', 'Quando o dinheiro efetivamente entrou ou saiu — não confundir com a DRE');
   const flows = await App.get('/cashflow');
   flows.sort((a, b) => (a.data < b.data ? 1 : -1) || b.id - a.id);
+  /* Corrigir ou apagar lançamento de caixa é função da Direção. */
+  const podeEditarCF = App.can('cashflow_edit');
+  /* Lançamento que veio de outro módulo é o reflexo daquele registro:
+     mexer aqui deixaria os dois lados divergentes, então só o manual é
+     editável — o resto se desfaz na origem. */
+  const manualCF = f => !f.refType;
   const saldo = flows.reduce((s, f) => s + (f.tipo === 'entrada' ? f.valor : -f.valor), 0);
   const month = App.today().slice(0, 7);
   const inMonth = flows.filter(f => (f.data || '').slice(0, 7) === month);
@@ -587,7 +624,11 @@ App.registerView('cashflow', async (view) => {
       { h: 'Categoria', cell: f => `<span class="small muted">${App.esc(f.categoria || '—')}</span>` },
       { h: 'Conta', cell: f => App.esc(f.conta || '—') },
       { h: 'Documento', cell: f => App.esc(f.documento || '—') },
-      { h: 'Valor', class: 'num', cell: f => `<b class="${f.tipo === 'entrada' ? 'pos' : 'neg'}">${f.tipo === 'entrada' ? '+' : '−'} R$ ${App.money(f.valor)}</b>` }
+      { h: 'Valor', class: 'num', cell: f => `<b class="${f.tipo === 'entrada' ? 'pos' : 'neg'}">${f.tipo === 'entrada' ? '+' : '−'} R$ ${App.money(f.valor)}</b>` },
+      ...(podeEditarCF ? [{ h: '', class: 'num', cell: f => manualCF(f)
+        ? `<button class="btn sm ghost" onclick="CF.editar(${f.id})" title="Editar este lançamento">✏️ Editar</button>
+           <button class="btn sm ghost" onclick="CF.excluir(${f.id})" title="Excluir este lançamento">🗑️ Excluir</button>`
+        : `<span class="small muted" title="Veio de ${App.esc(CF_ORIGEM[f.refType] || f.refType)} — desfaça por lá para os dois lados baterem">automático</span>` }] : [])
     ], { emptyMsg: 'Nenhum lançamento — os módulos de vendas, contas e compras alimentam o caixa automaticamente' });
   };
   renderCF();
@@ -679,6 +720,33 @@ App.registerView('cashflow', async (view) => {
         await App.post('/cashflow', d);
         App.closeModal(); App.toast('Lançamento registrado', 'ok'); App.route();
       });
+    },
+    /* Só lançamento manual: o automático é reflexo de outro registro e se
+       desfaz na origem, que estorna os dois lados de uma vez. */
+    editar(id) {
+      const f = flows.find(x => x.id === id);
+      if (!f) return;
+      App.form('Editar lançamento do caixa', [
+        { name: 'tipo', label: 'Tipo', type: 'select', value: f.tipo,
+          options: [{ value: 'entrada', label: 'Entrada' }, { value: 'saida', label: 'Saída' }] },
+        { name: 'valor', label: 'Valor (R$)', type: 'number', step: '0.01', value: f.valor, required: true },
+        { name: 'data', label: 'Data efetiva', type: 'date', value: f.data, required: true },
+        { name: 'conta', label: 'Conta bancária', value: f.conta || 'principal' },
+        { name: 'categoria', label: 'Categoria', type: 'select', value: f.categoria, options:
+          [['venda_cabecote', 'Venda de cabeçote'], ['venda_peca', 'Venda de peça'], ['servico', 'Serviço']]
+            .concat(CATS_PAG).map(([v, l]) => ({ value: v, label: l })) },
+        { name: 'origem', label: 'Origem / descrição', value: f.origem || '', required: true, full: true },
+        { name: 'documento', label: 'Documento', value: f.documento || '' }
+      ], async d => {
+        d.valor = Number(d.valor);
+        await App.put('/cashflow/' + id, d);
+        App.closeModal(); App.toast('Lançamento corrigido', 'ok'); App.route();
+      });
+    },
+    excluir(id) {
+      const f = flows.find(x => x.id === id);
+      App.excluirLancamento(`/cashflow/${id}`, 'este lançamento',
+        { nome: f ? `${f.tipo === 'entrada' ? 'Entrada' : 'Saída'} de R$ ${App.money(f.valor)} em ${App.date(f.data)} — ${f.origem || f.descricao || 'manual'}` : null });
     },
     exportCsv() {
       App.exportCsv('fluxo-de-caixa.csv', flows.map(f => ({

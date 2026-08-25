@@ -102,6 +102,13 @@ function can(user, perm) {
   return Array.isArray(perm) ? perm.some(p => perms.includes(p)) : perms.includes(perm);
 }
 
+/* As mensagens de confirmação são lidas por quem trabalha na oficina:
+   valor e data vão no formato daqui, não no do banco de dados. */
+const brl = (v) => 'R$ ' + (Number(v) || 0).toLocaleString('pt-BR',
+  { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const dataBR = (d) => /^\d{4}-\d{2}-\d{2}$/.test(String(d || ''))
+  ? String(d).slice(0, 10).split('-').reverse().join('/') : String(d || '');
+
 function audit(user, action, entity, entityId, details) {
   db.insert('audit', {
     at: new Date().toISOString(),
@@ -3212,6 +3219,90 @@ route('PUT', '/api/purchases/:id', 'purchases', async (req, res, user, params) =
   ok(res, rec);
 });
 
+/**
+ * Excluir lançamento do fluxo de caixa — função da Direção.
+ *
+ * Lançamento que nasceu de outro módulo (pagamento de conta, recebimento de
+ * venda, taxa de cartão) NÃO se apaga por aqui: ele é o reflexo do outro
+ * registro, e apagá-lo sozinho deixaria a conta constando paga com o
+ * dinheiro fora do caixa. O caminho é desfazer na origem, que estorna os
+ * dois lados juntos — por isso a resposta diz onde ir. Lançamento manual,
+ * esse sim, some direto.
+ */
+route('DELETE', '/api/cashflow/:id', 'cashflow_edit', async (req, res, user, params) => {
+  const c = db.get('cashflow', params.id);
+  if (!c) return notFound(res);
+  const ORIGEM = {
+    payables: ['Contas a pagar', 'use “Desfazer pagamento” na conta'],
+    receivables: ['Contas a receber', 'use “Estornar” na parcela'],
+    sales: ['Vendas', 'use “Estornar” no recebimento do pedido'],
+    serviceOrders: ['Ordens de serviço', 'use “Estornar” no recebimento da OS'],
+    hrPayments: ['RH', 'desfaça o pagamento do colaborador'],
+    freights: ['Fretes', 'use “Desfazer pagamento” no frete'],
+    purchases: ['Compras', 'desfaça o pagamento da parcela em Contas a pagar']
+  };
+  if (c.refType && ORIGEM[c.refType]) {
+    const [modulo, comoFazer] = ORIGEM[c.refType];
+    return bad(res, `Este lançamento é o reflexo de um registro em ${modulo} — apagá-lo aqui ` +
+      `deixaria os dois lados divergentes. Para desfazer, ${comoFazer}: o caixa é estornado junto.`);
+  }
+  db.remove('cashflow', c.id);
+  audit(user, 'excluiu', 'cashflow', Number(params.id),
+    `${c.tipo === 'entrada' ? 'Entrada' : 'Saída'} de ${brl(c.valor)} em ${dataBR(c.data)} — ` +
+    `${c.origem || c.descricao || 'lançamento manual'}`);
+  ok(res, { ok: true });
+});
+
+/**
+ * Excluir compra: leva junto as contas a pagar que ela gerou e a entrada de
+ * estoque que ela deu. Sem isso sobraria obrigação a pagar de uma compra que
+ * não existe mais, e o estoque continuaria contando peça que não entrou.
+ */
+route('DELETE', '/api/purchases/:id', 'purchases', async (req, res, user, params) => {
+  const compra = db.get('purchases', params.id);
+  if (!compra) return notFound(res);
+  const confirmado = String(req.headers['x-confirmar'] || '').toLowerCase() === 'sim';
+
+  const contas = db.all('payables').filter(p => p.refType === 'purchases' && p.refId === compra.id);
+  const pagas = contas.filter(p => p.status === 'pago');
+  const movs = db.all('stockMoves').filter(m => m.refType === 'purchases' && m.refId === compra.id && !m.estornada);
+  const caixa = db.all('cashflow').filter(c =>
+    c.refType === 'payables' && contas.some(p => p.id === c.refId));
+
+  if ((contas.length || movs.length) && !confirmado) {
+    const partes = [];
+    if (contas.length) {
+      partes.push(`${contas.length} conta(s) a pagar foram geradas por esta compra` +
+        (pagas.length ? `, sendo ${pagas.length} já paga(s) — as saídas no caixa serão estornadas` : ''));
+    }
+    if (movs.length) partes.push(`${movs.length} entrada(s) de estoque serão desfeitas`);
+    return send(res, 409, {
+      error: partes.join('. ') + '. Tudo isso é excluído junto. Confirma?',
+      precisaConfirmar: true, contas: contas.length, pagas: pagas.length, movimentacoes: movs.length
+    });
+  }
+
+  for (const c of caixa) db.remove('cashflow', c.id);
+  for (const p of contas) db.remove('payables', p.id);
+  /* O estoque volta pela diferença, com a movimentação de estorno registrada
+     — o histórico precisa mostrar que a entrada foi desfeita, não sumir. */
+  for (const m of movs) {
+    const item = db.get('stockItems', m.itemId);
+    if (item) db.update('stockItems', item.id, { qtd: (Number(item.qtd) || 0) - (Math.abs(Number(m.qtd)) || 0) });
+    db.update('stockMoves', m.id, {
+      estornada: true, motivoEstorno: 'Compra excluída',
+      estornadaPor: user.name, estornadaEm: new Date().toISOString()
+    });
+  }
+  db.remove('purchases', compra.id);
+  audit(user, 'excluiu', 'purchases', Number(params.id),
+    `Compra ${compra.documentoNumero || '#' + compra.id} de ${brl(compra.valor)} excluída` +
+    (contas.length ? `; ${contas.length} conta(s) a pagar removida(s)` : '') +
+    (caixa.length ? `; ${caixa.length} saída(s) de caixa estornada(s)` : '') +
+    (movs.length ? `; ${movs.length} entrada(s) de estoque desfeita(s)` : ''));
+  ok(res, { ok: true, contas: contas.length, movimentacoes: movs.length, caixa: caixa.length });
+});
+
 /* ================= Créditos de clientes =================
    Saldo que a empresa deve ao cliente e que ele abate numa compra futura.
    Nasce principalmente de cliente que também é lojista/fornecedor: a empresa
@@ -3681,6 +3772,73 @@ route('PUT', '/api/payables/:id', 'payables_edit', async (req, res, user, params
   ok(res, Object.assign({}, rec, { caixaAjustado, mudancas }));
 });
 
+/**
+ * Excluir conta a pagar — o caso é a conta lançada errada ou em duplicidade.
+ *
+ * Antes de apagar, confere o que está pendurado nela e responde 409 pedindo
+ * confirmação em vez de agir por conta própria. O que precisa ser desfeito
+ * junto é desfeito aqui mesmo: a saída no fluxo de caixa some com a conta,
+ * senão o dinheiro continuaria contado. Apagar uma duplicada não encosta na
+ * conta correta — cada registro é independente, e é justamente por isso que
+ * a exclusão é por id, nunca por descrição ou valor.
+ */
+route('DELETE', '/api/payables/:id', 'payables_edit', async (req, res, user, params) => {
+  const p = db.get('payables', params.id);
+  if (!p) return notFound(res);
+  const confirmado = String(req.headers['x-confirmar'] || '').toLowerCase() === 'sim';
+  const caixa = db.all('cashflow').filter(c => c.refType === 'payables' && c.refId === p.id);
+  const paga = p.status === 'pago' || caixa.length > 0;
+
+  /* Parcela de compra: apagar só ela deixa a compra com o parcelamento
+     incompleto. É legítimo (foi lançada a mais), mas a pessoa precisa saber. */
+  const compra = p.refType === 'purchases' && p.refId ? db.get('purchases', p.refId) : null;
+
+  if ((paga || compra) && !confirmado) {
+    const partes = [];
+    if (paga) {
+      partes.push(`Esta conta consta como paga (${brl(p.valor)}` +
+        (p.dataPagamento ? ` em ${dataBR(p.dataPagamento)}` : '') + ')' +
+        (caixa.length ? ` e tem ${caixa.length} saída(s) no fluxo de caixa, que serão estornadas` : ''));
+    }
+    if (compra) {
+      const irmas = db.all('payables').filter(x =>
+        x.refType === 'purchases' && x.refId === compra.id && x.id !== p.id).length;
+      partes.push(`É uma parcela da compra ${compra.documentoNumero || '#' + compra.id}` +
+        (irmas ? `, que tem outras ${irmas} parcela(s) — elas continuam como estão` : ''));
+    }
+    return send(res, 409, {
+      error: partes.join('. ') + '. Confirma a exclusão?',
+      precisaConfirmar: true, saidasCaixa: caixa.length
+    });
+  }
+
+  for (const c of caixa) db.remove('cashflow', c.id);
+  db.remove('payables', p.id);
+  audit(user, 'excluiu', 'payables', Number(params.id),
+    `${p.descricao || 'Conta'} — ${brl(p.valor)} (venc. ${dataBR(p.vencimento)}) excluída` +
+    (caixa.length ? `; ${caixa.length} saída(s) de caixa estornada(s)` : '') +
+    (compra ? `; era parcela da compra ${compra.documentoNumero || '#' + compra.id}` : ''));
+  ok(res, { ok: true, estornadas: caixa.length });
+});
+
+/**
+ * Desfazer o pagamento de uma conta: ela volta para a agenda e a saída sai
+ * do caixa. É o caminho para corrigir "paguei e não era essa" sem precisar
+ * apagar a conta inteira e recadastrar.
+ */
+route('POST', '/api/payables/:id/unpay', 'payables', async (req, res, user, params) => {
+  const p = db.get('payables', params.id);
+  if (!p) return notFound(res);
+  if (p.status !== 'pago') return bad(res, 'Esta conta não está paga.');
+  const caixa = db.all('cashflow').filter(c => c.refType === 'payables' && c.refId === p.id);
+  for (const c of caixa) db.remove('cashflow', c.id);
+  db.update('payables', p.id, { status: 'aberto', dataPagamento: null });
+  audit(user, 'estornou', 'payables', p.id,
+    `Pagamento de ${p.descricao} (${brl(p.valor)}) desfeito; ` +
+    `${caixa.length} saída(s) retirada(s) do caixa`);
+  ok(res, { ok: true, estornadas: caixa.length });
+});
+
 route('POST', '/api/payables/:id/pay', 'payables', async (req, res, user, params) => {
   const b = await readBody(req);
   const p = db.get('payables', params.id);
@@ -3793,8 +3951,8 @@ route('DELETE', '/api/receivables/:id', 'receivables', async (req, res, user, pa
 
   if (recebida && String((req.headers['x-confirmar'] || '')).toLowerCase() !== 'sim') {
     return send(res, 409, {
-      error: `Esta parcela já tem recebimento registrado (R$ ${Number(r.valor).toFixed(2)}` +
-             (r.dataRecebimento ? ` em ${r.dataRecebimento}` : '') +
+      error: `Esta parcela já tem recebimento registrado (${brl(r.valor)}` +
+             (r.dataRecebimento ? ` em ${dataBR(r.dataRecebimento)}` : '') +
              `). Excluir vai retirar também ${caixa.length} entrada(s) do caixa. Confirma?`,
       precisaConfirmar: true, entradasCaixa: caixa.length
     });
@@ -4297,7 +4455,10 @@ async function handleRest(req, res, user, collection, id) {
     if (!rec) return notFound(res);
     // Entidades com efeitos financeiros/históricos não são apagadas, apenas canceladas.
     // (sales, serviceOrders e receivables têm rota própria de exclusão, com estorno.)
-    if (['quotes', 'cashflow', 'payables', 'supplierInvoices'].includes(collection)) {
+    /* payables, cashflow e purchases têm rota própria de exclusão, que
+       desfaz junto o que o lançamento gerou (caixa, parcelas, estoque).
+       Chegar aqui significaria apagar sem esse acerto. */
+    if (['quotes', 'supplierInvoices'].includes(collection)) {
       return bad(res, 'Este registro não pode ser excluído — use cancelamento/estorno para manter a rastreabilidade');
     }
     /* Cadastro em uso não some: apagá-lo deixaria vendas, compras e

@@ -187,7 +187,14 @@ const App = {
     });
     if (res.status === 401) { this.logout(false); throw new Error('Sessão expirada'); }
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || 'Erro na requisição');
+    if (!res.ok) {
+      /* O corpo vai junto do erro: é nele que o servidor manda o que ainda
+         precisa de confirmação (409) e o que será estornado se prosseguir. */
+      const err = new Error(data.error || 'Erro na requisição');
+      err.status = res.status;
+      err.dados = data;
+      throw err;
+    }
     return data;
   },
   get(p) { return this.api('GET', p); },
@@ -200,6 +207,40 @@ const App = {
     // quem vê contas a pagar ou a receber).
     if (Array.isArray(perm)) return perm.some(p => this.can(p));
     return this.permissions.includes(perm) || this.permissions.includes('admin');
+  },
+
+  /**
+   * Excluir um lançamento financeiro, em dois passos.
+   *
+   * O primeiro é sempre a mesma pergunta simples. Se o servidor responder que
+   * há coisa pendurada — a conta está paga, é parcela de uma compra, tem
+   * entrada no caixa — ele devolve 409 explicando o que será desfeito junto,
+   * e só então a pessoa confirma de novo, ciente do estrago. Assim ninguém
+   * apaga um pagamento achando que apaga só uma linha.
+   *
+   * rota: '/payables/12' · o que: 'esta conta' · aoConcluir: recarrega a tela
+   */
+  async excluirLancamento(rota, oQue, { aoConcluir, nome } = {}) {
+    const alvo = nome ? `<b>${this.esc(nome)}</b>` : oQue;
+    if (!await this.confirm(`Tem certeza que deseja excluir ${alvo}?`, { html: !!nome })) return false;
+    const concluir = (r) => {
+      this.toast('Excluído', 'ok');
+      if (aoConcluir) aoConcluir(r); else this.route();
+      return true;
+    };
+    try {
+      return concluir(await this.del(rota));
+    } catch (e) {
+      if (!(e.dados && e.dados.precisaConfirmar)) { this.toast(e.message, 'err'); return false; }
+      /* Sem <p> aqui: o confirm já embrulha a mensagem em um. */
+      if (!await this.confirm(
+        `${this.esc(e.message)}
+         <div class="small muted" style="margin-top:8px">Esta ação não pode ser desfeita.</div>`,
+        { html: true })) return false;
+      try {
+        return concluir(await this.del(rota, { 'x-confirmar': 'sim' }));
+      } catch (e2) { this.toast(e2.message, 'err'); return false; }
+    }
   },
 
   /* ---------------- Busca ---------------- */

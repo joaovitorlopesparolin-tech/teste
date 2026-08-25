@@ -93,7 +93,9 @@ App.registerView('purchases', async (view) => {
       { h: 'Categoria', cell: p => `<span class="small">${App.esc(App.catCompraNome(p.categoria))}</span>` },
       { h: 'Vínculo', cell: p => `<span class="small muted">${App.esc(App.vincCompraNome((p.vinculo || {}).tipo))}${p.vinculo && p.vinculo.refNome ? ': ' + App.esc(p.vinculo.refNome) : ''}</span>` },
       { h: 'Pagamento', cell: p => `<span class="small">${App.esc(agendNome(p.tipoPagamento))}${p.parcelas > 1 ? ` · ${p.parcelas}x` : ''}</span>` },
-    { h: '', class: 'num', cell: p => `<button class="btn sm ghost" onclick="Purch.edit(${p.id})">✏️ Editar</button>` }
+    { h: '', class: 'num', cell: p => `
+      <button class="btn sm ghost" onclick="Purch.edit(${p.id})" title="Editar esta compra">✏️ Editar</button>
+      <button class="btn sm ghost" onclick="Purch.excluir(${p.id})" title="Excluir esta compra">🗑️ Excluir</button>` }
   ];
 
   const renderCompras = () => {
@@ -122,6 +124,15 @@ App.registerView('purchases', async (view) => {
   renderCompras();
 
   window.Purch = {
+    /* Excluir compra leva junto as contas a pagar que ela gerou e desfaz a
+       entrada de estoque — senão sobraria obrigação de uma compra que não
+       existe mais, e peça contada que não entrou. O servidor lista o que
+       será desfeito e pede a segunda confirmação. */
+    excluir(id) {
+      const c = purchases.find(x => x.id === id);
+      App.excluirLancamento(`/purchases/${id}`, 'esta compra',
+        { nome: c ? `${c.documentoNumero || 'Compra #' + c.id} — R$ ${App.money(c.valor || 0)}` : null });
+    },
     create(prefill) { Purch.openForm(prefill || {}, null); },
     edit(id) {
       const c = purchases.find(x => x.id === id);
