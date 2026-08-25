@@ -202,6 +202,36 @@ const App = {
     return this.permissions.includes(perm) || this.permissions.includes('admin');
   },
 
+  /* ---------------- Busca ---------------- */
+  /**
+   * Texto pronto para comparar numa busca: sem acento, sem maiúscula e sem
+   * pontuação. É o que faz "jau", "JAÚ" e "Jaú" acharem a mesma coisa — e
+   * "12345678000199" achar um CNPJ gravado como "12.345.678/0001-99".
+   */
+  normaliza(s) {
+    return String(s == null ? '' : s)
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase().replace(/[.\-/()]/g, '').trim();
+  },
+
+  /**
+   * Filtra uma lista por um texto digitado, olhando os campos indicados.
+   * Cada palavra digitada precisa aparecer em algum deles, então "silva foz"
+   * acha "Preparações Silva" de "Foz do Iguaçu" em qualquer ordem.
+   * `campos` pode trazer nomes de campo ou funções que montam o texto.
+   */
+  filtraPor(lista, texto, campos) {
+    const termos = this.normaliza(texto).split(/\s+/).filter(Boolean);
+    if (!termos.length) return lista;
+    return lista.filter(item => {
+      const alvo = this.normaliza(campos
+        .map(c => (typeof c === 'function' ? c(item) : item[c]))
+        .filter(v => v !== null && v !== undefined && v !== '')
+        .join(' '));
+      return termos.every(t => alvo.includes(t));
+    });
+  },
+
   /* ---------------- Formatação ---------------- */
   money(v) {
     return (Number(v) || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -744,7 +774,7 @@ const App = {
     ['Oficina e materiais', [
       ['production', 'Produção', '⚙', 'production'],
       ['assets', 'Bens de clientes', '🔒', 'assets'],
-      ['stock', 'Estoque próprio', '▦', 'stock'],
+      ['stock', 'Estoque próprio', '▦', ['stock', 'stock_history']],
       ['products', 'Produtos e custos', '◈', 'products'],
       ['purchases', 'Compras', '📥', 'purchases'],
       ['suppliers', 'Fornecedores', '🏭', 'suppliers']

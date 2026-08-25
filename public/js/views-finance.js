@@ -22,6 +22,9 @@ App.registerView('payables', async (view) => {
 
   const openTotal = payables.filter(p => p.status !== 'pago').reduce((s, p) => s + p.valor, 0);
   const overdue = payables.filter(p => p.status === 'vencida');
+  /* Corrigir conta já lançada é função da Direção; quem não tem a permissão
+     continua vendo tudo e pagando normalmente. */
+  const podeEditar = App.can('payables_edit');
   const dow = d => ['dom', 'seg', 'ter', 'qua', 'qui', 'sex', 'sáb'][new Date(d + 'T12:00:00').getDay()];
 
   view.innerHTML = `
@@ -50,7 +53,8 @@ App.registerView('payables', async (view) => {
           { h: 'Documento', cell: p => App.esc(p.documento || '—') },
           { h: 'Valor', class: 'num', cell: p => App.moneyHtml(p.valor) },
           { h: 'Status', cell: p => App.badge(p.status) },
-          { h: '', class: 'num', cell: p => `<button class="btn sm primary" onclick="Pay.pay(${p.id})">✓ Pagar</button>` }
+          { h: '', class: 'num', cell: p => `<button class="btn sm primary" onclick="Pay.pay(${p.id})">✓ Pagar</button>
+            ${podeEditar ? `<button class="btn sm ghost" onclick="Pay.edit(${p.id})" title="Corrigir esta conta (Direção)">✎</button>` : ''}` }
         ])}
       </div>`).join('') : '<div class="card"><div class="empty">Nenhuma conta em aberto 🎉</div></div>'}
 
@@ -59,7 +63,9 @@ App.registerView('payables', async (view) => {
       { h: 'Conta', cell: p => App.esc(p.descricao) },
       { h: 'Pago em', cell: p => App.date(p.dataPagamento) },
       { h: 'Valor', class: 'num', cell: p => App.moneyHtml(p.valor) },
-      { h: 'Status', cell: p => App.badge('pago') }
+      { h: 'Status', cell: p => App.badge('pago') },
+      ...(podeEditar ? [{ h: '', class: 'num', cell: p => `
+        <button class="btn sm ghost" onclick="Pay.edit(${p.id})" title="Corrigir esta conta (Direção)">✎ Corrigir</button>` }] : [])
     ], { emptyMsg: 'Nenhum pagamento ainda' })}`;
 
   window.Pay = {
@@ -89,6 +95,42 @@ App.registerView('payables', async (view) => {
         if (d.tipoPagamento === 'programado') {
           App.toast(`Conta programada para ${App.date(r.dataProgramada)} (sexta-feira anterior ao vencimento)`, 'ok');
         } else App.toast('Conta registrada como pagamento imediato', 'ok');
+        App.route();
+      });
+    },
+    /* Correção de conta já lançada — só a Direção enxerga este botão, e o
+       servidor confere de novo. Conta paga tem a saída no caixa acertada
+       junto, para o valor não divergir entre os dois lugares. */
+    edit(id) {
+      const p = payables.find(x => x.id === id);
+      if (!p) return;
+      App.form(`Corrigir conta: ${p.descricao}`, [
+        { name: 'descricao', label: 'Descrição', value: p.descricao, required: true, full: true },
+        { name: 'categoria', label: 'Categoria', type: 'select', value: p.categoria,
+          options: CATS_PAG.map(([v, l]) => ({ value: v, label: l })) },
+        { name: 'fornecedorId', label: 'Fornecedor', type: 'select', value: p.fornecedorId || '',
+          options: [{ value: '', label: '—' }].concat(App.ativos(suppliers, p.fornecedorId)
+            .map(s => ({ value: s.id, label: s.nome + (s.ativo === false ? ' (inativo)' : '') }))) },
+        { name: 'valor', label: 'Valor (R$)', type: 'number', step: '0.01', value: p.valor, required: true },
+        { name: 'vencimento', label: 'Vencimento', type: 'date', value: p.vencimento, required: true },
+        { name: 'tipoPagamento', label: 'Tipo de pagamento', type: 'select', value: p.tipoPagamento || 'programado', full: true,
+          options: [
+            { value: 'programado', label: 'Programado — sexta-feira anterior ao vencimento' },
+            { value: 'imediato', label: 'Imediato — não espera sexta-feira' }] },
+        { name: 'dataProgramada', label: 'Agendamento (em branco = recalcula pela regra da sexta)', type: 'date', value: '' },
+        { name: 'forma', label: 'Forma de pagamento', value: p.forma || '' },
+        { name: 'recurringId', label: 'Conta recorrente', type: 'select', value: p.recurringId || '',
+          options: [{ value: '', label: '— não é recorrente —' }].concat(
+            recurring.filter(r => r.ativo).map(r => ({ value: r.id, label: r.nome }))) },
+        { name: 'documento', label: 'Boleto / documento', value: p.documento || '' },
+        { name: 'observacoes', label: 'Observações', type: 'textarea', value: p.observacoes || '', full: true }
+      ], async d => {
+        d.valor = Number(d.valor);
+        const r = await App.put('/payables/' + id, d);
+        App.closeModal();
+        App.toast(r.caixaAjustado
+          ? 'Conta corrigida — a saída no fluxo de caixa foi acertada junto'
+          : 'Conta corrigida', 'ok');
         App.route();
       });
     },
@@ -520,10 +562,25 @@ App.registerView('cashflow', async (view) => {
       <label class="btn" style="cursor:pointer">📥 Importar planilha de gastos (Excel)
         <input type="file" id="cf-import" accept=".xlsx" hidden></label>
       <span id="cf-import-prog" class="small muted"></span>
+      <input class="search" id="cf-busca" placeholder="🔎 Buscar por origem, descrição, categoria, conta ou documento…" style="max-width:340px">
       <div class="spacer"></div>
+      <span class="muted small" id="cf-contagem"></span>
       <button class="btn" onclick="CF.exportCsv()">⬇ Exportar CSV/Excel</button>
     </div>
-    ${App.table(flows.slice(0, 100), [
+    <div id="cf-tabela"></div>
+`;
+
+
+
+  /* Busca sem acento e por pedaço em todos os campos que descrevem o
+     lançamento — é como se acha "aquela saída da Sanepar de agosto". */
+  const renderCF = () => {
+    const list = App.filtraPor(flows, document.getElementById('cf-busca').value,
+      ['origem', 'descricao', 'categoria', 'conta', 'documento', 'data',
+        f => f.tipo === 'entrada' ? 'entrada' : 'saida']);
+    document.getElementById('cf-contagem').textContent =
+      `${list.length} lançamento(s)${list.length > 200 ? ' — mostrando os 200 mais recentes' : ''}`;
+    document.getElementById('cf-tabela').innerHTML = App.table(list.slice(0, 200), [
       { h: 'Data', cell: f => App.date(f.data) },
       { h: 'Tipo', cell: f => f.tipo === 'entrada' ? '<span class="badge ok">Entrada</span>' : '<span class="badge danger">Saída</span>' },
       { h: 'Origem', cell: f => `${App.esc(f.origem || f.descricao || '—')}<div class="small muted">${App.esc(f.descricao !== f.origem ? f.descricao || '' : '')}</div>` },
@@ -531,7 +588,10 @@ App.registerView('cashflow', async (view) => {
       { h: 'Conta', cell: f => App.esc(f.conta || '—') },
       { h: 'Documento', cell: f => App.esc(f.documento || '—') },
       { h: 'Valor', class: 'num', cell: f => `<b class="${f.tipo === 'entrada' ? 'pos' : 'neg'}">${f.tipo === 'entrada' ? '+' : '−'} R$ ${App.money(f.valor)}</b>` }
-    ], { emptyMsg: 'Nenhum lançamento — os módulos de vendas, contas e compras alimentam o caixa automaticamente' })}`;
+    ], { emptyMsg: 'Nenhum lançamento — os módulos de vendas, contas e compras alimentam o caixa automaticamente' });
+  };
+  renderCF();
+  document.getElementById('cf-busca').addEventListener('input', renderCF);
 
   document.getElementById('cf-import').addEventListener('change', async (e) => {
     const f = e.target.files[0];

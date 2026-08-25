@@ -179,12 +179,14 @@ App.registerView('quotes', async (view, args) => {
   view.innerHTML = `
     <div class="toolbar">
       <button class="btn primary" onclick="location.hash='#/quotes/novo'">+ Novo orçamento</button>
+      <input class="search" id="q-busca" placeholder="🔎 Buscar por número, cliente, modelo ou serviço…" style="max-width:320px">
       <select id="qf" style="max-width:200px">
         <option value="">Todos</option>
         <option value="aberto">Em aberto</option><option value="aprovado">Aprovados</option>
         <option value="recusado">Recusados</option><option value="cancelado">Cancelados</option>
       </select>
       <div class="spacer"></div>
+      <span class="muted small" id="q-contagem"></span>
       <button class="btn" onclick="Quotes.print()">🖨️ Imprimir lista</button>
     </div>
     <div id="q-table"></div>`;
@@ -196,7 +198,14 @@ App.registerView('quotes', async (view, args) => {
   };
   const render = () => {
     const f = document.getElementById('qf').value;
-    const list = quotes.filter(q => !f || q.status === f);
+    /* Busca sem acento e por pedaço: número do orçamento, nome do cliente,
+       modelo do cabeçote ou qualquer serviço da lista. */
+    const list = App.filtraPor(quotes.filter(q => !f || q.status === f),
+      document.getElementById('q-busca').value,
+      ['numero', 'modelo', 'identificacao', 'observacoes',
+        q => App.clientName(q.clienteId, clients),
+        q => (q.itens || []).map(i => i.nome).join(' ')]);
+    document.getElementById('q-contagem').textContent = `${list.length} orçamento(s)`;
     document.getElementById('q-table').innerHTML = App.table(list, [
       { h: 'Nº', cell: q => `<b>${q.numero}</b>` },
       { h: 'Cliente', cell: q => App.clientCell(q.clienteId, clients) },
@@ -220,6 +229,7 @@ App.registerView('quotes', async (view, args) => {
   };
   render();
   document.getElementById('qf').addEventListener('change', render);
+  document.getElementById('q-busca').addEventListener('input', render);
 
   window.Quotes = {
     wa(id) {

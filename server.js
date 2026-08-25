@@ -20,12 +20,15 @@ const xlsx = require('./lib/xlsx');
 const sync = require('./lib/sync');
 const contaazul = require('./lib/contaazul');
 const casync = require('./lib/casync');
-const { seedIfEmpty, hashPassword, checkPassword, isLegacyHash, MODULES } = require('./lib/seed');
+const { seedIfEmpty, hashPassword, checkPassword, isLegacyHash, MODULES,
+  sincronizarAcessoCompleto } = require('./lib/seed');
 
 const PORT = process.env.PORT || 3000;
 const PUBLIC_DIR = path.join(__dirname, 'public');
 
 seedIfEmpty();
+/* Funcionalidade nova entra sozinha em quem tem acesso completo. */
+sincronizarAcessoCompleto(db);
 
 /* ===================================================================== */
 /* Utilitários HTTP                                                      */
@@ -86,8 +89,17 @@ function permissionsOf(user) {
   const role = db.get('roles', user.roleId);
   return role ? role.permissions : [];
 }
+/**
+ * Uma lista de permissões significa "qualquer uma serve". É o que permite
+ * estrear uma permissão nova sem tirar acesso de quem já trabalhava: a
+ * Agenda financeira pede ['agenda', 'payables', 'receivables'], então quem
+ * só tinha 'payables' continua entrando, e a Direção pode passar a conceder
+ * 'agenda' sozinha para um perfil novo.
+ */
 function can(user, perm) {
-  return permissionsOf(user).includes(perm) || permissionsOf(user).includes('admin');
+  const perms = permissionsOf(user);
+  if (perms.includes('admin')) return true;           // acesso completo
+  return Array.isArray(perm) ? perm.some(p => perms.includes(p)) : perms.includes(perm);
 }
 
 function audit(user, action, entity, entityId, details) {
@@ -146,7 +158,8 @@ const REST = {
   serviceCatalog: { perm: 'quotes', writePerm: 'admin', label: 'Serviço do catálogo' },
   products: { perm: 'sales', writePerm: 'finance_sensitive', label: 'Produto' },
   stockItems: { perm: 'stock', label: 'Item de estoque' },
-  stockMoves: { perm: 'stock', label: 'Movimentação de estoque' },
+  stockMoves: { perm: ['stock_history', 'stock'], label: 'Movimentação de estoque',
+                editPerm: 'stock_history_edit' },
   suppliers: { perm: 'suppliers', label: 'Fornecedor' },
   supplierExpenses: { perm: 'suppliers', label: 'Despesa de fornecedor' },
   recurring: { perm: 'payables', label: 'Conta recorrente' },
@@ -160,11 +173,11 @@ const REST = {
   productionOrders: { perm: 'production', label: 'Ordem de produção' },
   sales: { perm: 'sales', label: 'Venda' },
   purchases: { perm: 'purchases', label: 'Compra' },
-  freights: { perm: 'payables', label: 'Frete' },
+  freights: { perm: ['freights', 'payables'], label: 'Frete' },
   supplierInvoices: { perm: 'suppliers', label: 'Fatura de fornecedor' },
-  payables: { perm: 'payables', label: 'Conta a pagar' },
+  payables: { perm: 'payables', label: 'Conta a pagar', editPerm: 'payables_edit' },
   receivables: { perm: 'receivables', label: 'Conta a receber' },
-  cashflow: { perm: 'cashflow', label: 'Lançamento de caixa' }
+  cashflow: { perm: 'cashflow', label: 'Lançamento de caixa', editPerm: 'cashflow_edit' }
 };
 
 /* ===================================================================== */
@@ -301,7 +314,8 @@ const VINCULOS = {
     ['sales', 'clienteId', 'venda(s)'], ['quotes', 'clienteId', 'orçamento(s)'],
     ['serviceOrders', 'clienteId', 'ordem(ns) de serviço'], ['headEntries', 'clienteId', 'entrada(s) de cabeçote'],
     ['assets', 'clienteId', 'bem(ns) guardado(s)'], ['receivables', 'clienteId', 'conta(s) a receber'],
-    ['freights', 'clienteId', 'frete(s)'], ['supplierExpenses', 'clienteId', 'gasto(s) de fornecedor']
+    ['freights', 'clienteId', 'frete(s)'], ['supplierExpenses', 'clienteId', 'gasto(s) de fornecedor'],
+    ['clientCredits', 'clienteId', 'crédito(s)']
   ],
   suppliers: [
     ['purchases', 'fornecedorId', 'compra(s)'], ['payables', 'fornecedorId', 'conta(s) a pagar'],
@@ -1555,9 +1569,12 @@ route('GET', '/api/clients/:id/profile', 'clients', async (req, res, user, param
   const emAberto = receb.filter(r => r.status === 'aberto').reduce((s, r) => s + r.valor, 0);
   const vencido = receb.filter(r => r.status === 'vencida').reduce((s, r) => s + r.valor, 0);
   const hist = db.all('audit').filter(a => a.action === 'timeline' && a.clientId === id).sort((a, b) => a.at < b.at ? 1 : -1);
+  /* Crédito fica fora de "em aberto": ali é o que o cliente deve à empresa,
+     e o crédito corre no sentido contrário. Vai como número próprio. */
+  const creditoDisponivel = saldoDeCreditos(id);
   ok(res, {
     cliente: c, compras, entradas, ordens: oss, orcamentos, recebiveis: receb,
-    financeiro: { totalComprado, totalPago, emAberto, vencido },
+    financeiro: { totalComprado, totalPago, emAberto, vencido, creditoDisponivel },
     historico: hist
   });
 });
@@ -2677,6 +2694,37 @@ route('DELETE', '/api/sales/:id', 'sales', async (req, res, user, params) => {
 
 /* Recebimento parcial: entrada + saldo na entrega, por exemplo.
    O saldo continua em contas a receber e na projeção. */
+/**
+ * Depois de abater qualquer coisa numa venda — dinheiro recebido ou crédito
+ * do cliente usado — Contas a receber precisa mostrar só o que ainda falta.
+ * Sem isto o mesmo valor apareceria duas vezes: a cobrança cheia e o saldo.
+ * Devolve o saldo que sobrou.
+ */
+function reequilibrarReceberDaVenda(sale, { data, forma, vencimentoSaldo }) {
+  const lista = sale.recebimentos || [];
+  for (const r of db.all('receivables').filter(r =>
+    r.refType === 'sales' && r.refId === sale.id && r.origem !== 'saldo' && r.status !== 'paga')) {
+    db.remove('receivables', r.id);
+  }
+  const novoSaldo = Math.round((sale.valorTotal - lista.reduce((s, r) => s + r.valor, 0)) * 100) / 100;
+  const saldoAberto = db.all('receivables').find(r =>
+    r.refType === 'sales' && r.refId === sale.id && r.origem === 'saldo' && r.status !== 'paga');
+  if (novoSaldo > 0.005) {
+    const dados = {
+      clienteId: sale.clienteId, origem: 'saldo', refType: 'sales', refId: sale.id,
+      descricao: `Pedido nº ${sale.numero} — saldo em aberto`,
+      forma: forma || 'pix', valor: novoSaldo,
+      vencimento: vencimentoSaldo || sale.previsaoEntrega || domain.addDays(data, 30),
+      status: 'aberto', parcela: 1, parcelas: 1
+    };
+    if (saldoAberto) db.update('receivables', saldoAberto.id, { valor: novoSaldo, vencimento: dados.vencimento });
+    else db.insert('receivables', dados);
+  } else if (saldoAberto) {
+    db.update('receivables', saldoAberto.id, { status: 'paga', dataRecebimento: data });
+  }
+  return novoSaldo;
+}
+
 route('POST', '/api/sales/:id/receive', 'receivables', async (req, res, user, params) => {
   const b = await readBody(req);
   const sale = db.get('sales', params.id);
@@ -2698,30 +2746,8 @@ route('POST', '/api/sales/:id/receive', 'receivables', async (req, res, user, pa
     documento: '', refType: 'sales', refId: sale.id, descricao: `Recebimento (${rec.forma})`
   });
 
-  // A cobrança cheia da venda dá lugar ao saldo — senão o mesmo dinheiro
-  // apareceria duas vezes em Contas a receber (o total E o que falta).
-  for (const r of db.all('receivables').filter(r =>
-    r.refType === 'sales' && r.refId === sale.id && r.origem !== 'saldo' && r.status !== 'paga')) {
-    db.remove('receivables', r.id);
-  }
-
-  // O que ainda falta vira/atualiza a conta a receber do saldo.
-  const novoSaldo = Math.round((sale.valorTotal - lista.reduce((s, r) => s + r.valor, 0)) * 100) / 100;
-  const saldoAberto = db.all('receivables').find(r =>
-    r.refType === 'sales' && r.refId === sale.id && r.origem === 'saldo' && r.status !== 'paga');
-  if (novoSaldo > 0.005) {
-    const dados = {
-      clienteId: sale.clienteId, origem: 'saldo', refType: 'sales', refId: sale.id,
-      descricao: `Pedido nº ${sale.numero} — saldo em aberto`,
-      forma: b.forma || 'pix', valor: novoSaldo,
-      vencimento: b.vencimentoSaldo || sale.previsaoEntrega || domain.addDays(data, 30),
-      status: 'aberto', parcela: 1, parcelas: 1
-    };
-    if (saldoAberto) db.update('receivables', saldoAberto.id, { valor: novoSaldo, vencimento: dados.vencimento });
-    else db.insert('receivables', dados);
-  } else if (saldoAberto) {
-    db.update('receivables', saldoAberto.id, { status: 'paga', dataRecebimento: data });
-  }
+  const novoSaldo = reequilibrarReceberDaVenda(sale,
+    { data, forma: b.forma, vencimentoSaldo: b.vencimentoSaldo });
 
   audit(user, 'recebeu', 'sales', sale.id,
     `Pedido nº ${sale.numero} — recebido R$ ${valor.toFixed(2)} (${rec.forma}); saldo R$ ${novoSaldo.toFixed(2)}`);
@@ -2836,6 +2862,105 @@ route('POST', '/api/stock/:id/move', 'stock', async (req, res, user, params) => 
   const item = moveStock(Number(params.id), b.tipo === 'entrada' ? 'entrada' : 'saida', Math.abs(Number(b.qtd) || 0), 'manual', null, b.obs, user);
   if (!item) return notFound(res);
   ok(res, item);
+});
+
+/* ================= Correção do histórico de estoque (Direção) =================
+   Lançamento retroativo é o caso que motiva isto: uma venda antiga é
+   cadastrada hoje só para o histórico financeiro fechar, mas a peça já saiu
+   fisicamente há semanas. O sistema, que não tem como saber disso, dá a
+   baixa de novo — e o saldo passa a acusar uma unidade a menos do que existe
+   na prateleira.
+
+   Aqui a Direção acerta a movimentação. O saldo do item NUNCA é digitado: ele
+   é recalculado a partir da diferença entre o que a movimentação dizia e o
+   que passa a dizer, para a correção não virar uma segunda baixa. Toda
+   alteração exige motivo e fica na auditoria. */
+
+/** Quanto esta movimentação soma (+) ou tira (−) do saldo do item. */
+const efeitoDaMovimentacao = (m) =>
+  (m.estornada ? 0 : (m.tipo === 'entrada' ? 1 : -1) * (Math.abs(Number(m.qtd)) || 0));
+
+route('GET', '/api/stock/history', ['stock_history', 'stock'], async (req, res, user, params, query) => {
+  let list = db.all('stockMoves').slice().reverse();
+  if (query.itemId) list = list.filter(m => Number(m.itemId) === Number(query.itemId));
+  const itens = db.all('stockItems');
+  ok(res, list.slice(0, Number(query.limit) || 400).map(m => Object.assign({}, m, {
+    itemNome: m.itemNome || (itens.find(i => i.id === m.itemId) || {}).nome || '—',
+    efeito: efeitoDaMovimentacao(m)
+  })));
+});
+
+route('PUT', '/api/stock/history/:id', 'stock_history_edit', async (req, res, user, params) => {
+  const b = await readBody(req);
+  const mov = db.get('stockMoves', params.id);
+  if (!mov) return notFound(res);
+  if (!b.motivo) return bad(res, 'Explique o motivo da correção — ele fica registrado na auditoria.');
+  if (mov.estornada) return bad(res, 'Esta movimentação está estornada. Reative-a antes de corrigir os dados.');
+
+  const tipo = b.tipo === 'entrada' ? 'entrada' : (b.tipo === 'saida' ? 'saida' : mov.tipo);
+  const qtd = b.qtd === undefined || b.qtd === null || b.qtd === '' ? Math.abs(Number(mov.qtd) || 0) : Math.abs(Number(b.qtd) || 0);
+  if (qtd <= 0) return bad(res, 'A quantidade precisa ser maior que zero.');
+
+  const item = db.get('stockItems', mov.itemId);
+  if (!item) return bad(res, 'O item desta movimentação não existe mais.');
+
+  const antes = efeitoDaMovimentacao(mov);
+  const depois = efeitoDaMovimentacao({ tipo, qtd });
+  const patch = {
+    tipo, qtd,
+    data: b.data || mov.data,
+    refType: b.refType === undefined ? mov.refType : (b.refType || null),
+    refId: b.refId === undefined ? mov.refId : (b.refId ? Number(b.refId) : null),
+    obs: b.obs === undefined ? mov.obs : b.obs,
+    corrigidaPor: user.name, corrigidaEm: new Date().toISOString(), motivoCorrecao: b.motivo
+  };
+  const rec = db.update('stockMoves', mov.id, patch);
+
+  /* Só a diferença mexe no saldo: trocar uma saída de 3 por uma de 1 devolve
+     2 ao estoque, não lança uma entrada de 1.
+     O saldo novo é calculado UMA vez e reaproveitado: db.get devolve o
+     próprio registro, então reler item.qtd depois do update somaria de novo. */
+  const ajuste = depois - antes;
+  const saldoItem = Math.round(((Number(item.qtd) || 0) + ajuste) * 100) / 100;
+  if (ajuste) db.update('stockItems', item.id, { qtd: saldoItem });
+
+  audit(user, 'corrigiu', 'stockMoves', rec.id,
+    `Movimentação #${rec.id} de ${item.nome}: ${mov.tipo} ${mov.qtd} → ${tipo} ${qtd}` +
+    (patch.data !== mov.data ? `, data ${mov.data} → ${patch.data}` : '') +
+    `; saldo do item ${ajuste >= 0 ? '+' : ''}${ajuste} (agora ${saldoItem}). Motivo: ${b.motivo}`);
+  ok(res, { movimentacao: rec, ajusteNoSaldo: ajuste, saldoItem });
+});
+
+/**
+ * Estorna (ou reativa) uma movimentação indevida. Ela continua no histórico,
+ * marcada — apagar a linha esconderia que o acerto aconteceu, que é
+ * justamente o que a Direção precisa conseguir provar depois.
+ */
+route('POST', '/api/stock/history/:id/estornar', 'stock_history_edit', async (req, res, user, params) => {
+  const b = await readBody(req);
+  const mov = db.get('stockMoves', params.id);
+  if (!mov) return notFound(res);
+  if (!b.motivo) return bad(res, 'Explique o motivo — ele fica registrado na auditoria.');
+  const item = db.get('stockItems', mov.itemId);
+  if (!item) return bad(res, 'O item desta movimentação não existe mais.');
+
+  const reativar = !!mov.estornada;
+  const antes = efeitoDaMovimentacao(mov);
+  const depois = efeitoDaMovimentacao(Object.assign({}, mov, { estornada: !reativar }));
+  const ajuste = depois - antes;
+
+  db.update('stockMoves', mov.id, {
+    estornada: !reativar,
+    motivoEstorno: b.motivo,
+    estornadaPor: user.name, estornadaEm: new Date().toISOString()
+  });
+  const saldoItem = Math.round(((Number(item.qtd) || 0) + ajuste) * 100) / 100;
+  if (ajuste) db.update('stockItems', item.id, { qtd: saldoItem });
+
+  audit(user, reativar ? 'reativou' : 'estornou', 'stockMoves', mov.id,
+    `Movimentação #${mov.id} de ${item.nome} (${mov.tipo} ${mov.qtd}) ${reativar ? 'reativada' : 'estornada'}; ` +
+    `saldo do item ${ajuste >= 0 ? '+' : ''}${ajuste} (agora ${saldoItem}). Motivo: ${b.motivo}`);
+  ok(res, { estornada: !reativar, ajusteNoSaldo: ajuste, saldoItem });
 });
 
 /* ---- compras ---- */
@@ -3087,11 +3212,246 @@ route('PUT', '/api/purchases/:id', 'purchases', async (req, res, user, params) =
   ok(res, rec);
 });
 
+/* ================= Créditos de clientes =================
+   Saldo que a empresa deve ao cliente e que ele abate numa compra futura.
+   Nasce principalmente de cliente que também é lojista/fornecedor: a empresa
+   compra dele e, em vez de pagar, o valor fica combinado como crédito.
+
+   NÃO é conta a receber — ali o cliente deve à empresa, aqui é o contrário.
+   Por isso o crédito não entra em Contas a receber nem na projeção de
+   entradas; ele só reduz o que o cliente tem a pagar quando é usado.
+
+   Cada registro é uma origem de crédito com seus usos dentro; o saldo é
+   sempre valor − usos, nunca um número guardado que pode divergir. */
+
+const creditoSaldo = (c) => Math.round(
+  ((Number(c.valor) || 0) - (c.usos || []).reduce((s, u) => s + (Number(u.valor) || 0), 0)) * 100) / 100;
+
+function creditoComSaldo(c) {
+  const usado = Math.round((c.usos || []).reduce((s, u) => s + (Number(u.valor) || 0), 0) * 100) / 100;
+  return Object.assign({}, c, { usado, saldo: creditoSaldo(c) });
+}
+
+/** Saldo de crédito disponível de um cliente (só o que não foi cancelado). */
+function saldoDeCreditos(clienteId) {
+  return Math.round(db.all('clientCredits')
+    .filter(c => c.clienteId === Number(clienteId) && c.status !== 'cancelado')
+    .reduce((s, c) => s + creditoSaldo(c), 0) * 100) / 100;
+}
+
+/** Texto curto do documento ligado ao crédito ou ao uso, para as telas. */
+function refDoCredito(refType, refId) {
+  if (!refType || !refId) return '';
+  if (refType === 'sales') {
+    const v = db.get('sales', refId);
+    return v ? `Pedido nº ${v.numero}` : `Pedido #${refId}`;
+  }
+  if (refType === 'purchases') {
+    const c = db.get('purchases', refId);
+    return c ? `Compra ${c.documento || '#' + c.id}` : `Compra #${refId}`;
+  }
+  if (refType === 'serviceOrders') {
+    const o = db.get('serviceOrders', refId);
+    return o ? `OS nº ${o.numero}` : `OS #${refId}`;
+  }
+  return `${refType} #${refId}`;
+}
+
+route('GET', '/api/credits', ['credits', 'clients'], async (req, res, user, params, query) => {
+  let list = db.all('clientCredits');
+  if (query.clienteId) list = list.filter(c => c.clienteId === Number(query.clienteId));
+  ok(res, list.map(c => Object.assign(creditoComSaldo(c), {
+    refLabel: refDoCredito(c.refType, c.refId),
+    usos: (c.usos || []).map(u => Object.assign({}, u, { refLabel: refDoCredito(u.refType, u.refId) }))
+  })).sort((a, b) => (b.data || '').localeCompare(a.data || '') || b.id - a.id));
+});
+
+/** Aba de créditos do cliente: saldo, cada crédito e a linha do tempo. */
+route('GET', '/api/clients/:id/credits', ['credits', 'clients'], async (req, res, user, params) => {
+  const cliente = db.get('clients', params.id);
+  if (!cliente) return notFound(res);
+  const creditos = db.all('clientCredits').filter(c => c.clienteId === cliente.id)
+    .map(c => Object.assign(creditoComSaldo(c), { refLabel: refDoCredito(c.refType, c.refId) }));
+
+  /* Uma linha só por acontecimento — gerou, usou, cancelou — que é como a
+     pessoa confere o extrato do cliente. */
+  const movimentos = [];
+  for (const c of creditos) {
+    movimentos.push({
+      tipo: 'geracao', creditoId: c.id, data: c.data, valor: c.valor,
+      origem: c.origemLabel || c.origem, descricao: c.descricao || '',
+      refLabel: c.refLabel, observacoes: c.observacoes || '', por: c.por || ''
+    });
+    for (const u of (c.usos || [])) {
+      movimentos.push({
+        tipo: 'uso', creditoId: c.id, data: u.data, valor: -Math.abs(Number(u.valor) || 0),
+        origem: 'Uso do crédito', descricao: u.descricao || '',
+        refLabel: refDoCredito(u.refType, u.refId), observacoes: u.obs || '', por: u.por || ''
+      });
+    }
+    if (c.status === 'cancelado') {
+      movimentos.push({
+        tipo: 'cancelamento', creditoId: c.id, data: c.canceladoEm || c.data, valor: 0,
+        origem: 'Crédito cancelado', descricao: c.motivoCancelamento || '',
+        refLabel: '', observacoes: '', por: c.canceladoPor || ''
+      });
+    }
+  }
+  movimentos.sort((a, b) => (b.data || '').localeCompare(a.data || ''));
+
+  ok(res, {
+    clienteId: cliente.id, clienteNome: cliente.nome,
+    saldo: saldoDeCreditos(cliente.id),
+    gerado: Math.round(creditos.filter(c => c.status !== 'cancelado')
+      .reduce((s, c) => s + (Number(c.valor) || 0), 0) * 100) / 100,
+    usado: Math.round(creditos.reduce((s, c) => s + c.usado, 0) * 100) / 100,
+    creditos: creditos.sort((a, b) => (b.data || '').localeCompare(a.data || '') || b.id - a.id),
+    movimentos
+  });
+});
+
+const ORIGENS_CREDITO = [
+  ['compra', 'Compra feita com o cliente (lojista/fornecedor)'],
+  ['devolucao', 'Devolução de peça ou serviço'],
+  ['acordo', 'Acordo comercial'],
+  ['pagamento_maior', 'Pagamento a maior do cliente'],
+  ['outro', 'Outro']
+];
+
+route('POST', '/api/credits', 'credits_manage', async (req, res, user) => {
+  const b = await readBody(req);
+  const cliente = db.get('clients', b.clienteId);
+  if (!cliente) return bad(res, 'Escolha o cliente do crédito.');
+  const valor = Math.round((Number(b.valor) || 0) * 100) / 100;
+  if (valor <= 0) return bad(res, 'O valor do crédito precisa ser maior que zero.');
+  const origem = (ORIGENS_CREDITO.find(o => o[0] === b.origem) || ORIGENS_CREDITO[0])[0];
+  const rec = db.insert('clientCredits', {
+    clienteId: cliente.id, valor,
+    origem, origemLabel: (ORIGENS_CREDITO.find(o => o[0] === origem) || [])[1] || origem,
+    descricao: b.descricao || '',
+    data: b.data || domain.today(),
+    refType: b.refType || null, refId: b.refId ? Number(b.refId) : null,
+    observacoes: b.observacoes || '',
+    status: 'aberto', usos: [],
+    por: user.name
+  });
+  audit(user, 'criou', 'clientCredits', rec.id,
+    `Crédito de R$ ${valor.toFixed(2)} para ${cliente.nome} — ${rec.origemLabel}`);
+  ok(res, creditoComSaldo(rec));
+});
+
+/**
+ * Usa parte (ou todo) do crédito. Apontado a uma venda, o valor entra como
+ * um abatimento dela e Contas a receber passa a cobrar só o que falta.
+ *
+ * De propósito não mexe no fluxo de caixa: nenhum dinheiro entrou. O crédito
+ * já existia como obrigação da empresa e agora encontrou a dívida do cliente
+ * — lançar entrada aqui inflaria o caixa com dinheiro que não circulou.
+ */
+route('POST', '/api/credits/:id/usar', 'credits_manage', async (req, res, user, params) => {
+  const b = await readBody(req);
+  const c = db.get('clientCredits', params.id);
+  if (!c) return notFound(res);
+  if (c.status === 'cancelado') return bad(res, 'Este crédito foi cancelado.');
+  const valor = Math.round((Number(b.valor) || 0) * 100) / 100;
+  if (valor <= 0) return bad(res, 'Informe o valor a usar.');
+  const saldo = creditoSaldo(c);
+  if (valor > saldo + 0.005) {
+    return bad(res, `O saldo deste crédito é R$ ${saldo.toFixed(2)} — não dá para usar R$ ${valor.toFixed(2)}.`);
+  }
+
+  const data = b.data || domain.today();
+  let sale = null;
+  if (b.refType === 'sales' && b.refId) {
+    sale = db.get('sales', Number(b.refId));
+    if (!sale) return bad(res, 'Pedido não encontrado.');
+    if (sale.clienteId !== c.clienteId) return bad(res, 'O pedido é de outro cliente.');
+    const jaAbatido = (sale.recebimentos || []).reduce((s, r) => s + r.valor, 0);
+    const emAberto = Math.round((sale.valorTotal - jaAbatido) * 100) / 100;
+    if (valor > emAberto + 0.005) {
+      return bad(res, `O pedido tem R$ ${emAberto.toFixed(2)} em aberto — não dá para abater R$ ${valor.toFixed(2)}.`);
+    }
+  }
+
+  const uso = {
+    valor, data, refType: b.refType || null, refId: b.refId ? Number(b.refId) : null,
+    descricao: b.descricao || (sale ? `Abatido no pedido nº ${sale.numero}` : 'Uso do crédito'),
+    obs: b.obs || '', por: user.name, em: new Date().toISOString()
+  };
+  const usos = (c.usos || []).concat([uso]);
+  const restante = Math.round((c.valor - usos.reduce((s, u) => s + u.valor, 0)) * 100) / 100;
+  db.update('clientCredits', c.id, { usos, status: restante <= 0.005 ? 'usado' : 'aberto' });
+
+  if (sale) {
+    const lista = (sale.recebimentos || []).concat([
+      { valor, data, forma: 'credito', obs: `Crédito #${c.id}${uso.obs ? ' — ' + uso.obs : ''}` }]);
+    db.update('sales', sale.id, { recebimentos: lista });
+    reequilibrarReceberDaVenda(Object.assign({}, sale, { recebimentos: lista }),
+      { data, forma: 'credito', vencimentoSaldo: b.vencimentoSaldo });
+    audit(user, 'abateu', 'sales', sale.id,
+      `Pedido nº ${sale.numero} — R$ ${valor.toFixed(2)} abatidos do crédito #${c.id}`);
+  }
+  audit(user, 'usou', 'clientCredits', c.id,
+    `R$ ${valor.toFixed(2)} usados${sale ? ` no pedido nº ${sale.numero}` : ''}; ` +
+    `saldo do crédito R$ ${restante.toFixed(2)}`);
+  ok(res, { credito: creditoComSaldo(db.get('clientCredits', c.id)), saldoCliente: saldoDeCreditos(c.clienteId) });
+});
+
+/** Desfaz um uso — o valor volta para o saldo e o abatimento sai da venda. */
+route('POST', '/api/credits/:id/estornar-uso', 'credits_manage', async (req, res, user, params) => {
+  const b = await readBody(req);
+  const c = db.get('clientCredits', params.id);
+  if (!c) return notFound(res);
+  const idx = Number(b.index);
+  const usos = (c.usos || []).slice();
+  if (!usos[idx]) return bad(res, 'Uso não encontrado.');
+  const [removido] = usos.splice(idx, 1);
+  db.update('clientCredits', c.id, { usos, status: 'aberto' });
+
+  if (removido.refType === 'sales' && removido.refId) {
+    const sale = db.get('sales', removido.refId);
+    if (sale) {
+      /* Tira exatamente o abatimento deste crédito, não um recebimento
+         qualquer de mesmo valor que possa existir na venda. */
+      const lista = (sale.recebimentos || []).slice();
+      const alvo = lista.findIndex(r => r.forma === 'credito' && r.valor === removido.valor &&
+        r.data === removido.data && String(r.obs || '').includes(`Crédito #${c.id}`));
+      if (alvo >= 0) {
+        lista.splice(alvo, 1);
+        db.update('sales', sale.id, { recebimentos: lista });
+        reequilibrarReceberDaVenda(Object.assign({}, sale, { recebimentos: lista }),
+          { data: removido.data, forma: 'credito' });
+      }
+    }
+  }
+  audit(user, 'estornou', 'clientCredits', c.id,
+    `Uso de R$ ${Number(removido.valor).toFixed(2)} estornado — motivo: ${b.motivo || 'não informado'}`);
+  ok(res, { credito: creditoComSaldo(db.get('clientCredits', c.id)), saldoCliente: saldoDeCreditos(c.clienteId) });
+});
+
+/** Cancela o crédito inteiro. Só enquanto nada dele foi usado. */
+route('POST', '/api/credits/:id/cancelar', 'credits_manage', async (req, res, user, params) => {
+  const b = await readBody(req);
+  const c = db.get('clientCredits', params.id);
+  if (!c) return notFound(res);
+  if ((c.usos || []).length) {
+    return bad(res, 'Este crédito já foi usado. Estorne os usos antes de cancelá-lo.');
+  }
+  if (!b.motivo) return bad(res, 'Explique o motivo do cancelamento — ele fica registrado.');
+  db.update('clientCredits', c.id, {
+    status: 'cancelado', motivoCancelamento: b.motivo,
+    canceladoPor: user.name, canceladoEm: domain.today()
+  });
+  audit(user, 'cancelou', 'clientCredits', c.id,
+    `Crédito de R$ ${Number(c.valor).toFixed(2)} cancelado — motivo: ${b.motivo}`);
+  ok(res, { ok: true, saldoCliente: saldoDeCreditos(c.clienteId) });
+});
+
 /* ================= Fretes pagos pela empresa =================
    Custo de logística das vendas em que a empresa banca o envio.
    Vinculado à venda, entra no lucro real dela (venda − taxa − custo −
    frete) e na DRE como "Frete de venda / Logística". */
-route('POST', '/api/freights', 'payables', async (req, res, user) => {
+route('POST', '/api/freights', ['freights', 'payables'], async (req, res, user) => {
   const b = await readBody(req);
   const sale = b.saleId ? db.get('sales', b.saleId) : null;
   const cliente = b.clienteId ? db.get('clients', b.clienteId) : (sale ? db.get('clients', sale.clienteId) : null);
@@ -3128,7 +3488,7 @@ route('POST', '/api/freights', 'payables', async (req, res, user) => {
   ok(res, db.get('freights', rec.id));
 });
 
-route('POST', '/api/freights/:id/pay', 'payables', async (req, res, user, params) => {
+route('POST', '/api/freights/:id/pay', ['freights', 'payables'], async (req, res, user, params) => {
   const b = await readBody(req);
   const f = db.get('freights', params.id);
   if (!f) return notFound(res);
@@ -3148,7 +3508,7 @@ route('POST', '/api/freights/:id/pay', 'payables', async (req, res, user, params
 });
 
 /* Desfaz o pagamento: estorna a saída de caixa e volta para aberto. */
-route('POST', '/api/freights/:id/unpay', 'payables', async (req, res, user, params) => {
+route('POST', '/api/freights/:id/unpay', ['freights', 'payables'], async (req, res, user, params) => {
   const f = db.get('freights', params.id);
   if (!f) return notFound(res);
   if (f.status !== 'pago') return bad(res, 'Este frete não está pago.');
@@ -3248,6 +3608,77 @@ route('POST', '/api/payables', 'payables', async (req, res, user) => {
     });
   }
   ok(res, rec);
+});
+
+/**
+ * Corrigir uma conta a pagar já lançada — função da Direção.
+ *
+ * O cuidado principal é não duplicar dinheiro: se a conta já foi paga, existe
+ * uma saída no fluxo de caixa amarrada a ela. Aqui essa saída é ACERTADA no
+ * lugar, nunca criada de novo — trocar o valor da conta e deixar o caixa com
+ * o valor antigo é o tipo de divergência que só aparece no fechamento do mês.
+ *
+ * O parcelamento de uma compra vira uma conta por parcela; cada uma é
+ * corrigida por aqui, individualmente.
+ */
+route('PUT', '/api/payables/:id', 'payables_edit', async (req, res, user, params) => {
+  const b = await readBody(req);
+  const antes = db.get('payables', params.id);
+  if (!antes) return notFound(res);
+  if (!b.descricao || !b.vencimento) return bad(res, 'Descrição e vencimento são obrigatórios');
+  const valor = Math.round((Number(b.valor) || 0) * 100) / 100;
+  if (valor <= 0) return bad(res, 'O valor precisa ser maior que zero.');
+
+  const imediato = b.tipoPagamento === 'imediato';
+  /* A data programada é derivada do vencimento (sexta anterior) — recalcular
+     aqui evita que corrigir o vencimento deixe a agenda apontando para o dia
+     antigo. Quem quiser fugir da regra informa dataProgramada explicitamente. */
+  const dataProgramada = b.dataProgramada
+    || (imediato ? (antes.dataProgramada || domain.today()) : domain.previousFriday(b.vencimento));
+
+  const patch = {
+    descricao: b.descricao,
+    categoria: b.categoria || antes.categoria,
+    fornecedorId: b.fornecedorId ? Number(b.fornecedorId) : null,
+    valor, vencimento: b.vencimento,
+    tipoPagamento: imediato ? 'imediato' : 'programado',
+    dataProgramada,
+    forma: b.forma || antes.forma || '',
+    documento: b.documento || '',
+    observacoes: b.observacoes || '',
+    recurringId: b.recurringId ? Number(b.recurringId) : null
+  };
+  const rotulos = {
+    descricao: 'descrição', categoria: 'categoria', fornecedorId: 'fornecedor', valor: 'valor',
+    vencimento: 'vencimento', tipoPagamento: 'tipo de pagamento', dataProgramada: 'agendamento',
+    forma: 'forma de pagamento', documento: 'documento', observacoes: 'observações',
+    recurringId: 'conta recorrente'
+  };
+  const mudancas = Object.keys(patch)
+    .filter(k => JSON.stringify(antes[k] ?? '') !== JSON.stringify(patch[k] ?? ''))
+    .map(k => `${rotulos[k] || k}: ${antes[k] ?? '—'} → ${patch[k] ?? '—'}`);
+
+  const rec = db.update('payables', antes.id, patch);
+
+  /* Conta paga: a saída correspondente no caixa acompanha a correção, em vez
+     de virar um segundo lançamento. */
+  let caixaAjustado = false;
+  if (rec.status === 'pago') {
+    const saida = db.all('cashflow').find(c =>
+      c.refType === 'payables' && c.refId === rec.id && c.tipo === 'saida');
+    if (saida) {
+      db.update('cashflow', saida.id, {
+        valor: rec.valor, categoria: rec.categoria,
+        origem: rec.descricao, documento: rec.documento || ''
+      });
+      caixaAjustado = true;
+    }
+  }
+
+  audit(user, 'alterou', 'payables', rec.id,
+    `Conta a pagar corrigida pela Direção${mudancas.length ? ' — ' + mudancas.join('; ') : ' (sem alteração de campos)'}` +
+    (caixaAjustado ? '; saída no caixa acertada junto' : ''));
+  ok(res, Object.assign({}, rec, { caixaAjustado, mudancas }));
 });
 
 route('POST', '/api/payables/:id/pay', 'payables', async (req, res, user, params) => {
@@ -3526,7 +3957,7 @@ function agendaItemReceber(r) {
   };
 }
 
-route('GET', '/api/agenda', ['payables', 'receivables'], async (req, res, user, params, query) => {
+route('GET', '/api/agenda', ['agenda', 'payables', 'receivables'], async (req, res, user, params, query) => {
   const base = AGENDA_BASES.includes(query.base) ? query.base : 'vencimento';
   const hoje = domain.today();
   const dia = v => (/^\d{4}-\d{2}-\d{2}$/.test(v || '') ? v : null);
@@ -3802,8 +4233,17 @@ async function handleRest(req, res, user, collection, id) {
   const cfg = REST[collection];
   if (!cfg) return notFound(res);
   const method = req.method;
-  const needed = (method === 'GET') ? cfg.perm : (cfg.writePerm || cfg.perm);
-  if (!can(user, needed)) return forbidden(res, `Sem permissão: ${cfg.label}`);
+  /* Corrigir um registro já lançado pesa mais do que criar um: contas a
+     pagar, caixa e histórico de estoque pedem permissão de Direção para
+     alterar, mas seguem abertos para lançar no dia a dia. */
+  const needed = method === 'GET' ? cfg.perm
+    : (method === 'PUT' && cfg.editPerm) ? cfg.editPerm
+      : (cfg.writePerm || cfg.perm);
+  if (!can(user, needed)) {
+    return forbidden(res, method === 'PUT' && cfg.editPerm
+      ? `Alterar ${cfg.label.toLowerCase()} é uma função da Direção`
+      : `Sem permissão: ${cfg.label}`);
+  }
 
   if (method === 'GET' && !id) {
     let list = db.all(collection);
@@ -3831,6 +4271,13 @@ async function handleRest(req, res, user, collection, id) {
     if (atual && atual.status === 'pago') {
       return bad(res, 'Este lançamento já foi pago e gerou uma saída no caixa. Use “Desfazer pagamento” antes de editar ou excluir.');
     }
+  }
+
+  /* Alterar a linha da movimentação por aqui deixaria o saldo do item como
+     estava — a correção precisa recalcular o estoque, e quem faz isso é
+     PUT /api/stock/history/:id. */
+  if (collection === 'stockMoves' && (method === 'PUT' || method === 'DELETE')) {
+    return bad(res, 'Movimentação de estoque se corrige em Estoque → Histórico, para o saldo do item ser recalculado junto.');
   }
 
   if (method === 'PUT') {

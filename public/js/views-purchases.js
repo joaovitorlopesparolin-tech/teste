@@ -313,10 +313,34 @@ App.registerView('suppliers', async (view) => {
       <button class="btn primary" onclick="Supp.edit()">+ Novo fornecedor</button>
       <button class="btn" onclick="Supp.addExpense()">+ Registrar gasto do dia</button>
       <div class="spacer"></div>
+      <input class="search" id="supp-busca" placeholder="🔎 Buscar por nome, CNPJ, contato ou cidade…" style="max-width:320px">
       ${temInativos ? `<label class="small muted" style="display:flex;gap:6px;align-items:center;cursor:pointer">
         <input type="checkbox" id="supp-inativos" style="width:auto" ${verInativos ? 'checked' : ''}> Mostrar inativos</label>` : ''}
+      <span class="muted small" id="supp-contagem"></span>
     </div>
-    ${App.table(visiveis, [
+    <div id="supp-tabela"></div>
+    <div class="section-title">Faturas mensais</div>
+    ${App.table(invoices.slice().reverse(), [
+      { h: 'Fornecedor', cell: i => App.esc(i.fornecedorNome) },
+      { h: 'Mês', cell: i => i.mes },
+      { h: 'Registrado internamente', class: 'num', cell: i => 'R$ ' + App.money(i.valorRegistrado) },
+      { h: 'Valor cobrado', class: 'num', cell: i => 'R$ ' + App.money(i.valorCobrado) },
+      { h: 'Diferença', class: 'num', cell: i => Math.abs(i.diferenca) < 0.005
+          ? '<span class="pos">R$ 0,00</span>'
+          : `<b class="neg">R$ ${App.money(i.diferenca)}</b>` },
+      { h: 'Status', cell: i => App.badge(i.status) },
+      { h: '', class: 'num', cell: i => i.status !== 'confirmada'
+          ? `<button class="btn sm primary" onclick="Supp.confirm(${i.id})">Conferir e confirmar</button>` : '' }
+    ], { emptyMsg: 'Nenhuma fatura fechada ainda' })}`;
+
+  /* Busca sem acento e por pedaço, igual à de Clientes. */
+  const renderSupp = () => {
+    const q = document.getElementById('supp-busca').value;
+    const list = App.filtraPor(visiveis, q,
+      ['nome', 'razaoSocial', 'email', 'cidade', 'estado', 'observacoes',
+        x => App.digits(x.cnpj), x => App.digits(x.telefone)]);
+    document.getElementById('supp-contagem').textContent = `${list.length} fornecedor(es)`;
+    document.getElementById('supp-tabela').innerHTML = App.table(list, [
       { h: 'Fornecedor', cell: s => `<b>${App.esc(s.nome)}</b>${App.seloInativo(s)}${s.fechamentoMensal ? ' <span class="badge info">fechamento mensal</span>' : ''}` },
       { h: 'CNPJ', cell: s => `<span class="mono">${App.esc(s.cnpj ? App.fmtCpfCnpj(s.cnpj) : '—')}</span>` },
       { h: 'Contato', cell: s => App.esc(s.telefone || s.email || '—') },
@@ -333,20 +357,11 @@ App.registerView('suppliers', async (view) => {
         ${s.ativo === false
           ? `<button class="btn sm ghost" onclick="Supp.reativar(${s.id})" title="Reativar cadastro">↩️</button>`
           : `<button class="btn sm ghost" onclick="Supp.excluir(${s.id})" title="Excluir cadastro">🗑️</button>`}` }
-    ])}
-    <div class="section-title">Faturas mensais</div>
-    ${App.table(invoices.slice().reverse(), [
-      { h: 'Fornecedor', cell: i => App.esc(i.fornecedorNome) },
-      { h: 'Mês', cell: i => i.mes },
-      { h: 'Registrado internamente', class: 'num', cell: i => 'R$ ' + App.money(i.valorRegistrado) },
-      { h: 'Valor cobrado', class: 'num', cell: i => 'R$ ' + App.money(i.valorCobrado) },
-      { h: 'Diferença', class: 'num', cell: i => Math.abs(i.diferenca) < 0.005
-          ? '<span class="pos">R$ 0,00</span>'
-          : `<b class="neg">R$ ${App.money(i.diferenca)}</b>` },
-      { h: 'Status', cell: i => App.badge(i.status) },
-      { h: '', class: 'num', cell: i => i.status !== 'confirmada'
-          ? `<button class="btn sm primary" onclick="Supp.confirm(${i.id})">Conferir e confirmar</button>` : '' }
-    ], { emptyMsg: 'Nenhuma fatura fechada ainda' })}`;
+    ], { emptyMsg: 'Nenhum fornecedor encontrado' });
+  };
+  renderSupp();
+  document.getElementById('supp-busca').addEventListener('input', renderSupp);
+
 
   const chkSuppInativos = document.getElementById('supp-inativos');
   if (chkSuppInativos) chkSuppInativos.addEventListener('change', e => {

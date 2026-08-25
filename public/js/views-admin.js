@@ -80,6 +80,25 @@ App.registerView('admin', async (view) => {
   }
 
   /* ---------- perfis / permissões ---------- */
+
+  /* As permissões chegam do servidor como [chave, rótulo, grupo]. Agrupá-las
+     é o que mantém a tela legível conforme o sistema ganha funcionalidade —
+     a lista já passou de trinta. Permissão sem grupo (de uma versão antiga
+     do servidor) cai em "Outros" em vez de sumir da tela. */
+  function gruposDeModulos() {
+    const ordem = ['Dia a dia', 'Comercial', 'Oficina e materiais', 'Financeiro', 'Gestão', 'Direção'];
+    const mapa = new Map();
+    for (const m of App.meta.modules) {
+      const grupo = m[2] || 'Outros';
+      if (!mapa.has(grupo)) mapa.set(grupo, []);
+      mapa.get(grupo).push(m);
+    }
+    return [...mapa.entries()].sort((a, b) => {
+      const ia = ordem.indexOf(a[0]), ib = ordem.indexOf(b[0]);
+      return (ia < 0 ? ordem.length : ia) - (ib < 0 ? ordem.length : ib);
+    });
+  }
+
   async function renderRoles(el) {
     const roles = await App.get('/roles');
     const mods = App.meta.modules;
@@ -89,10 +108,13 @@ App.registerView('admin', async (view) => {
         ${roles.map(r => `
           <div class="card">
             <h3>${App.esc(r.name)}${r.builtin ? ' <span class="badge">padrão</span>' : ''}</h3>
-            <div class="small muted" style="margin-bottom:10px">${r.permissions.length} permissão(ões)</div>
+            <div class="small muted" style="margin-bottom:10px">${
+              r.permissions.includes('admin')
+                ? `todas as ${mods.length} permissões`
+                : `${mods.filter(([k]) => r.permissions.includes(k)).length} de ${mods.length} permissões`}</div>
             <div class="small">${r.permissions.includes('admin')
-              ? '<span class="badge accent">Acesso completo</span>'
-              : mods.filter(([k]) => r.permissions.includes(k)).map(([, l]) => l).join(' · ')}</div>
+              ? '<span class="badge accent">Acesso completo</span> <span class="muted">— inclusive o que for criado depois</span>'
+              : mods.filter(([k]) => r.permissions.includes(k)).map(([, l]) => App.esc(l)).join(' · ') || '<span class="muted">nenhuma permissão</span>'}</div>
             <div style="margin-top:12px"><button class="btn sm" onclick="Adm.editRole(${r.id})">✎ Configurar permissões</button></div>
           </div>`).join('')}
       </div>`;
@@ -102,18 +124,35 @@ App.registerView('admin', async (view) => {
       const m = App.modal(`
         <h2>${id ? 'Permissões — ' + App.esc(r.name) : 'Novo perfil'}</h2>
         <label class="field"><span>Nome do perfil</span><input id="role-name" value="${App.esc(r.name || '')}"></label>
-        <div style="columns:2;column-gap:20px">
-          ${App.meta.modules.map(([k, l]) => `
-            <label style="display:flex;gap:8px;align-items:center;padding:5px 0;break-inside:avoid;font-size:13px">
-              <input type="checkbox" data-perm="${k}" ${r.permissions.includes(k) ? 'checked' : ''}> ${App.esc(l)}
-            </label>`).join('')}
-        </div>
+        ${gruposDeModulos().map(([grupo, itens]) => `
+          <div class="section-title" style="display:flex;justify-content:space-between;align-items:center">
+            <span>${App.esc(grupo)}</span>
+            <button type="button" class="btn sm ghost" data-grupo="${App.esc(grupo)}">marcar/desmarcar todos</button>
+          </div>
+          ${grupo === 'Direção' ? `<p class="small muted" style="margin:-4px 0 6px">
+            Alterações de maior impacto. Sem elas o usuário continua enxergando e lançando
+            no dia a dia, mas não corrige o que já foi registrado.</p>` : ''}
+          <div style="columns:2;column-gap:20px">
+            ${itens.map(([k, l]) => `
+              <label style="display:flex;gap:8px;align-items:center;padding:5px 0;break-inside:avoid;font-size:13px">
+                <input type="checkbox" data-perm="${k}" data-de="${App.esc(grupo)}"
+                  ${r.permissions.includes(k) ? 'checked' : ''}> ${App.esc(l)}
+              </label>`).join('')}
+          </div>`).join('')}
         <p class="small muted" style="margin-top:10px">“Dados financeiros sensíveis” controla a visualização de custos,
-        margens, resultados e salários. “Administração” dá acesso completo a tudo.</p>
+        margens, resultados e salários. “Administração” dá <b>acesso completo</b>: quem a tem passa em qualquer
+        verificação, inclusive nas funcionalidades que forem criadas depois.</p>
         <div class="actions">
           <button class="btn" onclick="App.closeModal()">Cancelar</button>
           <button class="btn primary" id="role-save">Salvar</button>
         </div>`, { wide: true });
+      m.querySelectorAll('[data-grupo]').forEach(btn => {
+        btn.onclick = () => {
+          const caixas = [...m.querySelectorAll(`[data-de="${CSS.escape(btn.dataset.grupo)}"]`)];
+          const marcar = caixas.some(c => !c.checked);   // algum desmarcado → marca todos
+          caixas.forEach(c => { c.checked = marcar; });
+        };
+      });
       m.querySelector('#role-save').onclick = async () => {
         const perms = [...m.querySelectorAll('[data-perm]:checked')].map(x => x.dataset.perm);
         const name = m.querySelector('#role-name').value.trim() || 'Perfil';
