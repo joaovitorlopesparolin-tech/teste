@@ -79,6 +79,19 @@ PARAM = {
     'r_valvula':       500.0,    # ESTIMATIVA - CONFIRMAR
     'r_dreno_fim':     900.0,    # ESTIMATIVA - CONFIRMAR
 
+
+    # --- ETAPA EXECUTIVA (parametros novos) ---
+    'diam_tampa':     1140.0,    # PROMPT - Ø tanque + 40 mm
+    'raio_tampa':      570.0,
+    'diferenca_tampa':  40.0,    # PROMPT
+    'sobra_radial_tampa':20.0,   # PROMPT - por lado
+    'altura_aba_tampa': 40.0,    # AJUSTAVEL - nao consta do PDF
+    'espessura_aba':     5.0,    # AJUSTAVEL
+    'raio_curva_d50':   50.0,    # DERIVADO - cone Z650 -> eixo do dreno Z600
+    'raio_curva_d40':   60.0,    # AJUSTAVEL - nao consta do PDF
+    'perna_solda':       8.0,    # AJUSTAVEL
+    'seg_curva':          20,
+
     'seg': 64, 'seg_med': 48, 'seg_peq': 24, 'seg_min': 12,
 }
 
