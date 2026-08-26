@@ -92,6 +92,26 @@ PARAM = {
     'perna_solda':       8.0,    # AJUSTAVEL
     'seg_curva':          20,
 
+
+    # --- ETAPA DE DETALHAMENTO FINO / FABRICACAO ---
+    'pe_tubo_od':       76.0,    # FOLHA DETALHE C - tubo redondo Ø76 x 3
+    'pe_tubo_esp':       3.0,
+    'chapa_fix_pe':     10.0,    # FOLHA DETALHE C
+    'chapa_base':       12.0,    # FOLHA DETALHE B/C
+    'ref_triang':        6.0,    # FOLHA DETALHES B/C
+    'chapa_apoio':       6.0,    # FOLHA DETALHE A
+    'chapa_ref_curva':   6.0,    # FOLHA DETALHE A
+    'trav_tubo':        40.0,    # FOLHA DETALHE A - tubo 40x40x3
+    'trav_esp':          3.0,
+    'barra_rosc':       16.0,    # FOLHA DETALHES A/B
+    'chumbador':        16.0,    # FOLHA DETALHE C
+    'perna_solda':       6.0,    # AJUSTAVEL
+    'tubo_d40_esp':      3.0,    # parede real
+    'tubo_d50_esp':      3.0,
+    # flanges ANSI B16.5 classe 150
+    'fl40_od':127.0,'fl40_esp':17.5,'fl40_bc':98.4,'fl40_nf':4,'fl40_df':16.0,'fl40_hub':73.0,
+    'fl50_od':152.4,'fl50_esp':19.1,'fl50_bc':120.7,'fl50_nf':4,'fl50_df':19.0,'fl50_hub':92.0,
+
     'seg': 64, 'seg_med': 48, 'seg_peq': 24, 'seg_min': 12,
 }
 
