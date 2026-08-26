@@ -23,9 +23,22 @@ apoio superior e inferior 6 mm, barra roscada Ø16 vertical, arruela lisa + porc
 sextavada nas duas extremidades, travessas em tubo 40×40×3 e cordões de filete em
 todo contato.
 
-### Detalhe B — suporte inferior / base
-Chapa de base 12 mm, chapa vertical 6 mm, quatro reforços triangulares 6 mm, dois
-reforços laterais 6 mm, quatro chumbadores Ø16 com arruela e porca sextavada.
+### Detalhe B — suporte inferior / base (sapata do pé inclinado)
+Chapa de base **12 mm**, 260 × 220 mm, topo em z = 12 mm.
+Sobre ela, uma **caixa soldada fechada**: duas chapas laterais 6 mm em y = ±38 mm
+(tangentes ao tubo Ø76, portanto sem interpenetração) e duas chapas de topo 6 mm
+nos planos YZ das extremidades, altura 190 mm.
+O **tubo Ø76 desce até apoiar na chapa de base** — ponto mais baixo do tubo em
+z = 7,9 mm, ou seja 4,1 mm dentro da espessura da chapa, garantindo contato real e
+não um apoio "no ar". Colar de solda cônico no pé do tubo.
+Quatro chumbadores Ø16 embutidos 120 mm abaixo do piso, com arruela lisa e porca
+sextavada acima da chapa.
+
+> **Correção aplicada nesta revisão.** Na versão anterior a sapata tinha três
+> defeitos reais, identificados por renderização da geometria extraída do modelo:
+> (1) o tubo Ø76 terminava em z = 142 mm, sem tocar a chapa de base; (2) o cordão
+> de solda ficava solto no ar; (3) os reforços triangulares estavam no mesmo plano
+> da chapa que deveriam enrijecer. A sapata foi reconstruída como caixa fechada.
 
 ### Detalhe C — pé inclinado (3 unidades a 0°/120°/240°)
 **Tubo redondo Ø76 × 3 mm** — substitui o perfil dobrado 80×80 da etapa anterior.
