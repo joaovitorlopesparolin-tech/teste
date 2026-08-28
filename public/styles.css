@@ -110,7 +110,10 @@ a { color: var(--accent-strong); text-decoration: none; }
   background: var(--bg-2); border: 1px solid var(--line);
   border-radius: var(--radius); padding: 16px 18px;
 }
-.card h3 { font-size: 13px; font-weight: 600; color: var(--text-2); margin-bottom: 10px; letter-spacing: .3px; }
+.card h3 {
+  font-family: var(--mono); font-size: 11px; font-weight: 600; color: var(--text-2);
+  margin-bottom: 10px; text-transform: uppercase; letter-spacing: .08em;
+}
 
 .kpi { position: relative; overflow: hidden; }
 .kpi::before {
@@ -121,7 +124,10 @@ a { color: var(--accent-strong); text-decoration: none; }
 .kpi.k-ok::before { background: var(--ok); }
 .kpi.k-warn::before { background: var(--warn); }
 .kpi.k-danger::before { background: var(--danger); }
-.kpi .label { font-size: 11.5px; color: var(--text-2); text-transform: uppercase; letter-spacing: 1px; }
+.kpi .label {
+  font-family: var(--mono); font-size: 11px; color: var(--text-2);
+  text-transform: uppercase; letter-spacing: .08em;
+}
 .kpi .value { font-size: 22px; font-weight: 700; margin-top: 5px; font-variant-numeric: tabular-nums; }
 .kpi .hint { font-size: 11.5px; color: var(--text-3); margin-top: 3px; }
 .kpi .value.money::before { content: 'R$ '; font-size: 13px; color: var(--text-2); font-weight: 500; }
@@ -182,7 +188,9 @@ input, select, textarea {
   padding: 7.5px 10px; font-size: 13.5px; font-family: inherit;
   outline: none; transition: border-color .12s;
 }
-input:focus, select:focus, textarea:focus { border-color: var(--accent); }
+input:focus, select:focus, textarea:focus {
+  border-color: var(--accent); box-shadow: inset 2px 0 0 var(--accent-strong);
+}
 input[type=checkbox] { width: auto; accent-color: var(--accent); }
 textarea { min-height: 72px; resize: vertical; }
 .formgrid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0 14px; }
@@ -317,6 +325,7 @@ details[open] > .etapa-titulo::before { transform: rotate(90deg); }
 .muted { color: var(--text-2); }
 .small { font-size: 12px; }
 .mono { font-family: var(--mono); font-size: 12.5px; }
+.money { font-variant-numeric: tabular-nums; }
 .money::before { content: 'R$ '; opacity: .6; font-size: .85em; }
 .pos { color: var(--ok); } .neg { color: var(--danger); }
 hr.sep { border: none; border-top: 1px solid var(--line-soft); margin: 14px 0; }
@@ -435,6 +444,8 @@ hr.sep { border: none; border-top: 1px solid var(--line-soft); margin: 14px 0; }
   td { border-bottom: 1px solid #ddd; color: #111; }
   .badge { border: 1px solid #999; background: none !important; color: #111 !important; }
   .kpi .value, .topbar h1, .muted, .small { color: #111 !important; }
+  /* Rótulos técnicos são cinza-claro na tela; em papel branco precisam escurecer. */
+  .card h3, .kpi .label { color: #333 !important; }
   a { color: #111; }
   .print-header { display: block !important; margin-bottom: 14px; border-bottom: 2px solid #111; padding-bottom: 8px; }
   .print-header h2 { font-size: 16px; }
