@@ -3460,65 +3460,263 @@ route('DELETE', '/api/purchases/:id', 'purchases', async (req, res, user, params
 const CNC_DIR = path.join(db.DATA_DIR, 'cnc');
 const CNC_EXTS = ['nc', 'txt', 'min', 'mpf', 'tap', 'cnc', 'iso', 'eia', 'gcode', 'ngc', 'h', 'prg'];
 
-/* Aplicações conhecidas. `codigo` é o que entra no nome e precisa ter 2
-   caracteres para sobrar espaço à operação dentro dos 5 do visor. Novas
-   aplicações entram aqui — o cadastro aceita qualquer código de 2 letras. */
-/* [codigo, nome por extenso, rótulo curto do filtro]. O rótulo curto é o
-   código porque é assim que a equipe fala e é o que está no visor. */
-const CNC_APLICACOES = [
-  ['UN', 'Unilateral', 'UN'],
-  ['FC', 'Fluxo cruzado', 'FC'],
-  ['EA', 'EA888', 'EA888'],
-  ['OU', 'Outra aplicação', 'Outra']
-];
-const CNC_OPERACOES = [
-  ['ADM', 'Admissão', 'ADM'],
-  ['ESC', 'Escape', 'ESC'],
-  ['', 'Não se aplica', '—']
-];
 const CNC_STATUS = ['em_teste', 'aprovado', 'reprovado', 'nao_utiliza'];
 const CNC_STATUS_LABEL = {
   em_teste: 'Em teste', aprovado: 'Aprovado',
   reprovado: 'Reprovado', nao_utiliza: 'Não utiliza mais'
 };
 
+/* ---------------- Catálogo de classificação ----------------
+
+   As classificações vivem no banco, não no código: a oficina cadastra um
+   cabeçote ou uma área de usinagem novos sozinha, sem depender de alteração
+   no sistema. Uma coleção só guarda os quatro tipos, ligados por paiId:
+
+       aplicacao (UN, FC, EA, Fiat, Toyota…)
+         └── casco (Germany, México, China…)
+               └── modelo (T, BA, AB, AD…)
+       area (ADM, ESC, Dutos, Sedes, Molas…)   — solta, vale para qualquer um
+
+   Os programas continuam gravando SIGLAS, não ids: um programa cadastrado
+   antes desta mudança tem aplicacao:'UN' e segue funcionando, e uma sigla que
+   não esteja no catálogo aparece como ela mesma em vez de sumir da tela. */
+
+const CNC_TIPOS = ['aplicacao', 'casco', 'modelo', 'area'];
+const CNC_TIPO_LABEL = {
+  aplicacao: 'Aplicação / tipo de cabeçote', casco: 'Origem / tipo do casco',
+  modelo: 'Modelo / código', area: 'Área de operação'
+};
+
+/* O que a empresa já usava. Entra uma vez, na primeira subida com esta
+   versão, e nunca sobrescreve o que a pessoa tiver editado depois. */
+const CNC_CATALOGO_INICIAL = [
+  { tipo: 'aplicacao', sigla: 'UN', nome: 'Unilateral' },
+  { tipo: 'aplicacao', sigla: 'FC', nome: 'Fluxo cruzado' },
+  { tipo: 'aplicacao', sigla: 'EA', nome: 'EA888' },
+  { tipo: 'area', sigla: 'ADM', nome: 'Admissão' },
+  { tipo: 'area', sigla: 'ESC', nome: 'Escape' },
+  { tipo: 'area', sigla: 'DUT', nome: 'Dutos' },
+  { tipo: 'area', sigla: 'ALT', nome: 'Alojamento de tuchos' },
+  { tipo: 'area', sigla: 'MOL', nome: 'Molas' },
+  { tipo: 'area', sigla: 'CAM', nome: 'Câmara de combustão' },
+  { tipo: 'area', sigla: 'SED', nome: 'Sedes' }
+];
+
+/**
+ * Semeia o catálogo sem tocar no que já existe.
+ *
+ * Roda a cada subida, mas só acrescenta o que falta — e nunca ressuscita uma
+ * entrada que a oficina apagou de propósito, porque só semeia enquanto o
+ * catálogo estiver completamente vazio. Depois disso, quem manda é o cadastro.
+ */
+function semearCatalogoCnc() {
+  if (db.all('cncCatalogo').length) return;
+  /* Só faz sentido semear se o módulo já estiver em uso ou começando agora:
+     em qualquer caso, as classificações antigas precisam existir para os
+     programas já cadastrados continuarem legíveis. */
+  for (const e of CNC_CATALOGO_INICIAL) {
+    db.insert('cncCatalogo', Object.assign({ paiId: null, ativo: true }, e));
+  }
+  /* Siglas que a versão anterior trazia embutidas no código e que podem
+     estar gravadas em programas antigos — adotadas com o nome que tinham,
+     em vez de aparecerem como a sigla crua. */
+  const NOMES_ANTIGOS = { OU: 'Outra aplicação' };
+
+  /* Sigla usada em programa antigo que não esteja na lista acima vira
+     entrada do catálogo, para nada ficar órfão na tela. */
+  for (const p of db.all('cncPrograms')) {
+    for (const [campo, tipo] of [['aplicacao', 'aplicacao'], ['operacao', 'area']]) {
+      const sigla = String(p[campo] || '').toUpperCase();
+      if (!sigla) continue;
+      if (db.all('cncCatalogo').some(c => c.tipo === tipo && c.sigla === sigla)) continue;
+      db.insert('cncCatalogo', { tipo, sigla, nome: NOMES_ANTIGOS[sigla] || sigla, paiId: null, ativo: true });
+    }
+  }
+}
+
+/* Chamado aqui, e não junto das outras rotinas de subida: a lista inicial é
+   um const declarado acima, que só existe a partir deste ponto do arquivo. */
+semearCatalogoCnc();
+
+const cncCat = (tipo) => db.all('cncCatalogo').filter(c => c.tipo === tipo);
+const cncCatPorSigla = (tipo, sigla) => sigla
+  ? cncCat(tipo).find(c => c.sigla === String(sigla).toUpperCase()) || null : null;
+/** Nome por extenso de uma sigla; se não estiver no catálogo, a própria sigla. */
+const cncNomeDe = (tipo, sigla) => {
+  if (!sigla) return '';
+  const c = cncCatPorSigla(tipo, sigla);
+  return c ? c.nome : String(sigla);
+};
+
 /** Os 5 caracteres que aparecem no visor da máquina. */
 const cncVisor = (nome) => String(nome || '').slice(0, 5).toUpperCase();
 
 /**
- * Próximo nome sugerido para uma aplicação + operação.
- * Ex.: UN + ADM, com UNADM01 e UNADM02 já cadastrados, devolve UNADM03.
- * A sequência é por prefixo, não global: cada combinação numera do seu jeito.
+ * Próximo nome sugerido.
+ *
+ * A identificação precisa caber nos 5 caracteres do visor, então eles são
+ * sempre aplicação + área — o que a pessoa na máquina precisa saber primeiro.
+ * O modelo/código, quando existe, entra depois da sequência: UNADM01T continua
+ * mostrando UNADM no visor e carrega o "T" para quem lê o nome inteiro.
  */
-function proximoNomeCnc(aplicacao, operacao) {
-  const prefixo = (String(aplicacao || '').toUpperCase() + String(operacao || '').toUpperCase()).slice(0, 5);
+function proximoNomeCnc(aplicacao, area, modelo) {
+  const prefixo = (String(aplicacao || '').toUpperCase() + String(area || '').toUpperCase()).slice(0, 5);
   if (!prefixo) return '';
+  const sufixo = String(modelo || '').toUpperCase();
   const usados = db.all('cncPrograms')
     .map(p => String(p.nome || '').toUpperCase())
     .filter(n => n.startsWith(prefixo))
-    .map(n => parseInt(n.slice(prefixo.length).replace(/\D/g, ''), 10))
+    .map(n => parseInt(n.slice(prefixo.length).replace(/\D.*$/, ''), 10))
     .filter(n => !isNaN(n));
   const proximo = (usados.length ? Math.max(...usados) : 0) + 1;
-  return prefixo + String(proximo).padStart(2, '0');
+  return prefixo + String(proximo).padStart(2, '0') + sufixo;
 }
 
 function cncComExtras(p) {
   return Object.assign({}, p, {
     visor: cncVisor(p.nome || p.nomeOriginal),
     statusLabel: CNC_STATUS_LABEL[p.status] || p.status,
-    aplicacaoLabel: (CNC_APLICACOES.find(a => a[0] === p.aplicacao) || [null, p.aplicacao])[1] || '',
-    operacaoLabel: (CNC_OPERACOES.find(o => o[0] === p.operacao) || [null, p.operacao])[1] || ''
+    aplicacaoLabel: cncNomeDe('aplicacao', p.aplicacao),
+    operacaoLabel: cncNomeDe('area', p.operacao),
+    cascoLabel: cncNomeDe('casco', p.casco),
+    modeloLabel: cncNomeDe('modelo', p.modelo)
   });
 }
 
-route('GET', '/api/cnc/meta', 'cnc', async (req, res) => ok(res, {
-  aplicacoes: CNC_APLICACOES, operacoes: CNC_OPERACOES,
-  status: CNC_STATUS.map(s => [s, CNC_STATUS_LABEL[s]]),
-  extensoes: CNC_EXTS
-}));
+/* Catálogo inteiro, com os filhos já aninhados para a tela montar as listas
+   em cascata sem precisar cruzar nada. */
+function catalogoCnc() {
+  const porTipo = (t) => cncCat(t).slice()
+    .sort((a, b) => String(a.sigla).localeCompare(String(b.sigla), 'pt-BR'));
+  const usoDe = (c) => db.all('cncPrograms').filter(p =>
+    (c.tipo === 'aplicacao' && p.aplicacao === c.sigla) ||
+    (c.tipo === 'area' && p.operacao === c.sigla) ||
+    (c.tipo === 'casco' && p.casco === c.sigla) ||
+    (c.tipo === 'modelo' && p.modelo === c.sigla)).length;
+  const enriquecer = (c) => Object.assign({}, c, { emUso: usoDe(c) });
+  return {
+    aplicacoes: porTipo('aplicacao').map(enriquecer),
+    cascos: porTipo('casco').map(enriquecer),
+    modelos: porTipo('modelo').map(enriquecer),
+    areas: porTipo('area').map(enriquecer)
+  };
+}
+
+route('GET', '/api/cnc/catalogo', 'cnc', async (req, res) => ok(res, catalogoCnc()));
+
+route('POST', '/api/cnc/catalogo', 'cnc', async (req, res, user) => {
+  const b = await readBody(req);
+  const tipo = CNC_TIPOS.includes(b.tipo) ? b.tipo : null;
+  if (!tipo) return bad(res, 'Tipo de cadastro inválido.');
+  const sigla = String(b.sigla || '').trim().toUpperCase();
+  const nome = String(b.nome || '').trim();
+  if (!sigla) return bad(res, 'Informe a sigla — é ela que entra no nome do programa.');
+  if (!nome) return bad(res, 'Informe o nome por extenso.');
+  if (!/^[A-Z0-9]{1,6}$/.test(sigla)) {
+    return bad(res, 'A sigla aceita de 1 a 6 letras ou números, sem espaços nem acentos.');
+  }
+  if (cncCatPorSigla(tipo, sigla)) {
+    return bad(res, `Já existe ${CNC_TIPO_LABEL[tipo].toLowerCase()} com a sigla ${sigla}.`);
+  }
+  /* Casco pertence a uma aplicação; modelo pertence a um casco. É o que
+     permite "FC → México → BA" sem misturar com os códigos da Germany. */
+  let paiId = null;
+  if (tipo === 'casco' || tipo === 'modelo') {
+    const tipoPai = tipo === 'casco' ? 'aplicacao' : 'casco';
+    const pai = b.paiId ? db.get('cncCatalogo', b.paiId) : null;
+    if (!pai || pai.tipo !== tipoPai) {
+      return bad(res, `Escolha ${tipo === 'casco' ? 'a aplicação' : 'o casco'} a que este cadastro pertence.`);
+    }
+    paiId = pai.id;
+  }
+  const rec = db.insert('cncCatalogo', { tipo, sigla, nome, paiId, ativo: true });
+  audit(user, 'criou', 'cncCatalogo', rec.id, `${CNC_TIPO_LABEL[tipo]}: ${sigla} — ${nome}`);
+  ok(res, rec);
+});
+
+route('PUT', '/api/cnc/catalogo/:id', 'cnc', async (req, res, user, params) => {
+  const c = db.get('cncCatalogo', params.id);
+  if (!c) return notFound(res);
+  const b = await readBody(req);
+  const sigla = b.sigla === undefined ? c.sigla : String(b.sigla).trim().toUpperCase();
+  const nome = b.nome === undefined ? c.nome : String(b.nome).trim();
+  if (!sigla || !nome) return bad(res, 'Sigla e nome são obrigatórios.');
+  if (!/^[A-Z0-9]{1,6}$/.test(sigla)) {
+    return bad(res, 'A sigla aceita de 1 a 6 letras ou números, sem espaços nem acentos.');
+  }
+  if (sigla !== c.sigla && cncCatPorSigla(c.tipo, sigla)) {
+    return bad(res, `Já existe ${CNC_TIPO_LABEL[c.tipo].toLowerCase()} com a sigla ${sigla}.`);
+  }
+
+  /* Trocar a sigla precisa levar junto os programas que a usam — senão eles
+     ficariam apontando para uma classificação que não existe mais. O nome
+     padronizado do programa NÃO é mexido: renomear programa antigo é decisão
+     de quem opera a máquina, não efeito colateral de editar o catálogo. */
+  let migrados = 0;
+  if (sigla !== c.sigla) {
+    const campo = { aplicacao: 'aplicacao', area: 'operacao', casco: 'casco', modelo: 'modelo' }[c.tipo];
+    for (const p of db.all('cncPrograms').filter(p => p[campo] === c.sigla)) {
+      db.update('cncPrograms', p.id, {
+        [campo]: sigla,
+        historico: (p.historico || []).concat([{
+          at: new Date().toISOString(), por: user.name,
+          evento: `${CNC_TIPO_LABEL[c.tipo]} renomeada no catálogo: ${c.sigla} → ${sigla} ` +
+                  '(o nome do programa não foi alterado)'
+        }])
+      });
+      migrados++;
+    }
+  }
+
+  const rec = db.update('cncCatalogo', c.id, {
+    sigla, nome, ativo: b.ativo === undefined ? c.ativo : !!b.ativo
+  });
+  audit(user, 'alterou', 'cncCatalogo', rec.id,
+    `${CNC_TIPO_LABEL[c.tipo]}: ${c.sigla} — ${c.nome} → ${sigla} — ${nome}` +
+    (migrados ? `; ${migrados} programa(s) acompanharam a sigla` : ''));
+  ok(res, Object.assign({}, rec, { migrados }));
+});
+
+route('DELETE', '/api/cnc/catalogo/:id', 'cnc', async (req, res, user, params) => {
+  const c = db.get('cncCatalogo', params.id);
+  if (!c) return notFound(res);
+  const campo = { aplicacao: 'aplicacao', area: 'operacao', casco: 'casco', modelo: 'modelo' }[c.tipo];
+  const emUso = db.all('cncPrograms').filter(p => p[campo] === c.sigla).length;
+  const filhos = db.all('cncCatalogo').filter(x => x.paiId === c.id).length;
+
+  /* Classificação em uso não some: os programas que a usam ficariam sem
+     identificação. Inativar tira das listas de escolha e mantém o histórico. */
+  if (emUso || filhos) {
+    const partes = [];
+    if (emUso) partes.push(`${emUso} programa(s) usam esta classificação`);
+    if (filhos) partes.push(`${filhos} cadastro(s) dependem dela`);
+    return send(res, 409, {
+      error: partes.join(' e ') + '. Excluir deixaria esses registros sem referência — ' +
+        'use "Inativar" para tirá-la das listas de escolha sem perder o histórico.',
+      emUso, filhos, podeInativar: true
+    });
+  }
+  db.remove('cncCatalogo', c.id);
+  audit(user, 'excluiu', 'cncCatalogo', Number(params.id), `${CNC_TIPO_LABEL[c.tipo]}: ${c.sigla} — ${c.nome}`);
+  ok(res, { ok: true });
+});
+
+route('GET', '/api/cnc/meta', 'cnc', async (req, res) => {
+  const cat = catalogoCnc();
+  ok(res, {
+    catalogo: cat,
+    /* Formato antigo mantido para nada que já consome isto quebrar. */
+    aplicacoes: cat.aplicacoes.filter(a => a.ativo).map(a => [a.sigla, a.nome, a.sigla]),
+    operacoes: cat.areas.filter(a => a.ativo).map(a => [a.sigla, a.nome, a.sigla])
+      .concat([['', 'Não se aplica', '—']]),
+    status: CNC_STATUS.map(s => [s, CNC_STATUS_LABEL[s]]),
+    extensoes: CNC_EXTS,
+    tipos: CNC_TIPOS.map(t => [t, CNC_TIPO_LABEL[t]])
+  });
+});
 
 route('GET', '/api/cnc/proximo-nome', 'cnc', async (req, res, user, params, query) => {
-  ok(res, { nome: proximoNomeCnc(query.aplicacao, query.operacao) });
+  ok(res, { nome: proximoNomeCnc(query.aplicacao, query.operacao || query.area, query.modelo) });
 });
 
 route('GET', '/api/cnc', 'cnc', async (req, res) => {
@@ -3534,7 +3732,8 @@ route('GET', '/api/cnc/:id', 'cnc', async (req, res, user, params) => {
 /* Campos que o histórico acompanha, com o nome que a pessoa lê na tela. */
 const CNC_CAMPOS = {
   nome: 'nome padronizado', nomeOriginal: 'nome original', aplicacao: 'aplicação',
-  operacao: 'operação', dataCriacao: 'data de criação', dataAlteracao: 'último salvamento',
+  operacao: 'área de operação', casco: 'origem/casco', modelo: 'modelo/código',
+  dataCriacao: 'data de criação', dataAlteracao: 'último salvamento',
   status: 'status', cfm: 'CFM', observacoes: 'observações'
 };
 
@@ -3554,6 +3753,10 @@ route('POST', '/api/cnc', 'cnc', async (req, res, user) => {
     nome, nomeOriginal,
     aplicacao: String(b.aplicacao || '').toUpperCase(),
     operacao: String(b.operacao || '').toUpperCase(),
+    /* Casco e modelo são opcionais: nem todo programa precisa da
+       classificação inteira, e exigi-la travaria o cadastro do dia a dia. */
+    casco: String(b.casco || '').toUpperCase(),
+    modelo: String(b.modelo || '').toUpperCase(),
     dataCriacao: b.dataCriacao || domain.today(),
     dataAlteracao: b.dataAlteracao || b.dataCriacao || domain.today(),
     status: CNC_STATUS.includes(b.status) ? b.status : 'em_teste',
@@ -3589,6 +3792,8 @@ route('PUT', '/api/cnc/:id', 'cnc', async (req, res, user, params) => {
     nomeOriginal: b.nomeOriginal === undefined || b.nomeOriginal === '' ? antes.nomeOriginal : String(b.nomeOriginal).trim(),
     aplicacao: b.aplicacao === undefined ? antes.aplicacao : String(b.aplicacao || '').toUpperCase(),
     operacao: b.operacao === undefined ? antes.operacao : String(b.operacao || '').toUpperCase(),
+    casco: b.casco === undefined ? (antes.casco || '') : String(b.casco || '').toUpperCase(),
+    modelo: b.modelo === undefined ? (antes.modelo || '') : String(b.modelo || '').toUpperCase(),
     dataCriacao: b.dataCriacao || antes.dataCriacao,
     dataAlteracao: b.dataAlteracao || domain.today(),
     status: CNC_STATUS.includes(b.status) ? b.status : antes.status,

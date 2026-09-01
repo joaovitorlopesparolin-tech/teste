@@ -7,10 +7,28 @@ App.registerView('cnc', async (view) => {
   const [programas, meta] = await Promise.all([App.get('/cnc'), App.get('/cnc/meta')]);
   const podeExcluir = App.can('cnc_delete');
 
-  const APLIC = meta.aplicacoes;      // [['UN','Unilateral'], …]
-  const OPER = meta.operacoes;        // [['ADM','Admissão'], …]
+  /* As classificações vêm do catálogo do banco, não de uma lista no código:
+     é o que permite cadastrar um cabeçote ou uma área novos sem alteração
+     no sistema. Inativos ficam de fora das escolhas, mas continuam
+     resolvendo o nome dos programas que já os usam. */
+  const cat = meta.catalogo;
+  const ativos = (lista) => lista.filter(x => x.ativo !== false);
+  const APLIC = ativos(cat.aplicacoes).map(a => [a.sigla, a.nome, a.sigla]);
+  const OPER = ativos(cat.areas).map(a => [a.sigla, a.nome, a.sigla]);
   const STATUS = meta.status;         // [['em_teste','Em teste'], …]
   const rotulo = (lista, v) => (lista.find(x => x[0] === v) || [null, v || '—'])[1];
+
+  /* Cascos de uma aplicação e modelos de um casco — a hierarquia
+     "FC → México → BA" que evita misturar os códigos de origens diferentes. */
+  const cascosDe = (siglaAplic) => {
+    const a = cat.aplicacoes.find(x => x.sigla === siglaAplic);
+    return a ? ativos(cat.cascos).filter(c => c.paiId === a.id) : [];
+  };
+  const modelosDe = (siglaCasco, siglaAplic) => {
+    const c = cascosDe(siglaAplic).find(x => x.sigla === siglaCasco)
+      || cat.cascos.find(x => x.sigla === siglaCasco);
+    return c ? ativos(cat.modelos).filter(m => m.paiId === c.id) : [];
+  };
 
   /* O status vira badge com a cor que o sistema já usa para significado
      parecido: aprovado é verde, reprovado é vermelho, em teste é aviso. */
@@ -41,6 +59,7 @@ App.registerView('cnc', async (view) => {
         placeholder="🔎 Buscar por nome, nome original, aplicação, CFM, observações…">
       <div class="spacer"></div>
       <span class="muted small" id="cnc-contagem"></span>
+      <button class="btn" onclick="Cnc.catalogo()" title="Cadastrar aplicações, cascos, códigos e áreas">⚙ Classificações</button>
       <button class="btn" onclick="Cnc.print()">🖨️ Imprimir</button>
     </div>
 
@@ -85,8 +104,8 @@ App.registerView('cnc', async (view) => {
       (!filtroStatus || p.status === filtroStatus));
 
     const list = App.filtraPor(base, document.getElementById('cnc-busca').value,
-      ['nome', 'nomeOriginal', 'aplicacao', 'operacao', 'observacoes',
-        'aplicacaoLabel', 'operacaoLabel', 'statusLabel',
+      ['nome', 'nomeOriginal', 'aplicacao', 'operacao', 'casco', 'modelo', 'observacoes',
+        'aplicacaoLabel', 'operacaoLabel', 'cascoLabel', 'modeloLabel', 'statusLabel',
         p => p.cfm == null ? '' : String(p.cfm)]);
 
     document.getElementById('cnc-contagem').textContent =
@@ -99,8 +118,13 @@ App.registerView('cnc', async (view) => {
       { h: 'Nome original', key: 'Original', sort: p => (p.nomeOriginal || '').toUpperCase(), sortDesc: false,
         cell: p => p.nomeOriginal ? `<span class="mono small">${App.esc(p.nomeOriginal)}</span>` : '<span class="muted">—</span>' },
       { h: 'Aplicação', key: 'Aplicação', sort: p => (p.aplicacaoLabel || '') + (p.operacaoLabel || ''), sortDesc: false,
-        cell: p => `${App.esc(p.aplicacaoLabel || p.aplicacao || '—')}${
-          p.operacao ? `<div class="small muted">${App.esc(p.operacaoLabel || p.operacao)}</div>` : ''}` },
+        cell: p => {
+          /* A hierarquia inteira numa linha só: FC · México · BA */
+          const trilha = [p.aplicacaoLabel || p.aplicacao, p.cascoLabel || p.casco, p.modeloLabel || p.modelo]
+            .filter(Boolean).map(x => App.esc(x)).join(' <span class="muted">·</span> ');
+          return (trilha || '—') +
+            (p.operacao ? `<div class="small muted">${App.esc(p.operacaoLabel || p.operacao)}</div>` : '');
+        } },
       { h: 'Status', key: 'Status', sort: p => p.statusLabel || '', sortDesc: false, cell: p => selo(p) },
       { h: 'Última alteração', key: 'Alteração', sort: p => p.dataAlteracao || '', cell: p => App.date(p.dataAlteracao) },
       { h: 'CFM', class: 'num', key: 'CFM', sort: p => p.cfm == null ? -1 : Number(p.cfm),
@@ -124,8 +148,13 @@ App.registerView('cnc', async (view) => {
   const campos = (p) => [
     { name: 'aplicacao', label: 'Aplicação / tipo de cabeçote', type: 'select', value: p.aplicacao || 'UN',
       options: APLIC.map(([v, l]) => ({ value: v, label: `${v} — ${l}` })) },
-    { name: 'operacao', label: 'Operação / região', type: 'select', value: p.operacao || '',
-      options: OPER.map(([v, l]) => ({ value: v, label: v ? `${v} — ${l}` : l })) },
+    { name: 'casco', label: 'Origem / tipo do casco (opcional)', type: 'select', value: p.casco || '',
+      options: [{ value: '', label: '— não classificado —' }] },
+    { name: 'modelo', label: 'Modelo / código (opcional)', type: 'select', value: p.modelo || '',
+      options: [{ value: '', label: '— não classificado —' }] },
+    { name: 'operacao', label: 'Área de operação', type: 'select', value: p.operacao || '',
+      options: [{ value: '', label: 'Não se aplica' }]
+        .concat(OPER.map(([v, l]) => ({ value: v, label: `${v} — ${l}` }))) },
     { name: 'nome', label: 'Novo nome (padronizado) — os 5 primeiros aparecem no visor', value: p.nome || '', full: true },
     { name: 'nomeOriginal', label: 'Nome original do programa (como o Robson salvou)', value: p.nomeOriginal || '', full: true },
     { name: 'status', label: 'Status', type: 'select', value: p.status || 'em_teste',
@@ -142,9 +171,31 @@ App.registerView('cnc', async (view) => {
    * escolhe aplicação e operação, e oferece o próximo número da sequência.
    * É o que transforma a regra da máquina em algo visível na hora.
    */
-  const montarAjudaNome = (m, { sugerir }) => {
+  const montarAjudaNome = (m, { sugerir, valores }) => {
     const campo = n => m.querySelector(`[name="${n}"]`);
     const nome = campo('nome'), aplic = campo('aplicacao'), oper = campo('operacao');
+    const casco = campo('casco'), modelo = campo('modelo');
+
+    /* Cascata: trocar a aplicação recarrega os cascos dela, e trocar o casco
+       recarrega os modelos daquele casco. Sem isso, "BA" do México apareceria
+       para quem escolheu Germany. */
+    const encher = (sel, itens, escolhido) => {
+      sel.innerHTML = ['<option value="">— não classificado —</option>']
+        .concat(itens.map(i => `<option value="${App.esc(i.sigla)}"${i.sigla === escolhido ? ' selected' : ''}>${
+          App.esc(i.sigla)} — ${App.esc(i.nome)}</option>`)).join('');
+      sel.disabled = !itens.length;
+      sel.title = itens.length ? '' : 'Nada cadastrado para a escolha anterior — use ⚙ Configurar classificações';
+    };
+    const recarregarCascos = (manter) => {
+      encher(casco, cascosDe(aplic.value), manter || '');
+      recarregarModelos(manter ? (valores || {}).modelo : '');
+    };
+    const recarregarModelos = (manter) => {
+      encher(modelo, casco.value ? modelosDe(casco.value, aplic.value) : [], manter || '');
+    };
+    aplic.addEventListener('change', () => recarregarCascos(''));
+    casco.addEventListener('change', () => recarregarModelos(''));
+    recarregarCascos((valores || {}).casco);
     const aviso = document.createElement('div');
     aviso.className = 'cnc-preview';
     nome.parentElement.appendChild(aviso);
@@ -168,7 +219,8 @@ App.registerView('cnc', async (view) => {
       btn.style.marginTop = '6px';
       btn.textContent = '✨ Sugerir nome no padrão';
       btn.onclick = async () => {
-        const r = await App.get(`/cnc/proximo-nome?aplicacao=${encodeURIComponent(aplic.value)}&operacao=${encodeURIComponent(oper.value)}`);
+        const r = await App.get('/cnc/proximo-nome?aplicacao=' + encodeURIComponent(aplic.value) +
+          '&area=' + encodeURIComponent(oper.value) + '&modelo=' + encodeURIComponent(modelo.value || ''));
         nome.value = r.nome;
         atualizar();
       };
@@ -178,13 +230,159 @@ App.registerView('cnc', async (view) => {
   };
 
   window.Cnc = {
+    /* ---------- Configuração das classificações ----------
+       A oficina cadastra aqui um cabeçote ou uma área nova sem depender de
+       alteração no sistema. A hierarquia é aplicação → casco → modelo; as
+       áreas de operação são soltas e valem para qualquer aplicação. */
+    async catalogo() {
+      const c = await App.get('/cnc/catalogo');
+      const nomeDoPai = (id, lista) => {
+        const p = lista.find(x => x.id === id);
+        return p ? `${p.sigla} — ${p.nome}` : '—';
+      };
+      const linhaSigla = (x) => `<span class="cnc-visor">${App.esc(x.sigla)}</span>` +
+        (x.ativo === false ? ' <span class="badge cancelada">inativo</span>' : '');
+      const acoes = (x) => `
+        <button class="btn sm ghost" onclick="Cnc.catEditar(${x.id})" title="Editar">✏️</button>
+        <button class="btn sm ghost" onclick="Cnc.catAtivar(${x.id}, ${x.ativo === false})"
+          title="${x.ativo === false ? 'Reativar' : 'Inativar — some das escolhas, o histórico fica'}">${x.ativo === false ? '↩️' : '🚫'}</button>
+        <button class="btn sm ghost" onclick="Cnc.catExcluir(${x.id})" title="Excluir">🗑️</button>`;
+      const emUso = (x) => x.emUso
+        ? `<span class="small muted">${x.emUso} programa(s)</span>`
+        : '<span class="small muted">—</span>';
+
+      App.modal(`
+        <h2>⚙ Classificações dos programas CNC</h2>
+        <p class="small muted">Tudo aqui é cadastro: quando aparecer um cabeçote novo ou uma área de
+        usinagem nova, some nesta tela e ela passa a valer nos próximos programas.
+        <b>Os programas já cadastrados não são alterados.</b></p>
+
+        <div class="section-title" style="display:flex;justify-content:space-between;align-items:center">
+          <span>Aplicações / tipos de cabeçote</span>
+          <button class="btn sm" onclick="Cnc.catNovo('aplicacao')">+ Nova aplicação</button></div>
+        <p class="small muted" style="margin:-4px 0 6px">A sigla entra nos 2 primeiros caracteres do visor.</p>
+        ${App.table(c.aplicacoes, [
+          { h: 'Sigla', cell: linhaSigla },
+          { h: 'Nome', cell: x => App.esc(x.nome) },
+          { h: 'Em uso', cell: emUso },
+          { h: '', class: 'num', cell: acoes }
+        ], { emptyMsg: 'Nenhuma aplicação cadastrada' })}
+
+        <div class="section-title" style="display:flex;justify-content:space-between;align-items:center">
+          <span>Origens / tipos de casco</span>
+          <button class="btn sm" onclick="Cnc.catNovo('casco')">+ Novo casco</button></div>
+        <p class="small muted" style="margin:-4px 0 6px">Pertencem a uma aplicação — ex.: Fluxo cruzado → México.</p>
+        ${App.table(c.cascos, [
+          { h: 'Sigla', cell: linhaSigla },
+          { h: 'Nome', cell: x => App.esc(x.nome) },
+          { h: 'Aplicação', cell: x => App.esc(nomeDoPai(x.paiId, c.aplicacoes)) },
+          { h: 'Em uso', cell: emUso },
+          { h: '', class: 'num', cell: acoes }
+        ], { emptyMsg: 'Nenhum casco cadastrado ainda' })}
+
+        <div class="section-title" style="display:flex;justify-content:space-between;align-items:center">
+          <span>Modelos / códigos</span>
+          <button class="btn sm" onclick="Cnc.catNovo('modelo')">+ Novo código</button></div>
+        <p class="small muted" style="margin:-4px 0 6px">Pertencem a um casco — ex.: México → BA, AB, AD.</p>
+        ${App.table(c.modelos, [
+          { h: 'Sigla', cell: linhaSigla },
+          { h: 'Nome', cell: x => App.esc(x.nome) },
+          { h: 'Casco', cell: x => App.esc(nomeDoPai(x.paiId, c.cascos)) },
+          { h: 'Em uso', cell: emUso },
+          { h: '', class: 'num', cell: acoes }
+        ], { emptyMsg: 'Nenhum código cadastrado ainda' })}
+
+        <div class="section-title" style="display:flex;justify-content:space-between;align-items:center">
+          <span>Áreas de operação</span>
+          <button class="btn sm" onclick="Cnc.catNovo('area')">+ Nova área</button></div>
+        <p class="small muted" style="margin:-4px 0 6px">A sigla entra logo depois da aplicação — com 3 caracteres,
+        aplicação + área preenchem exatamente os 5 do visor.</p>
+        ${App.table(c.areas, [
+          { h: 'Sigla', cell: linhaSigla },
+          { h: 'Nome', cell: x => App.esc(x.nome) },
+          { h: 'Em uso', cell: emUso },
+          { h: '', class: 'num', cell: acoes }
+        ], { emptyMsg: 'Nenhuma área cadastrada' })}
+
+        <div class="actions"><button class="btn primary" onclick="App.closeModal()">Fechar</button></div>`,
+        { wide: true });
+    },
+
+    async catNovo(tipo) {
+      const c = await App.get('/cnc/catalogo');
+      const ROTULO = { aplicacao: 'aplicação', casco: 'origem/casco', modelo: 'modelo/código', area: 'área de operação' };
+      const pais = tipo === 'casco' ? c.aplicacoes : tipo === 'modelo' ? c.cascos : null;
+      if (pais && !pais.length) {
+        return App.toast(tipo === 'casco'
+          ? 'Cadastre uma aplicação antes de cadastrar um casco.'
+          : 'Cadastre um casco antes de cadastrar um código.', 'err');
+      }
+      const m = App.form(`Nova ${ROTULO[tipo]}`, [
+        { name: 'sigla', label: 'Sigla (entra no nome do programa)', required: true },
+        { name: 'nome', label: 'Nome por extenso', required: true, full: true },
+        ...(pais ? [{ name: 'paiId', label: tipo === 'casco' ? 'Aplicação' : 'Casco', type: 'select',
+          required: true, full: true,
+          options: pais.map(p => ({ value: p.id, label: `${p.sigla} — ${p.nome}` })) }] : [])
+      ], async d => {
+        await App.post('/cnc/catalogo', Object.assign({ tipo }, d, { paiId: d.paiId ? Number(d.paiId) : null }));
+        App.closeModal(); App.toast('Cadastrado', 'ok'); App.route();
+      });
+      /* Mostra o efeito da sigla no visor enquanto a pessoa digita — é a
+         única forma de perceber, na hora, que uma sigla de 4 letras vai
+         empurrar a informação para fora dos 5 caracteres da máquina. */
+      if (tipo === 'aplicacao' || tipo === 'area') {
+        const sigla = m.querySelector('[name="sigla"]');
+        const dica = document.createElement('div');
+        dica.className = 'cnc-preview';
+        sigla.parentElement.appendChild(dica);
+        const ver = () => {
+          const v = String(sigla.value || '').toUpperCase();
+          const exemplo = tipo === 'aplicacao' ? (v + 'ADM') : ('UN' + v);
+          dica.innerHTML = v
+            ? `Ficaria assim no visor: <span class="cnc-visor">${App.esc(exemplo.slice(0, 5).padEnd(5, '·'))}</span>` +
+              (exemplo.length > 5 ? ' <span class="warn-txt small">⚠ passa dos 5 caracteres — parte não aparece na máquina</span>' : '')
+            : '';
+        };
+        sigla.addEventListener('input', ver);
+      }
+    },
+
+    async catEditar(id) {
+      const c = await App.get('/cnc/catalogo');
+      const x = [].concat(c.aplicacoes, c.cascos, c.modelos, c.areas).find(y => y.id === id);
+      if (!x) return;
+      App.form(`Editar ${App.esc(x.sigla)} — ${App.esc(x.nome)}`, [
+        { name: 'sigla', label: 'Sigla', value: x.sigla, required: true },
+        { name: 'nome', label: 'Nome por extenso', value: x.nome, required: true, full: true }
+      ], async d => {
+        const r = await App.put('/cnc/catalogo/' + id, d);
+        App.closeModal();
+        App.toast(r.migrados
+          ? `Atualizado — ${r.migrados} programa(s) acompanharam a sigla (o nome deles não mudou)`
+          : 'Atualizado', 'ok');
+        App.route();
+      });
+    },
+
+    async catAtivar(id, reativar) {
+      try {
+        await App.put('/cnc/catalogo/' + id, { ativo: !!reativar });
+        App.toast(reativar ? 'Reativado' : 'Inativado — some das escolhas, o histórico fica', 'ok');
+        App.route();
+      } catch (e) { App.toast(e.message, 'err'); }
+    },
+
+    catExcluir(id) {
+      App.closeModal();
+      App.excluirLancamento(`/cnc/catalogo/${id}`, 'esta classificação');
+    },
     novo() {
       const m = App.form('Novo programa CNC', campos({}), async d => {
         d.cfm = d.cfm === '' ? null : Number(d.cfm);
         await App.post('/cnc', d);
         App.closeModal(); App.toast('Programa cadastrado', 'ok'); App.route();
       }, { wide: true });
-      montarAjudaNome(m, { sugerir: true });
+      montarAjudaNome(m, { sugerir: true, valores: {} });
     },
 
     editar(id) {
@@ -199,7 +397,7 @@ App.registerView('cnc', async (view) => {
           App.toast(r.mudancas && r.mudancas.length ? 'Programa atualizado — registrado no histórico' : 'Nada mudou', 'ok');
           App.route();
         }, { wide: true });
-      montarAjudaNome(m, { sugerir: false });
+      montarAjudaNome(m, { sugerir: false, valores: { casco: p.casco, modelo: p.modelo } });
     },
 
     /* Ficha do programa: tudo que não cabe na listagem. */
@@ -212,8 +410,9 @@ App.registerView('cnc', async (view) => {
 
       App.modal(`
         <h2>${visorHtml(p)} ${selo(p)}</h2>
-        <p class="small muted">${App.esc(p.aplicacaoLabel || p.aplicacao || '')}${
-          p.operacaoLabel && p.operacao ? ' · ' + App.esc(p.operacaoLabel) : ''}
+        <p class="small muted">${[p.aplicacaoLabel || p.aplicacao, p.cascoLabel || p.casco,
+            p.modeloLabel || p.modelo, p.operacao ? (p.operacaoLabel || p.operacao) : '']
+          .filter(Boolean).map(x => App.esc(x)).join(' · ')}
           ${p.nomeOriginal ? ' · original: ' + App.esc(p.nomeOriginal) : ''}</p>
 
         <table style="font-size:13.5px">
@@ -221,7 +420,9 @@ App.registerView('cnc', async (view) => {
           ${linha('Nome original', p.nomeOriginal ? `<span class="mono">${App.esc(p.nomeOriginal)}</span>` : '<span class="muted">—</span>')}
           ${linha('No visor da máquina', `<span class="cnc-visor">${App.esc(p.visor.padEnd(5, '·'))}</span>`)}
           ${linha('Aplicação', App.esc(p.aplicacaoLabel || p.aplicacao || '—'))}
-          ${linha('Operação', p.operacao ? App.esc(p.operacaoLabel || p.operacao) : '<span class="muted">não se aplica</span>')}
+          ${linha('Origem / casco', p.casco ? App.esc(p.cascoLabel || p.casco) : '<span class="muted">não classificado</span>')}
+          ${linha('Modelo / código', p.modelo ? App.esc(p.modeloLabel || p.modelo) : '<span class="muted">não classificado</span>')}
+          ${linha('Área de operação', p.operacao ? App.esc(p.operacaoLabel || p.operacao) : '<span class="muted">não se aplica</span>')}
           ${linha('Status', selo(p))}
           ${linha('CFM (teste de bancada)', p.cfm == null ? '<span class="muted">sem resultado</span>' : `<b>${App.esc(String(p.cfm))}</b>`)}
           ${linha('Criado em', App.date(p.dataCriacao))}
@@ -291,7 +492,9 @@ App.registerView('cnc', async (view) => {
           <td><b>${App.esc(p.visor)}</b></td>
           <td>${App.esc(p.nome || '—')}</td>
           <td>${App.esc(p.nomeOriginal || '—')}</td>
-          <td>${App.esc(p.aplicacaoLabel || p.aplicacao || '—')}${p.operacao ? `<div class="sub">${App.esc(p.operacaoLabel)}</div>` : ''}</td>
+          <td>${[p.aplicacaoLabel || p.aplicacao, p.cascoLabel || p.casco, p.modeloLabel || p.modelo]
+            .filter(Boolean).map(x => App.esc(x)).join(' · ') || '—'}${
+            p.operacao ? `<div class="sub">${App.esc(p.operacaoLabel || p.operacao)}</div>` : ''}</td>
           <td>${App.esc(p.statusLabel)}</td>
           <td class="num">${p.cfm == null ? '—' : App.esc(String(p.cfm))}</td>
           <td>${App.date(p.dataAlteracao)}</td></tr>`).join('')}</table>`,
