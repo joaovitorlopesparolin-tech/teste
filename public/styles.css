@@ -23,6 +23,13 @@
   /* Cores de apoio para status (dessaturadas, sem poluição visual) */
   --ok: #4fae7c;
   --ok-bg: rgba(79, 174, 124, .12);
+  /* Programas CNC: azul escuro de painel de máquina. Fica no módulo, sem
+     disputar com o vermelho da marca no resto do sistema. */
+  --cnc: #5b90c9;
+  --cnc-deep: #14283f;
+  --cnc-bg: rgba(91, 144, 201, .12);
+  --cnc-line: rgba(91, 144, 201, .35);
+
   --warn: #c9a45b;
   --warn-bg: rgba(201, 164, 91, .12);
   --danger: #c96b5b;
@@ -801,3 +808,37 @@ hr.sep { border: none; border-top: 1px solid var(--line-soft); margin: 14px 0; }
   .ag-dia { min-height: 62px; break-inside: avoid; }
   .ag-mes { break-inside: avoid; }
 }
+
+
+/* ---------- Programas CNC (ROMI D600) ---------- */
+
+/* Os 5 caracteres que a máquina mostra, com cara de visor: monoespaçada,
+   fundo azul escuro e letra espaçada, para bater o olho e reconhecer. */
+.cnc-visor {
+  font-family: var(--mono); font-size: 12.5px; font-weight: 700;
+  letter-spacing: .14em; color: var(--cnc);
+  background: var(--cnc-deep); border: 1px solid var(--cnc-line);
+  border-radius: 4px; padding: 2px 7px; white-space: nowrap;
+}
+.cnc-resto {
+  font-family: var(--mono); font-size: 12.5px; color: var(--text-2);
+  letter-spacing: .05em; margin-left: 3px;
+}
+
+/* Filtros como chips: mais rápido de acertar com o dedo que um seletor. */
+.cnc-chips { display: inline-flex; gap: 5px; flex-wrap: wrap; }
+.cnc-chip {
+  background: var(--bg-3); border: 1px solid var(--line); color: var(--text-2);
+  border-radius: 999px; padding: 3px 11px; font-size: 12px; cursor: pointer;
+  font-family: inherit; transition: border-color .12s, color .12s, background .12s;
+}
+.cnc-chip:hover { border-color: var(--cnc-line); color: var(--text-1); }
+.cnc-chip.on { background: var(--cnc-bg); border-color: var(--cnc); color: var(--cnc); font-weight: 600; }
+.cnc-sep { width: 1px; height: 18px; background: var(--line); display: inline-block; }
+
+.cnc-legenda { border-left: 3px solid var(--cnc); margin: 12px 0; }
+.cnc-legenda b { display: block; margin-bottom: 3px; }
+
+/* Prévia do nome dentro do formulário, enquanto a pessoa digita. */
+.cnc-preview { margin-top: 6px; font-size: 12px; color: var(--text-2); line-height: 1.6; }
+.warn-txt { color: var(--warn); }

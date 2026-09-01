@@ -3444,6 +3444,266 @@ route('DELETE', '/api/purchases/:id', 'purchases', async (req, res, user, params
   ok(res, { ok: true, contas: contas.length, movimentacoes: movs.length, caixa: caixa.length });
 });
 
+/* ================= Programas CNC — ROMI D600 =================
+   O banco de dados dos programas da máquina, no lugar da planilha: qual é o
+   programa, para que serve, qual o nome que o programador deu, em que pé
+   está, o que deu no teste de bancada e quem mexeu nele.
+
+   A regra que molda tudo aqui é física: o visor da ROMI D600 mostra só os
+   CINCO primeiros caracteres do nome. Então a identificação precisa caber
+   nesses cinco — daí a nomenclatura UN/FC + ADM/ESC, que dá "UNADM", "FCESC"
+   já legíveis na máquina, antes de qualquer número de sequência.
+
+   Nome original NUNCA é alterado nem apagado: é por ele que o programador se
+   entende com os arquivos que já existem. O nome padronizado vive ao lado. */
+
+const CNC_DIR = path.join(db.DATA_DIR, 'cnc');
+const CNC_EXTS = ['nc', 'txt', 'min', 'mpf', 'tap', 'cnc', 'iso', 'eia', 'gcode', 'ngc', 'h', 'prg'];
+
+/* Aplicações conhecidas. `codigo` é o que entra no nome e precisa ter 2
+   caracteres para sobrar espaço à operação dentro dos 5 do visor. Novas
+   aplicações entram aqui — o cadastro aceita qualquer código de 2 letras. */
+/* [codigo, nome por extenso, rótulo curto do filtro]. O rótulo curto é o
+   código porque é assim que a equipe fala e é o que está no visor. */
+const CNC_APLICACOES = [
+  ['UN', 'Unilateral', 'UN'],
+  ['FC', 'Fluxo cruzado', 'FC'],
+  ['EA', 'EA888', 'EA888'],
+  ['OU', 'Outra aplicação', 'Outra']
+];
+const CNC_OPERACOES = [
+  ['ADM', 'Admissão', 'ADM'],
+  ['ESC', 'Escape', 'ESC'],
+  ['', 'Não se aplica', '—']
+];
+const CNC_STATUS = ['em_teste', 'aprovado', 'reprovado', 'nao_utiliza'];
+const CNC_STATUS_LABEL = {
+  em_teste: 'Em teste', aprovado: 'Aprovado',
+  reprovado: 'Reprovado', nao_utiliza: 'Não utiliza mais'
+};
+
+/** Os 5 caracteres que aparecem no visor da máquina. */
+const cncVisor = (nome) => String(nome || '').slice(0, 5).toUpperCase();
+
+/**
+ * Próximo nome sugerido para uma aplicação + operação.
+ * Ex.: UN + ADM, com UNADM01 e UNADM02 já cadastrados, devolve UNADM03.
+ * A sequência é por prefixo, não global: cada combinação numera do seu jeito.
+ */
+function proximoNomeCnc(aplicacao, operacao) {
+  const prefixo = (String(aplicacao || '').toUpperCase() + String(operacao || '').toUpperCase()).slice(0, 5);
+  if (!prefixo) return '';
+  const usados = db.all('cncPrograms')
+    .map(p => String(p.nome || '').toUpperCase())
+    .filter(n => n.startsWith(prefixo))
+    .map(n => parseInt(n.slice(prefixo.length).replace(/\D/g, ''), 10))
+    .filter(n => !isNaN(n));
+  const proximo = (usados.length ? Math.max(...usados) : 0) + 1;
+  return prefixo + String(proximo).padStart(2, '0');
+}
+
+function cncComExtras(p) {
+  return Object.assign({}, p, {
+    visor: cncVisor(p.nome || p.nomeOriginal),
+    statusLabel: CNC_STATUS_LABEL[p.status] || p.status,
+    aplicacaoLabel: (CNC_APLICACOES.find(a => a[0] === p.aplicacao) || [null, p.aplicacao])[1] || '',
+    operacaoLabel: (CNC_OPERACOES.find(o => o[0] === p.operacao) || [null, p.operacao])[1] || ''
+  });
+}
+
+route('GET', '/api/cnc/meta', 'cnc', async (req, res) => ok(res, {
+  aplicacoes: CNC_APLICACOES, operacoes: CNC_OPERACOES,
+  status: CNC_STATUS.map(s => [s, CNC_STATUS_LABEL[s]]),
+  extensoes: CNC_EXTS
+}));
+
+route('GET', '/api/cnc/proximo-nome', 'cnc', async (req, res, user, params, query) => {
+  ok(res, { nome: proximoNomeCnc(query.aplicacao, query.operacao) });
+});
+
+route('GET', '/api/cnc', 'cnc', async (req, res) => {
+  ok(res, db.all('cncPrograms').map(cncComExtras)
+    .sort((a, b) => String(a.nome || a.nomeOriginal || '').localeCompare(String(b.nome || b.nomeOriginal || ''), 'pt-BR')));
+});
+
+route('GET', '/api/cnc/:id', 'cnc', async (req, res, user, params) => {
+  const p = db.get('cncPrograms', params.id);
+  return p ? ok(res, cncComExtras(p)) : notFound(res);
+});
+
+/* Campos que o histórico acompanha, com o nome que a pessoa lê na tela. */
+const CNC_CAMPOS = {
+  nome: 'nome padronizado', nomeOriginal: 'nome original', aplicacao: 'aplicação',
+  operacao: 'operação', dataCriacao: 'data de criação', dataAlteracao: 'último salvamento',
+  status: 'status', cfm: 'CFM', observacoes: 'observações'
+};
+
+route('POST', '/api/cnc', 'cnc', async (req, res, user) => {
+  const b = await readBody(req);
+  const nome = String(b.nome || '').trim().toUpperCase();
+  const nomeOriginal = String(b.nomeOriginal || '').trim();
+  if (!nome && !nomeOriginal) return bad(res, 'Informe ao menos o nome padronizado ou o nome original.');
+
+  /* Nome padronizado repetido confundiria na máquina, onde só os 5 primeiros
+     caracteres aparecem — dois programas com o mesmo nome são indistinguíveis. */
+  if (nome && db.all('cncPrograms').some(p => String(p.nome || '').toUpperCase() === nome)) {
+    return bad(res, `Já existe um programa com o nome ${nome}.`);
+  }
+
+  const rec = db.insert('cncPrograms', {
+    nome, nomeOriginal,
+    aplicacao: String(b.aplicacao || '').toUpperCase(),
+    operacao: String(b.operacao || '').toUpperCase(),
+    dataCriacao: b.dataCriacao || domain.today(),
+    dataAlteracao: b.dataAlteracao || b.dataCriacao || domain.today(),
+    status: CNC_STATUS.includes(b.status) ? b.status : 'em_teste',
+    cfm: b.cfm === '' || b.cfm === undefined || b.cfm === null ? null : Number(b.cfm),
+    observacoes: b.observacoes || '',
+    arquivo: null, arquivoNome: '', arquivoTamanho: 0,
+    historico: [{
+      at: new Date().toISOString(), por: user.name,
+      evento: 'Programa cadastrado' + (nome ? ` como ${nome}` : '') +
+        (nomeOriginal ? ` (original: ${nomeOriginal})` : '')
+    }]
+  });
+  audit(user, 'criou', 'cncPrograms', rec.id,
+    `Programa CNC ${rec.nome || rec.nomeOriginal} — ${rec.aplicacao}${rec.operacao} (${CNC_STATUS_LABEL[rec.status]})`);
+  ok(res, cncComExtras(rec));
+});
+
+route('PUT', '/api/cnc/:id', 'cnc', async (req, res, user, params) => {
+  const antes = db.get('cncPrograms', params.id);
+  if (!antes) return notFound(res);
+  const b = await readBody(req);
+  const nome = b.nome === undefined ? antes.nome : String(b.nome || '').trim().toUpperCase();
+
+  if (nome && db.all('cncPrograms').some(p => p.id !== antes.id && String(p.nome || '').toUpperCase() === nome)) {
+    return bad(res, `Já existe outro programa com o nome ${nome}.`);
+  }
+
+  const patch = {
+    nome,
+    /* O nome original é o que o programador usa para achar o arquivo dele.
+       Só muda se vier preenchido — nunca é esvaziado por um formulário
+       que não trouxe o campo. */
+    nomeOriginal: b.nomeOriginal === undefined || b.nomeOriginal === '' ? antes.nomeOriginal : String(b.nomeOriginal).trim(),
+    aplicacao: b.aplicacao === undefined ? antes.aplicacao : String(b.aplicacao || '').toUpperCase(),
+    operacao: b.operacao === undefined ? antes.operacao : String(b.operacao || '').toUpperCase(),
+    dataCriacao: b.dataCriacao || antes.dataCriacao,
+    dataAlteracao: b.dataAlteracao || domain.today(),
+    status: CNC_STATUS.includes(b.status) ? b.status : antes.status,
+    cfm: b.cfm === '' || b.cfm === undefined || b.cfm === null ? antes.cfm : Number(b.cfm),
+    observacoes: b.observacoes === undefined ? antes.observacoes : b.observacoes
+  };
+
+  const mudancas = Object.keys(CNC_CAMPOS)
+    .filter(k => patch[k] !== undefined && JSON.stringify(antes[k] ?? '') !== JSON.stringify(patch[k] ?? ''))
+    .map(k => `${CNC_CAMPOS[k]}: ${antes[k] || '—'} → ${patch[k] || '—'}`);
+
+  if (mudancas.length) {
+    patch.historico = (antes.historico || []).concat([{
+      at: new Date().toISOString(), por: user.name,
+      evento: mudancas.join('; ') + (b.motivo ? ` — ${b.motivo}` : '')
+    }]);
+  }
+  const rec = db.update('cncPrograms', antes.id, patch);
+  audit(user, 'alterou', 'cncPrograms', rec.id,
+    `Programa CNC ${rec.nome || rec.nomeOriginal}` + (mudancas.length ? ' — ' + mudancas.join('; ') : ' (sem alteração)'));
+  ok(res, Object.assign(cncComExtras(rec), { mudancas }));
+});
+
+/**
+ * Excluir é a última opção — e o servidor diz isso. Programa com histórico
+ * técnico ou com o arquivo anexado guarda conhecimento que some junto; o
+ * caminho normal é marcar "Não utiliza mais", que tira das listas de trabalho
+ * sem perder o que foi aprendido. Quem insiste confirma uma segunda vez.
+ */
+route('DELETE', '/api/cnc/:id', 'cnc_delete', async (req, res, user, params) => {
+  const p = db.get('cncPrograms', params.id);
+  if (!p) return notFound(res);
+  const confirmado = String(req.headers['x-confirmar'] || '').toLowerCase() === 'sim';
+  const alteracoes = (p.historico || []).length;
+
+  if ((alteracoes > 1 || p.arquivo) && !confirmado) {
+    const partes = [];
+    if (alteracoes > 1) partes.push(`Este programa tem ${alteracoes} registro(s) no histórico técnico`);
+    if (p.arquivo) partes.push('e o arquivo do programa anexado');
+    return send(res, 409, {
+      error: partes.join(' ') + '. Marcar como "Não utiliza mais" tira ele das listas ' +
+        'e preserva tudo isso. Excluir apaga de vez. Confirma a exclusão?',
+      precisaConfirmar: true, alteracoes, temArquivo: !!p.arquivo
+    });
+  }
+
+  if (p.arquivo) { try { fs.unlinkSync(path.join(CNC_DIR, p.arquivo)); } catch (e) { /* já não existe */ } }
+  db.remove('cncPrograms', p.id);
+  audit(user, 'excluiu', 'cncPrograms', Number(params.id),
+    `Programa CNC ${p.nome || p.nomeOriginal} excluído` + (alteracoes > 1 ? ` (${alteracoes} registros de histórico)` : ''));
+  ok(res, { ok: true });
+});
+
+/* ---- arquivo do programa ---- */
+route('POST', '/api/cnc/:id/arquivo', 'cnc', async (req, res, user, params, query) => {
+  const p = db.get('cncPrograms', params.id);
+  if (!p) return notFound(res);
+  const nomeArq = String(query.nome || 'programa.nc').slice(0, 160);
+  const ext = (nomeArq.split('.').pop() || '').toLowerCase();
+  if (!CNC_EXTS.includes(ext)) {
+    return bad(res, `Extensão .${ext} não reconhecida. Aceitos: ${CNC_EXTS.map(e => '.' + e).join(', ')}.`);
+  }
+  const MAX = 20 * 1024 * 1024;   // programa de CNC é texto: 20 MB já é folgado
+  if (Number(req.headers['content-length'] || 0) > MAX) {
+    return send(res, 413, { error: 'Arquivo grande demais (limite: 20 MB).' });
+  }
+  fs.mkdirSync(CNC_DIR, { recursive: true });
+  const fname = `${p.id}-${Date.now()}.${ext}`;
+  const fpath = path.join(CNC_DIR, fname);
+  let size = 0, aborted = false;
+  const ws = fs.createWriteStream(fpath);
+  req.on('data', chunk => {
+    if (aborted) return;
+    size += chunk.length;
+    if (size > MAX) {
+      aborted = true; ws.destroy(); fs.unlink(fpath, () => {});
+      send(res, 413, { error: 'Arquivo grande demais (limite: 20 MB).' });
+      res.on('finish', () => req.destroy());
+      return;
+    }
+    ws.write(chunk);
+  });
+  req.on('end', () => {
+    if (aborted) return;
+    ws.end(() => {
+      /* Substituir o anexo apaga o anterior: guardar versões antigas sem
+         ninguém pedir encheria o disco da oficina em silêncio. */
+      if (p.arquivo) { try { fs.unlinkSync(path.join(CNC_DIR, p.arquivo)); } catch (e) { /* já não existe */ } }
+      const rec = db.update('cncPrograms', p.id, {
+        arquivo: fname, arquivoNome: nomeArq, arquivoTamanho: size,
+        historico: (p.historico || []).concat([{
+          at: new Date().toISOString(), por: user.name,
+          evento: `Arquivo anexado: ${nomeArq} (${(size / 1024).toFixed(1)} KB)`
+        }])
+      });
+      audit(user, 'anexou', 'cncPrograms', p.id, `Arquivo ${nomeArq} no programa ${p.nome || p.nomeOriginal}`);
+      ok(res, cncComExtras(rec));
+    });
+  });
+  req.on('error', () => { aborted = true; ws.destroy(); fs.unlink(fpath, () => {}); });
+});
+
+route('GET', '/api/cnc/:id/arquivo', 'cnc', async (req, res, user, params) => {
+  const p = db.get('cncPrograms', params.id);
+  if (!p || !p.arquivo) return notFound(res);
+  const fpath = path.join(CNC_DIR, p.arquivo);
+  if (!fs.existsSync(fpath)) return notFound(res);
+  res.writeHead(200, {
+    'Content-Type': 'text/plain; charset=utf-8',
+    'Content-Disposition': `attachment; filename="${encodeURIComponent(p.arquivoNome || p.arquivo)}"`,
+    'Content-Length': fs.statSync(fpath).size
+  });
+  fs.createReadStream(fpath).pipe(res);
+});
+
 /* ================= Créditos de clientes =================
    Saldo que a empresa deve ao cliente e que ele abate numa compra futura.
    Nasce principalmente de cliente que também é lojista/fornecedor: a empresa

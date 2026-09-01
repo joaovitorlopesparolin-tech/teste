@@ -874,7 +874,8 @@ const App = {
       ['stock', 'Estoque próprio', '▦', ['stock', 'stock_history']],
       ['products', 'Produtos e custos', '◈', 'products'],
       ['purchases', 'Compras', '📥', 'purchases'],
-      ['suppliers', 'Fornecedores', '🏭', 'suppliers']
+      ['suppliers', 'Fornecedores', '🏭', 'suppliers'],
+      ['cnc', 'Programas CNC', '📟', 'cnc']
     ]],
     ['Financeiro', [
       ['agenda', 'Agenda financeira', '🗓', ['payables', 'receivables']],
