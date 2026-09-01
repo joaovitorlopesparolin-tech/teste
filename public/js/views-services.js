@@ -501,22 +501,42 @@ App.registerView('os', async (view) => {
   const [oss, clients] = await Promise.all([App.get('/serviceOrders'), App.get('/clients')]);
   oss.sort((a, b) => b.id - a.id);
   const OS_ST = ['em_analise', 'em_andamento', 'aguardando_peca', 'finalizado', 'aguardando_pagamento', 'cancelado'];
+  /* "Pendentes" reúne, num filtro só, tudo que ainda precisa de alguma ação —
+     é a lista que a equipe imprime para saber o que falta fazer. Finalizado e
+     cancelado ficam de fora por definição. */
+  const OS_PENDENTES = ['em_analise', 'em_andamento', 'aguardando_peca', 'aguardando_pagamento'];
+  const ehPendente = o => OS_PENDENTES.includes(o.status);
+  /* Um só lugar decide o que a tela e a impressão mostram, para o papel
+     nunca sair diferente do que está aparecendo. */
+  const selecionadas = () => {
+    const f = document.getElementById('osf').value;
+    if (f === 'pendentes') return oss.filter(ehPendente);
+    return oss.filter(o => !f || o.status === f);
+  };
+  const rotuloFiltro = () => {
+    const f = document.getElementById('osf').value;
+    if (f === 'pendentes') return 'pendentes (não finalizadas)';
+    return f ? (App.STATUS[f] || [f])[0] : '';
+  };
   const verValores = App.can('cashflow') || App.can('receivables') || App.can('payables') || App.can('finance_sensitive');
 
   view.innerHTML = `
     <div class="toolbar">
-      <select id="osf" style="max-width:220px">
+      <select id="osf" style="max-width:260px">
         <option value="">Todos os status</option>
+        <option value="pendentes">⏳ Pendentes — tudo que falta concluir</option>
         ${OS_ST.map(s => `<option value="${s}">${(App.STATUS[s] || [s])[0]}</option>`).join('')}
       </select>
       <div class="spacer"></div>
+      <span class="badge ${oss.filter(ehPendente).length ? 'warn' : 'ok'}">${oss.filter(ehPendente).length} pendente(s)</span>
+      <span class="muted small" id="os-contagem"></span>
       <button class="btn" onclick="OS.print()">🖨️ Imprimir</button>
     </div>
     <div id="os-table"></div>`;
 
   const render = () => {
-    const f = document.getElementById('osf').value;
-    const list = oss.filter(o => !f || o.status === f);
+    const list = selecionadas();
+    document.getElementById('os-contagem').textContent = `${list.length} OS na seleção`;
     document.getElementById('os-table').innerHTML = App.table(list, [
       { h: 'OS / Cliente', cell: o => `<b>OS ${o.numero} — ${App.esc(App.clientName(o.clienteId, clients))}</b>
         <div class="small muted">${[o.identificacao, o.modelo].filter(Boolean).map(x => App.esc(x)).join(' · ') || '—'}</div>` },
@@ -847,15 +867,22 @@ App.registerView('os', async (view) => {
         <div class="sig"><div>Executado por</div><div>Conferido por</div></div>`,
         `Status: ${(App.STATUS[o.status] || [o.status])[0]}`);
     },
+    /* Imprime exatamente o que está na tela — inclusive o filtro
+       "Pendentes", que é o motivo de ele existir: uma folha só com tudo
+       que ainda falta concluir. */
     print() {
-      const f = document.getElementById('osf').value;
-      const list = oss.filter(o => !f || o.status === f);
-      App.print('Ordens de serviço' + (f ? ' — ' + (App.STATUS[f] || [f])[0] : ''),
-        `<table><tr><th>OS</th><th>Cliente</th><th>Modelo</th><th>Serviços</th><th>Previsão</th><th>Status</th></tr>
+      const list = selecionadas();
+      const rotulo = rotuloFiltro();
+      App.print('Ordens de serviço' + (rotulo ? ' — ' + rotulo : ''),
+        `<table><tr><th>OS</th><th>Cliente</th><th>Modelo</th><th>Serviços</th>
+          <th>Previsão</th><th>Responsável</th><th>Status</th></tr>
         ${list.map(o => `<tr><td>${o.numero}</td><td>${App.esc(App.clientName(o.clienteId, clients))}</td>
-        <td>${App.esc(o.modelo || '')}</td><td>${(o.itens || []).map(i => App.esc(i.nome)).join(', ')}</td>
-        <td>${App.date(o.previsaoEntrega)}</td><td>${(App.STATUS[o.status] || [o.status])[0]}</td></tr>`).join('')}</table>`,
-        list.length + ' OS');
+        <td>${App.esc(o.modelo || '')}${o.identificacao ? `<div class="sub">${App.esc(o.identificacao)}</div>` : ''}</td>
+        <td>${(o.itens || []).map(i => App.esc(i.nome)).join(', ')}</td>
+        <td>${App.date(o.previsaoEntrega)}</td><td>${App.esc(App.userName(o.responsavelId))}</td>
+        <td>${(App.STATUS[o.status] || [o.status])[0]}</td></tr>`).join('')}</table>` +
+        '<div class="sig"><div>Conferido por</div><div>Responsável</div></div>',
+        `${list.length} OS` + (rotulo ? ` — ${rotulo}` : ''));
     }
   };
 });

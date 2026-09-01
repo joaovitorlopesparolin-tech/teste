@@ -516,20 +516,76 @@ const App = {
   },
 
   /* Tabela genérica. cols: [{h, class, cell:(row)=>html}] */
-  table(rows, cols, { onRow, emptyMsg } = {}) {
-    if (!rows.length) return `<div class="tablewrap"><div class="empty">${emptyMsg || 'Nenhum registro encontrado'}</div></div>`;
+  /**
+   * Tabela padrão do sistema.
+   *
+   * Uma coluna ganha ordenação declarando `sort`: uma função que devolve o
+   * valor a comparar (data como texto ISO, valor como número). O cabeçalho
+   * dessas colunas vira clicável, mostra a seta da direção atual e alterna
+   * a cada clique. Quem controla o estado é a tela, via `sortState` — assim
+   * a ordem sobrevive ao redesenho que os filtros provocam.
+   *
+   * sortState: { chave, desc } — objeto que a view guarda e passa de volta.
+   */
+  table(rows, cols, { onRow, emptyMsg, sortState, onSort } = {}) {
+    const ordenavel = cols.some(c => c.sort);
+    let lista = rows;
+
+    if (ordenavel && sortState && sortState.chave) {
+      const col = cols.find(c => (c.key || c.h) === sortState.chave && c.sort);
+      if (col) {
+        /* localeCompare para texto e subtração para número: ordenar data
+           como texto ISO já sai certo, e valor precisa ser numérico para
+           1.000 não vir antes de 900. */
+        lista = rows.slice().sort((a, b) => {
+          const va = col.sort(a), vb = col.sort(b);
+          const cmp = (typeof va === 'number' && typeof vb === 'number')
+            ? va - vb
+            : String(va == null ? '' : va).localeCompare(String(vb == null ? '' : vb), 'pt-BR');
+          return sortState.desc ? -cmp : cmp;
+        });
+      }
+    }
+
+    if (!lista.length) return `<div class="tablewrap"><div class="empty">${emptyMsg || 'Nenhum registro encontrado'}</div></div>`;
     const id = 'tb' + Math.random().toString(36).slice(2, 8);
+
     setTimeout(() => {
-      if (!onRow) return;
       const el = document.getElementById(id);
-      if (el) el.querySelectorAll('tbody tr').forEach((tr, i) => {
-        tr.classList.add('clickable');
-        tr.addEventListener('click', e => { if (!e.target.closest('button,select,a,input')) onRow(rows[i]); });
-      });
+      if (!el) return;
+      if (onRow) {
+        el.querySelectorAll('tbody tr').forEach((tr, i) => {
+          tr.classList.add('clickable');
+          tr.addEventListener('click', e => { if (!e.target.closest('button,select,a,input')) onRow(lista[i]); });
+        });
+      }
+      if (onSort) {
+        el.querySelectorAll('th[data-sort]').forEach(th => {
+          th.addEventListener('click', () => {
+            const chave = th.dataset.sort;
+            const mesma = sortState && sortState.chave === chave;
+            /* Primeiro clique numa coluna começa na ordem mais útil dela —
+               data e valor abrem do maior para o menor, que é o que a pessoa
+               quer ver primeiro; texto abre de A a Z. */
+            const col = cols.find(c => (c.key || c.h) === chave);
+            onSort({ chave, desc: mesma ? !sortState.desc : (col && col.sortDesc !== false) });
+          });
+        });
+      }
     });
+
+    const cabecalho = (c) => {
+      if (!c.sort || !onSort) return `<th class="${c.class || ''}">${c.h}</th>`;
+      const chave = c.key || c.h;
+      const ativa = sortState && sortState.chave === chave;
+      const seta = ativa ? (sortState.desc ? '▼' : '▲') : '⇅';
+      return `<th class="${c.class || ''} th-sort${ativa ? ' ativa' : ''}" data-sort="${this.esc(chave)}"
+        title="Clique para ordenar por ${this.esc(String(c.h).replace(/<[^>]*>/g, ''))}">${c.h} <span class="seta">${seta}</span></th>`;
+    };
+
     return `<div class="tablewrap"><table id="${id}">
-      <thead><tr>${cols.map(c => `<th class="${c.class || ''}">${c.h}</th>`).join('')}</tr></thead>
-      <tbody>${rows.map(r => `<tr>${cols.map(c => `<td class="${c.class || ''}">${c.cell(r)}</td>`).join('')}</tr>`).join('')}</tbody>
+      <thead><tr>${cols.map(cabecalho.bind(this)).join('')}</tr></thead>
+      <tbody>${lista.map(r => `<tr>${cols.map(c => `<td class="${c.class || ''}">${c.cell(r)}</td>`).join('')}</tr>`).join('')}</tbody>
     </table></div>`;
   },
 

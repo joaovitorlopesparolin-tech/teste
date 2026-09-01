@@ -139,6 +139,15 @@ tr:last-child td { border-bottom: none; }
 tbody tr:hover { background: rgba(228,49,70,.05); }
 td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 tr.clickable { cursor: pointer; }
+
+/* Cabeçalho que ordena: a seta some no repouso e aparece ao passar o mouse,
+   para a coluna ativa ser a única marcada o tempo todo. */
+th.th-sort { cursor: pointer; user-select: none; }
+th.th-sort:hover { color: var(--text-2); background: rgba(255,255,255,.04); }
+th.th-sort .seta { font-size: 9px; opacity: .25; margin-left: 2px; }
+th.th-sort:hover .seta { opacity: .6; }
+th.th-sort.ativa { color: var(--accent); }
+th.th-sort.ativa .seta { opacity: 1; }
 .empty { padding: 26px; text-align: center; color: var(--text-3); font-size: 13px; }
 
 /* ---------- Badges de status ---------- */

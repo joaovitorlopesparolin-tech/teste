@@ -35,7 +35,38 @@ App.registerView('payables', async (view) => {
   const podeEditar = App.can('payables_edit');
   const dow = d => ['dom', 'seg', 'ter', 'qua', 'qui', 'sex', 'sáb'][new Date(d + 'T12:00:00').getDay()];
 
-  view.innerHTML = `
+  /* Ordem escolhida pelos cabeçalhos. Vale para todos os grupos da agenda
+     ao mesmo tempo: ordenar só um deles confundiria mais que ajudaria. */
+  let ordemAgenda = { chave: 'Vencimento', desc: false };
+  let ordemPagas = { chave: 'Pago em', desc: true };
+
+  const colsAgenda = () => [
+    { h: 'Conta', sort: p => p.descricao || '', sortDesc: false,
+      cell: p => `${App.esc(p.descricao)}${p.tipoPagamento === 'imediato' ? ' <span class="badge info">imediato</span>' : ''}` },
+    { h: 'Categoria', cell: p => `<span class="small muted">${(CATS_PAG.find(c => c[0] === p.categoria) || [null, p.categoria])[1]}</span>` },
+    { h: 'Vencimento', sort: p => p.vencimento || '', sortDesc: false, cell: p => App.date(p.vencimento) },
+    { h: 'Documento', cell: p => App.esc(p.documento || '—') },
+    { h: 'Valor', class: 'num', sort: p => Number(p.valor) || 0, cell: p => App.moneyHtml(p.valor) },
+    { h: 'Status', cell: p => App.badge(p.status) },
+    { h: '', class: 'num', cell: p => `<button class="btn sm primary" onclick="Pay.pay(${p.id})">✓ Pagar</button>
+      ${podeEditar ? `
+        <button class="btn sm ghost" onclick="Pay.edit(${p.id})" title="Editar esta conta">✏️ Editar</button>
+        <button class="btn sm ghost" onclick="Pay.excluir(${p.id})" title="Excluir esta conta">🗑️ Excluir</button>` : ''}` }
+  ];
+
+  const colsPagas = () => [
+    { h: 'Conta', sort: p => p.descricao || '', sortDesc: false, cell: p => App.esc(p.descricao) },
+    { h: 'Pago em', sort: p => p.dataPagamento || '', cell: p => App.date(p.dataPagamento) },
+    { h: 'Valor', class: 'num', sort: p => Number(p.valor) || 0, cell: p => App.moneyHtml(p.valor) },
+    { h: 'Status', cell: p => App.badge('pago') },
+    ...(podeEditar ? [{ h: '', class: 'num', cell: p => `
+      <button class="btn sm ghost" onclick="Pay.unpay(${p.id})" title="Desfazer o pagamento — a conta volta para a agenda e a saída sai do caixa">↩ Desfazer pagamento</button>
+      <button class="btn sm ghost" onclick="Pay.edit(${p.id})" title="Editar esta conta">✏️ Editar</button>
+      <button class="btn sm ghost" onclick="Pay.excluir(${p.id})" title="Excluir esta conta">🗑️ Excluir</button>` }] : [])
+  ];
+
+  const renderPay = () => {
+    view.innerHTML = `
     <div class="toolbar">
       <button class="btn primary" onclick="Pay.create()">+ Nova conta</button>
       <button class="btn" onclick="Pay.recurringList()">↻ Contas recorrentes (${recurring.filter(r => r.ativo).length})</button>
@@ -45,7 +76,8 @@ App.registerView('payables', async (view) => {
       <button class="btn" onclick="Pay.print()">🖨️ Imprimir agenda</button>
     </div>
 
-    <div class="section-title">AGENDA DE PAGAMENTOS (agrupada por data programada)</div>
+    <div class="section-title">AGENDA DE PAGAMENTOS (agrupada por data programada)
+      <span class="small muted">— clique no cabeçalho para ordenar</span></div>
     ${agenda.length ? agenda.map(g => `
       <div class="card" style="margin-bottom:12px">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
@@ -54,31 +86,20 @@ App.registerView('payables', async (view) => {
           ${g.data < App.today() ? '<span class="badge danger">atrasado</span>' : ''}</b>
           <b>R$ ${App.money(g.total)}</b>
         </div>
-        ${App.table(g.contas, [
-          { h: 'Conta', cell: p => `${App.esc(p.descricao)}${p.tipoPagamento === 'imediato' ? ' <span class="badge info">imediato</span>' : ''}` },
-          { h: 'Categoria', cell: p => `<span class="small muted">${(CATS_PAG.find(c => c[0] === p.categoria) || [null, p.categoria])[1]}</span>` },
-          { h: 'Vencimento', cell: p => App.date(p.vencimento) },
-          { h: 'Documento', cell: p => App.esc(p.documento || '—') },
-          { h: 'Valor', class: 'num', cell: p => App.moneyHtml(p.valor) },
-          { h: 'Status', cell: p => App.badge(p.status) },
-          { h: '', class: 'num', cell: p => `<button class="btn sm primary" onclick="Pay.pay(${p.id})">✓ Pagar</button>
-            ${podeEditar ? `
-              <button class="btn sm ghost" onclick="Pay.edit(${p.id})" title="Editar esta conta">✏️ Editar</button>
-              <button class="btn sm ghost" onclick="Pay.excluir(${p.id})" title="Excluir esta conta">🗑️ Excluir</button>` : ''}` }
-        ])}
+        ${App.table(g.contas, colsAgenda(), {
+          sortState: ordemAgenda,
+          onSort: (o) => { ordemAgenda = o; renderPay(); }
+        })}
       </div>`).join('') : '<div class="card"><div class="empty">Nenhuma conta em aberto 🎉</div></div>'}
 
     <div class="section-title muted">Pagas recentemente</div>
-    ${App.table(payables.filter(p => p.status === 'pago').slice(-15).reverse(), [
-      { h: 'Conta', cell: p => App.esc(p.descricao) },
-      { h: 'Pago em', cell: p => App.date(p.dataPagamento) },
-      { h: 'Valor', class: 'num', cell: p => App.moneyHtml(p.valor) },
-      { h: 'Status', cell: p => App.badge('pago') },
-      ...(podeEditar ? [{ h: '', class: 'num', cell: p => `
-        <button class="btn sm ghost" onclick="Pay.unpay(${p.id})" title="Desfazer o pagamento — a conta volta para a agenda e a saída sai do caixa">↩ Desfazer pagamento</button>
-        <button class="btn sm ghost" onclick="Pay.edit(${p.id})" title="Editar esta conta">✏️ Editar</button>
-        <button class="btn sm ghost" onclick="Pay.excluir(${p.id})" title="Excluir esta conta">🗑️ Excluir</button>` }] : [])
-    ], { emptyMsg: 'Nenhum pagamento ainda' })}`;
+    ${App.table(payables.filter(p => p.status === 'pago').slice(-15).reverse(), colsPagas(), {
+      emptyMsg: 'Nenhum pagamento ainda',
+      sortState: ordemPagas,
+      onSort: (o) => { ordemPagas = o; renderPay(); }
+    })}`;
+  };
+  renderPay();
 
   window.Pay = {
     create(prefill) {
@@ -266,6 +287,9 @@ App.registerView('receivables', async (view) => {
     return '—';
   };
 
+  /* Vencimento crescente é a ordem que interessa aqui: o que vence antes
+     precisa ser cobrado antes. */
+  let ordemRecv = { chave: 'Vencimento', desc: false };
   const aberto = r => r.status === 'aberto' || r.status === 'vencida';
   const open = receivables.filter(aberto);
   const totalOpen = open.reduce((s, r) => s + r.valor, 0);
@@ -313,13 +337,14 @@ App.registerView('receivables', async (view) => {
       `${list.length} lançamento(s) · R$ ${App.money(soma)} em aberto`;
     document.getElementById('r-table').innerHTML = App.table(list, [
       { h: 'Origem', cell: r => `${selo(r)}<div class="small muted">${App.esc(refDe(r))}</div>` },
-      { h: 'Cliente', cell: r => `<b>${App.esc(App.clientName(r.clienteId, clients))}</b>` + (App.clientCode(r.clienteId, clients) ? `<div class="small muted mono">${App.esc(App.clientCode(r.clienteId, clients))}</div>` : '') },
+      { h: 'Cliente', sort: r => App.clientName(r.clienteId, clients) || '', sortDesc: false,
+        cell: r => `<b>${App.esc(App.clientName(r.clienteId, clients))}</b>` + (App.clientCode(r.clienteId, clients) ? `<div class="small muted mono">${App.esc(App.clientCode(r.clienteId, clients))}</div>` : '') },
       { h: 'Descrição', cell: r => `<span class="small">${App.esc(r.descricao)}</span>` },
       { h: 'Forma', cell: r => App.esc(r.forma || '—') },
       { h: 'Parcela', cell: r => r.parcelas > 1 ? `${r.parcela}/${r.parcelas}` : 'única' },
-      { h: 'Vencimento', cell: r => App.date(r.vencimento) },
-      { h: 'Valor', class: 'num', cell: r => App.moneyHtml(r.valor) },
-      { h: 'Status', cell: r => App.badge(r.status) },
+      { h: 'Vencimento', sort: r => r.vencimento || '', sortDesc: false, cell: r => App.date(r.vencimento) },
+      { h: 'Valor', class: 'num', sort: r => Number(r.valor) || 0, cell: r => App.moneyHtml(r.valor) },
+      { h: 'Status', sort: r => r.status || '', sortDesc: false, cell: r => App.badge(r.status) },
       { h: '', class: 'num', cell: r => `
         <button class="btn sm ghost" onclick="Recv.detalhe(${r.id})" title="Total, parcelas, recebido e saldo">🔍</button>
         ${(r.status === 'aberto' || r.status === 'vencida') ? `
@@ -330,7 +355,11 @@ App.registerView('receivables', async (view) => {
           <button class="btn sm ghost" onclick="Recv.replan(${r.id})" title="Recalcular as parcelas futuras deste grupo">🔁</button>` : ''}
         ${(r.status === 'aberto' || r.status === 'vencida') ? `<button class="btn sm ghost" onclick="Recv.cancel(${r.id})" title="Cancelar (mantém o histórico)">✕</button>` : ''}
         <button class="btn sm ghost" onclick="Recv.excluir(${r.id})" title="Excluir lançamento">🗑️</button>` }
-    ], { emptyMsg: 'Nenhum recebível nesta seleção' });
+    ], {
+      emptyMsg: 'Nenhum recebível nesta seleção',
+      sortState: ordemRecv,
+      onSort: (o) => { ordemRecv = o; render(); }
+    });
   };
   render();
   document.getElementById('rf').addEventListener('change', render);
@@ -582,6 +611,9 @@ App.registerView('cashflow', async (view) => {
      mexer aqui deixaria os dois lados divergentes, então só o manual é
      editável — o resto se desfaz na origem. */
   const manualCF = f => !f.refType;
+  /* A ordem escolhida vive aqui, fora do render, para sobreviver ao
+     redesenho que a busca provoca a cada tecla. */
+  let ordemCF = { chave: 'Data', desc: true };
   const saldo = flows.reduce((s, f) => s + (f.tipo === 'entrada' ? f.valor : -f.valor), 0);
   const month = App.today().slice(0, 7);
   const inMonth = flows.filter(f => (f.data || '').slice(0, 7) === month);
@@ -600,6 +632,7 @@ App.registerView('cashflow', async (view) => {
         <input type="file" id="cf-import" accept=".xlsx" hidden></label>
       <span id="cf-import-prog" class="small muted"></span>
       <input class="search" id="cf-busca" placeholder="🔎 Buscar por origem, descrição, categoria, conta ou documento…" style="max-width:340px">
+      <span class="small muted">clique num lançamento para ver de onde veio</span>
       <div class="spacer"></div>
       <span class="muted small" id="cf-contagem"></span>
       <button class="btn" onclick="CF.exportCsv()">⬇ Exportar CSV/Excel</button>
@@ -618,18 +651,27 @@ App.registerView('cashflow', async (view) => {
     document.getElementById('cf-contagem').textContent =
       `${list.length} lançamento(s)${list.length > 200 ? ' — mostrando os 200 mais recentes' : ''}`;
     document.getElementById('cf-tabela').innerHTML = App.table(list.slice(0, 200), [
-      { h: 'Data', cell: f => App.date(f.data) },
-      { h: 'Tipo', cell: f => f.tipo === 'entrada' ? '<span class="badge ok">Entrada</span>' : '<span class="badge danger">Saída</span>' },
-      { h: 'Origem', cell: f => `${App.esc(f.origem || f.descricao || '—')}<div class="small muted">${App.esc(f.descricao !== f.origem ? f.descricao || '' : '')}</div>` },
-      { h: 'Categoria', cell: f => `<span class="small muted">${App.esc(f.categoria || '—')}</span>` },
+      { h: 'Data', sort: f => f.data || '', cell: f => App.date(f.data) },
+      { h: 'Tipo', sort: f => f.tipo || '', sortDesc: false,
+        cell: f => f.tipo === 'entrada' ? '<span class="badge ok">Entrada</span>' : '<span class="badge danger">Saída</span>' },
+      { h: 'Origem', sort: f => f.origem || f.descricao || '', sortDesc: false,
+        cell: f => `${App.esc(f.origem || f.descricao || '—')}<div class="small muted">${App.esc(f.descricao !== f.origem ? f.descricao || '' : '')}</div>` },
+      { h: 'Categoria', sort: f => f.categoria || '', sortDesc: false,
+        cell: f => `<span class="small muted">${App.esc(f.categoria || '—')}</span>` },
       { h: 'Conta', cell: f => App.esc(f.conta || '—') },
       { h: 'Documento', cell: f => App.esc(f.documento || '—') },
-      { h: 'Valor', class: 'num', cell: f => `<b class="${f.tipo === 'entrada' ? 'pos' : 'neg'}">${f.tipo === 'entrada' ? '+' : '−'} R$ ${App.money(f.valor)}</b>` },
+      { h: 'Valor', class: 'num', sort: f => Number(f.valor) || 0,
+        cell: f => `<b class="${f.tipo === 'entrada' ? 'pos' : 'neg'}">${f.tipo === 'entrada' ? '+' : '−'} R$ ${App.money(f.valor)}</b>` },
       ...(podeEditarCF ? [{ h: '', class: 'num', cell: f => manualCF(f)
         ? `<button class="btn sm ghost" onclick="CF.editar(${f.id})" title="Editar este lançamento">✏️ Editar</button>
            <button class="btn sm ghost" onclick="CF.excluir(${f.id})" title="Excluir este lançamento">🗑️ Excluir</button>`
         : `<span class="small muted" title="Veio de ${App.esc(CF_ORIGEM[f.refType] || f.refType)} — desfaça por lá para os dois lados baterem">automático</span>` }] : [])
-    ], { emptyMsg: 'Nenhum lançamento — os módulos de vendas, contas e compras alimentam o caixa automaticamente' });
+    ], {
+      emptyMsg: 'Nenhum lançamento — os módulos de vendas, contas e compras alimentam o caixa automaticamente',
+      sortState: ordemCF,
+      onSort: (o) => { ordemCF = o; renderCF(); },
+      onRow: (f) => CF.detalhe(f.id)
+    });
   };
   renderCF();
   document.getElementById('cf-busca').addEventListener('input', renderCF);
@@ -720,6 +762,82 @@ App.registerView('cashflow', async (view) => {
         await App.post('/cashflow', d);
         App.closeModal(); App.toast('Lançamento registrado', 'ok'); App.route();
       });
+    },
+    /**
+     * Detalhe do lançamento: de onde veio aquele dinheiro, sem sair do caixa.
+     * A lista principal continua enxuta — tudo isto só aparece no clique.
+     */
+    async detalhe(id) {
+      let d;
+      try { d = await App.get(`/cashflow/${id}/detalhe`); }
+      catch (e) { return App.toast(e.message, 'err'); }
+      const c = d.lancamento, o = d.origem;
+      const entrada = c.tipo === 'entrada';
+      const linha = (rotulo, valor, cls) => valor === '' || valor === null || valor === undefined
+        ? '' : `<tr><td class="muted">${rotulo}</td><td class="num ${cls || ''}">${valor}</td></tr>`;
+
+      /* Parcial ou total sai do que já entrou antes mais este lançamento
+         contra o valor do documento — não é um campo guardado. */
+      let resumo = '';
+      if (o && o.valorTotal > 0) {
+        const acumulado = (o.recebidoAntes || 0) + (o.valorLancamento || 0);
+        const pct = Math.round(o.valorLancamento / o.valorTotal * 100);
+        const quitado = Math.abs(o.saldo) < 0.005;
+        resumo = `<div class="card" style="margin:10px 0;border-left:3px solid var(--${quitado ? 'ok' : 'accent'})">
+          <b>${quitado && (o.recebidoAntes || 0) === 0
+            ? `${entrada ? 'Recebimento' : 'Pagamento'} total`
+            : `${entrada ? 'Recebimento' : 'Pagamento'} parcial — ${pct}% do total`}</b>
+          <div class="small muted" style="margin-top:3px">
+            ${App.money(acumulado)} de ${App.money(o.valorTotal)} ${entrada ? 'recebidos' : 'pagos'} até aqui${
+              quitado ? ' · quitado' : ` · faltam R$ ${App.money(o.saldo)}`}</div>
+        </div>`;
+      }
+
+      App.modal(`
+        <h2>${entrada ? '↧ Entrada' : '↥ Saída'} de R$ ${App.money(c.valor)}</h2>
+        <p class="small muted">${App.date(c.data)} · ${App.esc(c.origem || c.descricao || '—')}
+          ${c.categoria ? ' · ' + App.esc(c.categoria) : ''}
+          ${c.conta ? ' · conta ' + App.esc(c.conta) : ''}</p>
+
+        ${!o ? `<div class="card" style="margin-top:10px">
+            <b>Lançamento manual</b>
+            <div class="small muted" style="margin-top:3px">Não veio de outro módulo — foi digitado direto no caixa.</div>
+            ${c.documento ? `<div class="small" style="margin-top:6px">Documento: ${App.esc(c.documento)}</div>` : ''}
+            ${c.descricao ? `<div class="small">Descrição: ${App.esc(c.descricao)}</div>` : ''}
+          </div>` : `
+          <h3 class="section-title">${App.esc(o.tipo)} — ${App.esc(o.titulo)}</h3>
+          ${resumo}
+          <table style="font-size:13.5px">
+            ${linha('Cliente', o.cliente ? App.esc(o.cliente) : '')}
+            ${linha('Fornecedor', o.fornecedor ? App.esc(o.fornecedor) : '')}
+            ${linha('Colaborador', o.colaborador ? App.esc(o.colaborador) : '')}
+            ${linha('Cabeçote', [o.modelo, o.identificacao].filter(Boolean).map(x => App.esc(x)).join(' · ') || '')}
+            ${linha(entrada ? 'Valor total da venda/serviço' : 'Valor total do documento',
+              o.valorTotal ? '<b>R$ ' + App.money(o.valorTotal) + '</b>' : '')}
+            ${linha(entrada ? 'Já recebido antes deste' : 'Já pago antes deste',
+              o.recebidoAntes ? 'R$ ' + App.money(o.recebidoAntes) : 'R$ 0,00')}
+            ${linha(entrada ? 'Este recebimento' : 'Este pagamento',
+              '<b class="' + (entrada ? 'pos' : 'neg') + '">R$ ' + App.money(o.valorLancamento) + '</b>')}
+            ${linha('Saldo em aberto', o.valorTotal
+              ? '<b class="' + (Math.abs(o.saldo) < 0.005 ? 'pos' : 'neg') + '">R$ ' + App.money(o.saldo) + '</b>' : '')}
+            ${linha('Parcela', o.parcela ? `${o.parcela}${o.parcelas ? ' de ' + o.parcelas : ''}` : (o.parcelas > 1 ? `de ${o.parcelas}` : ''))}
+            ${linha('Vencimento', o.vencimento ? App.date(o.vencimento) : '')}
+            ${linha('Agendado para', o.agendado ? App.date(o.agendado) : '')}
+            ${linha('Forma de pagamento', o.forma ? App.esc(o.forma) : '')}
+            ${linha('Categoria', o.categoria ? App.esc(o.categoria) : '')}
+            ${linha('Documento', o.documento ? App.esc(o.documento) : '')}
+            ${linha(entrada ? 'Data do recebimento' : 'Data do pagamento', App.date(o.data))}
+            ${linha('Situação', o.status ? App.badge(o.status) : '')}
+          </table>
+          ${(o.itens || []).length ? `<h3 class="section-title">${entrada ? 'Serviços / produtos' : 'Itens'}</h3>
+            <ul style="margin:0 0 0 18px;line-height:1.7;font-size:13px">
+              ${o.itens.map(i => `<li>${App.esc(i)}</li>`).join('')}</ul>` : ''}
+          ${o.observacoes ? `<h3 class="section-title">Observações</h3><p>${App.esc(o.observacoes)}</p>` : ''}`}
+
+        <div class="actions">
+          <button class="btn" onclick="App.closeModal()">Fechar</button>
+          ${o && o.atalho ? `<button class="btn primary" onclick="App.closeModal();location.hash='${o.atalho}'">Abrir ${App.esc(o.tipo.toLowerCase())}</button>` : ''}
+        </div>`, { wide: true });
     },
     /* Só lançamento manual: o automático é reflexo de outro registro e se
        desfaz na origem, que estorna os dois lados de uma vez. */

@@ -3220,6 +3220,147 @@ route('PUT', '/api/purchases/:id', 'purchases', async (req, res, user, params) =
 });
 
 /**
+ * De onde veio (ou para onde foi) um lançamento do caixa.
+ *
+ * O caixa mostra "entrada de R$ 2.362,00 — OS nº 7" e a pessoa precisa saber
+ * o resto sem sair da tela e caçar a OS: quanto era o serviço inteiro, quanto
+ * já tinha sido recebido antes, quanto ainda falta, se é parcela e de quantas.
+ * Tudo isso é derivado aqui, a partir do documento de origem — nada é
+ * guardado em duplicidade no lançamento.
+ */
+function detalheDoLancamento(c) {
+  const out = { lancamento: c, origem: null };
+  if (!c.refType || !c.refId) return out;
+
+  /* Quanto deste documento já havia entrado ANTES deste lançamento. Ordena
+     por data e id para "antes" significar a mesma coisa em qualquer leitura. */
+  const irmaos = db.all('cashflow')
+    .filter(x => x.refType === c.refType && x.refId === c.refId && x.tipo === c.tipo)
+    .sort((a, b) => String(a.data).localeCompare(String(b.data)) || a.id - b.id);
+  const anteriores = irmaos.filter(x => (String(x.data) + String(x.id).padStart(9, '0')) <
+    (String(c.data) + String(c.id).padStart(9, '0')));
+  const recebidoAntes = Math.round(anteriores.reduce((s, x) => s + (Number(x.valor) || 0), 0) * 100) / 100;
+
+  const clienteNome = (id) => (db.get('clients', id) || {}).nome || '';
+  const parcelaDoDoc = () => {
+    /* A parcela cujo valor e data batem com este lançamento — é assim que se
+       descobre "3 de 5" sem gravar o número dentro do caixa. */
+    const lista = db.all('receivables').filter(r => r.refType === c.refType && r.refId === c.refId);
+    const exata = lista.find(r => Math.abs(Number(r.valor) - Number(c.valor)) < 0.005 &&
+      (r.dataRecebimento === c.data || r.status === 'paga'));
+    return exata || null;
+  };
+
+  if (c.refType === 'sales') {
+    const v = db.get('sales', c.refId);
+    if (!v) return out;
+    const total = Number(v.valorTotal) || 0;
+    const par = parcelaDoDoc();
+    out.origem = {
+      tipo: 'Venda', titulo: v.numero ? `Pedido nº ${v.numero}` : `Pedido #${v.id}`,
+      clienteId: v.clienteId, cliente: clienteNome(v.clienteId),
+      itens: (v.itens || []).map(i => `${i.qtd}× ${i.produto}` +
+        (i.kind === 'peca' ? '' : ` (comando ${i.comando}, tucho ${i.tucho} mm)`)),
+      valorTotal: total, recebidoAntes,
+      valorLancamento: Number(c.valor) || 0,
+      saldo: Math.round((total - recebidoAntes - (Number(c.valor) || 0)) * 100) / 100,
+      forma: (v.pagamento || {}).forma || c.descricao || '',
+      parcela: par ? par.parcela : null, parcelas: par ? par.parcelas : (v.pagamento || {}).parcelas || null,
+      vencimento: par ? par.vencimento : (v.previsaoEntrega || ''),
+      data: c.data, status: v.status, observacoes: v.observacoes || '',
+      atalho: '#/sales'
+    };
+  } else if (c.refType === 'serviceOrders') {
+    const o = db.get('serviceOrders', c.refId);
+    if (!o) return out;
+    const total = Number(o.valorTotal) || 0;
+    const par = parcelaDoDoc();
+    out.origem = {
+      tipo: 'Ordem de serviço', titulo: o.numero ? `OS nº ${o.numero}` : `OS #${o.id}`,
+      clienteId: o.clienteId, cliente: clienteNome(o.clienteId),
+      itens: (o.itens || []).map(i => `${i.qtd || 1}× ${i.nome}`),
+      identificacao: o.identificacao || '', modelo: o.modelo || '',
+      valorTotal: total, recebidoAntes,
+      valorLancamento: Number(c.valor) || 0,
+      saldo: Math.round((total - recebidoAntes - (Number(c.valor) || 0)) * 100) / 100,
+      forma: (o.pagamento || {}).forma || c.descricao || '',
+      parcela: par ? par.parcela : null, parcelas: par ? par.parcelas : null,
+      vencimento: par ? par.vencimento : (o.previsaoEntrega || ''),
+      data: c.data, status: o.status, observacoes: o.observacoes || '',
+      atalho: '#/os'
+    };
+  } else if (c.refType === 'payables') {
+    const p = db.get('payables', c.refId);
+    if (!p) return out;
+    const forn = p.fornecedorId ? db.get('suppliers', p.fornecedorId) : null;
+    out.origem = {
+      tipo: 'Conta a pagar', titulo: p.descricao || `Conta #${p.id}`,
+      fornecedor: forn ? forn.nome : '',
+      valorTotal: Number(p.valor) || 0, recebidoAntes,
+      valorLancamento: Number(c.valor) || 0,
+      saldo: Math.round(((Number(p.valor) || 0) - recebidoAntes - (Number(c.valor) || 0)) * 100) / 100,
+      categoria: p.categoria || '', documento: p.documento || '',
+      vencimento: p.vencimento || '', agendado: p.dataProgramada || '',
+      forma: p.forma || '', data: c.data, status: p.status,
+      observacoes: p.observacoes || '', atalho: '#/payables'
+    };
+  } else if (c.refType === 'receivables') {
+    const r = db.get('receivables', c.refId);
+    if (!r) return out;
+    out.origem = {
+      tipo: 'Conta a receber', titulo: r.descricao || `Parcela #${r.id}`,
+      clienteId: r.clienteId, cliente: clienteNome(r.clienteId),
+      valorTotal: Number(r.valor) || 0, recebidoAntes,
+      valorLancamento: Number(c.valor) || 0,
+      saldo: Math.round(((Number(r.valor) || 0) - recebidoAntes - (Number(c.valor) || 0)) * 100) / 100,
+      parcela: r.parcela || null, parcelas: r.parcelas || null,
+      vencimento: r.vencimento || '', forma: r.forma || '',
+      data: c.data, status: r.status, atalho: '#/receivables'
+    };
+  } else if (c.refType === 'purchases') {
+    const p = db.get('purchases', c.refId);
+    if (!p) return out;
+    out.origem = {
+      tipo: 'Compra', titulo: p.documentoNumero || `Compra #${p.id}`,
+      fornecedor: p.fornecedorNome || '',
+      itens: (p.itens || []).map(i => `${i.qtd || 1}× ${i.descricao || ''}`),
+      valorTotal: Number(p.valor) || 0, recebidoAntes,
+      valorLancamento: Number(c.valor) || 0,
+      saldo: Math.round(((Number(p.valor) || 0) - recebidoAntes - (Number(c.valor) || 0)) * 100) / 100,
+      categoria: p.categoria || '', data: c.data, atalho: '#/purchases'
+    };
+  } else if (c.refType === 'freights') {
+    const f = db.get('freights', c.refId);
+    if (!f) return out;
+    out.origem = {
+      tipo: 'Frete', titulo: f.transportadora || `Frete #${f.id}`,
+      clienteId: f.clienteId, cliente: clienteNome(f.clienteId),
+      valorTotal: Number(f.valor) || 0, recebidoAntes,
+      valorLancamento: Number(c.valor) || 0, saldo: 0,
+      data: c.data, status: f.status || '', atalho: '#/freights'
+    };
+  } else if (c.refType === 'hrPayments') {
+    const h = db.get('hrPayments', c.refId);
+    if (!h) return out;
+    const col = h.employeeId ? db.get('employees', h.employeeId) : null;
+    out.origem = {
+      tipo: 'Pagamento de RH', titulo: h.descricao || `Pagamento #${h.id}`,
+      colaborador: col ? col.nome : '',
+      valorTotal: Number(h.valor) || 0, recebidoAntes,
+      valorLancamento: Number(c.valor) || 0, saldo: 0,
+      data: c.data, status: h.status || '', atalho: '#/hr'
+    };
+  }
+  return out;
+}
+
+route('GET', '/api/cashflow/:id/detalhe', 'cashflow', async (req, res, user, params) => {
+  const c = db.get('cashflow', params.id);
+  if (!c) return notFound(res);
+  ok(res, detalheDoLancamento(c));
+});
+
+/**
  * Excluir lançamento do fluxo de caixa — função da Direção.
  *
  * Lançamento que nasceu de outro módulo (pagamento de conta, recebimento de
@@ -4417,6 +4558,9 @@ async function handleRest(req, res, user, collection, id) {
     delete body.id;
     // O código do cliente é gerado pelo sistema — não vem do formulário.
     if (collection === 'clients') body.codigo = proximoCodigoCliente();
+    /* A OS nasce numerada mesmo quando não vem da aprovação de um orçamento:
+       sem número ela aparece como "OS nº undefined" no caixa e nas telas. */
+    if (collection === 'serviceOrders' && !body.numero) body.numero = db.nextNumber('os', 1);
     const rec = db.insert(collection, body);
     audit(user, 'criou', collection, rec.id, cfg.label + (body.nome ? ': ' + body.nome : body.titulo ? ': ' + body.titulo : ' #' + rec.id));
     return ok(res, rec);
