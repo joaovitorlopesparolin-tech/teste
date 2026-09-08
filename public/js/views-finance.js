@@ -614,18 +614,52 @@ App.registerView('cashflow', async (view) => {
   /* A ordem escolhida vive aqui, fora do render, para sobreviver ao
      redesenho que a busca provoca a cada tecla. */
   let ordemCF = { chave: 'Data', desc: true };
-  const saldo = flows.reduce((s, f) => s + (f.tipo === 'entrada' ? f.valor : -f.valor), 0);
-  const month = App.today().slice(0, 7);
-  const inMonth = flows.filter(f => (f.data || '').slice(0, 7) === month);
-  const entradasMes = inMonth.filter(f => f.tipo === 'entrada').reduce((s, f) => s + f.valor, 0);
-  const saidasMes = inMonth.filter(f => f.tipo === 'saida').reduce((s, f) => s + f.valor, 0);
+  const MESES = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho',
+    'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'];
+  /* 'YYYY-MM' → 'Agosto/2026'. O formato ISO é o que se compara e o que se
+     navega; o rótulo existe só para a pessoa ler. */
+  const rotuloMes = (m) => {
+    if (!m) return 'Todo o período';
+    const [ano, mes] = m.split('-');
+    const nome = MESES[Number(mes) - 1] || mes;
+    return nome.charAt(0).toUpperCase() + nome.slice(1) + '/' + ano;
+  };
+  /* Anda n meses no calendário, inclusive virando o ano. Precisa funcionar
+     para meses sem nenhum lançamento — é justamente onde a pessoa quer
+     conferir que não houve movimento. */
+  const somarMeses = (m, n) => {
+    const d = new Date(Number(m.slice(0, 4)), Number(m.slice(5, 7)) - 1 + n, 1);
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+  };
+
+  const mesAtual = App.today().slice(0, 7);
+  const mesesComLancamento = [...new Set(flows.map(f => (f.data || '').slice(0, 7)).filter(Boolean))];
+  /* '' significa "todo o período". Começa no mês corrente, que é o que a
+     pessoa quer ver ao abrir a tela. */
+  let periodo = mesAtual;
+
+  const doMes = (m) => m ? flows.filter(f => (f.data || '').slice(0, 7) === m) : flows;
+  const somar = (lista, tipo) => lista.filter(f => f.tipo === tipo).reduce((s, f) => s + (Number(f.valor) || 0), 0);
+  /* Saldo acumulado: tudo que entrou e saiu ATÉ o fim do mês escolhido,
+     não só o mês. É o número que responde "quanto a empresa tinha em caixa
+     naquele fechamento" — setembro carrega o que sobrou de agosto. */
+  const acumuladoAte = (m) => flows
+    .filter(f => !m || (f.data || '').slice(0, 7) <= m)
+    .reduce((s, f) => s + (f.tipo === 'entrada' ? (Number(f.valor) || 0) : -(Number(f.valor) || 0)), 0);
 
   view.innerHTML = `
-    <div class="grid cols-3">
-      <div class="card kpi ${saldo >= 0 ? 'k-ok' : 'k-danger'}"><div class="label">Saldo acumulado</div><div class="value money">${App.money(saldo)}</div></div>
-      <div class="card kpi k-ok"><div class="label">Entradas no mês</div><div class="value money">${App.money(entradasMes)}</div></div>
-      <div class="card kpi k-danger"><div class="label">Saídas no mês</div><div class="value money">${App.money(saidasMes)}</div></div>
+    <div class="toolbar cf-periodo">
+      <button class="btn sm" id="cf-ant" title="Mês anterior">◀</button>
+      <select id="cf-mes" style="max-width:210px"></select>
+      <button class="btn sm" id="cf-prox" title="Próximo mês">▶</button>
+      <button class="btn sm ghost" id="cf-hoje">Mês atual</button>
+      <button class="btn sm ghost" id="cf-todos">Todo o período</button>
+      <div class="spacer"></div>
+      <span class="small muted" id="cf-periodo-info"></span>
     </div>
+
+    <div class="grid cols-4" id="cf-kpis"></div>
+
     <div class="toolbar" style="margin-top:14px">
       <button class="btn" onclick="CF.manual()">+ Lançamento manual</button>
       <label class="btn" style="cursor:pointer">📥 Importar planilha de gastos (Excel)
@@ -637,15 +671,57 @@ App.registerView('cashflow', async (view) => {
       <span class="muted small" id="cf-contagem"></span>
       <button class="btn" onclick="CF.exportCsv()">⬇ Exportar CSV/Excel</button>
     </div>
-    <div id="cf-tabela"></div>
-`;
+    <div id="cf-tabela"></div>`;
+
+  /* O seletor lista os meses que têm lançamento, mais o mês corrente e o
+     que estiver escolhido — assim navegar com as setas para um mês vazio
+     não deixa o seletor sem opção correspondente. */
+  const montarSeletor = () => {
+    const meses = [...new Set(mesesComLancamento.concat([mesAtual, periodo].filter(Boolean)))]
+      .sort().reverse();
+    document.getElementById('cf-mes').innerHTML =
+      ['<option value="">Todo o período</option>']
+        .concat(meses.map(m => `<option value="${m}"${m === periodo ? ' selected' : ''}>${
+          App.esc(rotuloMes(m))}${mesesComLancamento.includes(m) ? '' : ' (sem lançamentos)'}</option>`)).join('');
+  };
+
+  const renderKpis = () => {
+    const lista = doMes(periodo);
+    const ent = somar(lista, 'entrada');
+    const sai = somar(lista, 'saida');
+    const saldoMes = Math.round((ent - sai) * 100) / 100;
+    const acum = Math.round(acumuladoAte(periodo) * 100) / 100;
+    const anterior = Math.round((acum - saldoMes) * 100) / 100;
+
+    document.getElementById('cf-kpis').innerHTML = `
+      <div class="card kpi k-ok"><div class="label">Entradas ${periodo ? 'do mês' : 'no período'}</div>
+        <div class="value money">${App.money(ent)}</div></div>
+      <div class="card kpi k-danger"><div class="label">Saídas ${periodo ? 'do mês' : 'no período'}</div>
+        <div class="value money">${App.money(sai)}</div></div>
+      <div class="card kpi ${saldoMes >= 0 ? 'k-ok' : 'k-danger'}">
+        <div class="label">Saldo ${periodo ? 'do mês' : 'do período'}</div>
+        <div class="value money">${App.money(saldoMes)}</div>
+        <div class="hint">${ent ? App.money(ent) : '0,00'} − ${sai ? App.money(sai) : '0,00'}</div></div>
+      <div class="card kpi ${acum >= 0 ? 'k-ok' : 'k-danger'}">
+        <div class="label">Saldo acumulado</div>
+        <div class="value money">${App.money(acum)}</div>
+        <div class="hint">${periodo
+          ? `${App.money(anterior)} de meses anteriores ${saldoMes >= 0 ? '+' : '−'} ${App.money(Math.abs(saldoMes))} deste mês`
+          : 'todo o histórico'}</div></div>`;
+
+    document.getElementById('cf-periodo-info').textContent = periodo
+      ? `${lista.length} lançamento(s) em ${rotuloMes(periodo)}`
+      : `${flows.length} lançamento(s) em todo o histórico`;
+  };
 
 
 
   /* Busca sem acento e por pedaço em todos os campos que descrevem o
      lançamento — é como se acha "aquela saída da Sanepar de agosto". */
   const renderCF = () => {
-    const list = App.filtraPor(flows, document.getElementById('cf-busca').value,
+    montarSeletor();
+    renderKpis();
+    const list = App.filtraPor(doMes(periodo), document.getElementById('cf-busca').value,
       ['origem', 'descricao', 'categoria', 'conta', 'documento', 'data',
         f => f.tipo === 'entrada' ? 'entrada' : 'saida']);
     document.getElementById('cf-contagem').textContent =
@@ -667,7 +743,9 @@ App.registerView('cashflow', async (view) => {
            <button class="btn sm ghost" onclick="CF.excluir(${f.id})" title="Excluir este lançamento">🗑️ Excluir</button>`
         : `<span class="small muted" title="Veio de ${App.esc(CF_ORIGEM[f.refType] || f.refType)} — desfaça por lá para os dois lados baterem">automático</span>` }] : [])
     ], {
-      emptyMsg: 'Nenhum lançamento — os módulos de vendas, contas e compras alimentam o caixa automaticamente',
+      emptyMsg: periodo
+        ? `Nenhum lançamento em ${rotuloMes(periodo)} — use as setas para procurar outro mês.`
+        : 'Nenhum lançamento — os módulos de vendas, contas e compras alimentam o caixa automaticamente',
       sortState: ordemCF,
       onSort: (o) => { ordemCF = o; renderCF(); },
       onRow: (f) => CF.detalhe(f.id)
@@ -675,6 +753,15 @@ App.registerView('cashflow', async (view) => {
   };
   renderCF();
   document.getElementById('cf-busca').addEventListener('input', renderCF);
+
+  /* Trocar de mês recalcula tudo: entradas, saídas, saldo do mês, acumulado
+     e a lista. A busca digitada continua valendo. */
+  const irPara = (m) => { periodo = m; renderCF(); };
+  document.getElementById('cf-mes').addEventListener('change', e => irPara(e.target.value));
+  document.getElementById('cf-ant').onclick = () => irPara(somarMeses(periodo || mesAtual, -1));
+  document.getElementById('cf-prox').onclick = () => irPara(somarMeses(periodo || mesAtual, 1));
+  document.getElementById('cf-hoje').onclick = () => irPara(mesAtual);
+  document.getElementById('cf-todos').onclick = () => irPara('');
 
   document.getElementById('cf-import').addEventListener('change', async (e) => {
     const f = e.target.files[0];
@@ -866,8 +953,10 @@ App.registerView('cashflow', async (view) => {
       App.excluirLancamento(`/cashflow/${id}`, 'este lançamento',
         { nome: f ? `${f.tipo === 'entrada' ? 'Entrada' : 'Saída'} de R$ ${App.money(f.valor)} em ${App.date(f.data)} — ${f.origem || f.descricao || 'manual'}` : null });
     },
+    /* Exporta o que está na tela: o mês escolhido, não o histórico inteiro —
+       senão o arquivo nunca bate com os números que a pessoa está vendo. */
     exportCsv() {
-      App.exportCsv('fluxo-de-caixa.csv', flows.map(f => ({
+      App.exportCsv(`fluxo-de-caixa${periodo ? '-' + periodo : ''}.csv`, doMes(periodo).map(f => ({
         data: App.date(f.data), tipo: f.tipo, origem: f.origem || '', categoria: f.categoria || '',
         conta: f.conta || '', documento: f.documento || '',
         valor: (f.tipo === 'entrada' ? '' : '-') + String(f.valor).replace('.', ',')

@@ -842,3 +842,11 @@ hr.sep { border: none; border-top: 1px solid var(--line-soft); margin: 14px 0; }
 /* Prévia do nome dentro do formulário, enquanto a pessoa digita. */
 .cnc-preview { margin-top: 6px; font-size: 12px; color: var(--text-2); line-height: 1.6; }
 .warn-txt { color: var(--warn); }
+
+/* Barra de período do fluxo de caixa: os controles de mês ficam juntos,
+   destacados do resto da tela por uma linha discreta. */
+.toolbar.cf-periodo {
+  background: var(--bg-2); border: 1px solid var(--line);
+  border-radius: var(--radius); padding: 8px 10px; margin-bottom: 12px;
+}
+.toolbar.cf-periodo select { font-weight: 600; }
