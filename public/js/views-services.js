@@ -273,6 +273,7 @@ App.registerView('quotes', async (view, args) => {
           { value: 'parcelado', label: 'Parcelado' }] },
         { name: 'parcelas', label: 'Nº de parcelas', type: 'number', value: 1 },
         { name: 'intervaloDias', label: 'Intervalo entre parcelas (dias)', type: 'number', value: 30 },
+        { name: 'primeiroVencimento', label: 'Vencimento da 1ª parcela', type: 'date', value: App.addDays(App.today(), 30) },
         { name: 'vencimento', label: 'Vencimento da cobrança única', type: 'date', value: '' },
         { name: 'entrada', label: 'Entrada recebida agora (R$) — opcional', type: 'number', step: '0.01', value: '' }
       ], async d => {
@@ -282,6 +283,7 @@ App.registerView('quotes', async (view, args) => {
           parcelado: d.condicao === 'parcelado',
           parcelas: Number(d.parcelas) || 1,
           intervaloDias: Number(d.intervaloDias) || 30,
+          primeiroVencimento: d.primeiroVencimento,
           vencimento: d.vencimento,
           entrada: Number(d.entrada) || 0
         });
@@ -300,8 +302,32 @@ App.registerView('quotes', async (view, args) => {
         const parcelado = m.querySelector('[name=condicao]').value === 'parcelado';
         campo('parcelas').style.display = parcelado ? '' : 'none';
         campo('intervaloDias').style.display = parcelado ? '' : 'none';
+        campo('primeiroVencimento').style.display = parcelado ? '' : 'none';
         campo('vencimento').style.display = parcelado ? 'none' : '';
+        previa();
       };
+      /* Mostra as parcelas antes de aprovar: valor de cada uma e o dia em
+         que cada uma vence, contando a partir do 1º vencimento. */
+      const aviso = document.createElement('div');
+      aviso.className = 'small muted'; aviso.style.margin = '4px 0 8px';
+      m.querySelector('.actions').before(aviso);
+      const previa = () => {
+        const parcelado = m.querySelector('[name=condicao]').value === 'parcelado';
+        const n = Math.max(1, Number(m.querySelector('[name=parcelas]').value) || 1);
+        const int = Number(m.querySelector('[name=intervaloDias]').value) || 30;
+        const venc1 = m.querySelector('[name=primeiroVencimento]').value;
+        if (!parcelado || n < 2 || !total || !venc1) { aviso.innerHTML = ''; return; }
+        const cent = Math.round(total * 100), base = Math.floor(cent / n);
+        const linhas = [];
+        for (let i = 1; i <= Math.min(n, 12); i++) {
+          const v = (i === n ? cent - base * (n - 1) : base) / 100;
+          linhas.push(`Parcela ${i} — R$ ${App.money(v)} — ${App.date(App.addDays(venc1, int * (i - 1)))}`);
+        }
+        aviso.innerHTML = '<b>Parcelas que serão geradas:</b><br>' + linhas.join('<br>')
+          + (n > 12 ? `<br><span class="muted">… e mais ${n - 12} parcela(s)</span>` : '');
+      };
+      ['parcelas', 'intervaloDias', 'primeiroVencimento'].forEach(n =>
+        m.querySelector(`[name=${n}]`).addEventListener('input', previa));
       m.querySelector('[name=condicao]').addEventListener('change', ajustar);
       ajustar();
     },
@@ -540,7 +566,7 @@ App.registerView('os', async (view) => {
     document.getElementById('os-table').innerHTML = App.table(list, [
       { h: 'OS / Cliente', cell: o => `<b>OS ${o.numero} — ${App.esc(App.clientName(o.clienteId, clients))}</b>
         <div class="small muted">${[o.identificacao, o.modelo].filter(Boolean).map(x => App.esc(x)).join(' · ') || '—'}</div>` },
-      { h: 'Serviços', cell: o => `<span class="small">${(o.itens || []).slice(0, 3).map(i => App.esc(i.nome)).join(', ')}${o.itens.length > 3 ? '…' : ''}</span>` },
+      { h: 'Serviços', cell: o => `<span class="small">${(o.itens || []).slice(0, 3).map(i => App.esc(i.nome)).join(', ')}${(o.itens || []).length > 3 ? '…' : ''}</span>` },
       ...(verValores ? [{ h: 'Valor', class: 'num', cell: o => App.moneyHtml(o.valorTotal) }] : []),
       { h: 'Previsão', cell: o => App.date(o.previsaoEntrega) },
       { h: 'Responsável', cell: o => App.esc(App.userName(o.responsavelId)) },
@@ -844,6 +870,8 @@ App.registerView('os', async (view) => {
         { name: 'parcelado', label: 'Parcelado (gera as parcelas em Contas a receber)', type: 'checkbox', value: false, full: true },
         { name: 'parcelas', label: 'Nº de parcelas', type: 'number', value: (o.pagamento || {}).parcelas || 1 },
         { name: 'intervaloDias', label: 'Intervalo entre parcelas (dias)', type: 'number', value: 30 },
+        { name: 'primeiroVencimento', label: 'Vencimento da 1ª parcela', type: 'date',
+          value: (o.pagamento || {}).primeiroVencimento || App.addDays(App.today(), 30) },
         { name: 'vencimento', label: 'Vencimento (cobrança única)', type: 'date', value: o.previsaoEntrega || '' },
         { name: 'data', label: 'Data (se à vista)', type: 'date', value: App.today() }
       ], async d => {
@@ -853,6 +881,30 @@ App.registerView('os', async (view) => {
       m.querySelector('.actions').insertAdjacentHTML('afterbegin',
         `<p class="small muted" style="margin-right:auto">As parcelas <b>em aberto</b> deste serviço são refeitas.<br>
          O que já foi recebido continua como está.</p>`);
+
+      /* Prévia das parcelas: valor de cada uma e o dia de cada vencimento. */
+      const prev = document.createElement('div');
+      prev.className = 'small muted'; prev.style.margin = '4px 0 8px';
+      m.querySelector('.actions').before(prev);
+      const previaOS = () => {
+        const parcelado = m.querySelector('[name=parcelado]').checked;
+        const n = Math.max(1, Number(m.querySelector('[name=parcelas]').value) || 1);
+        const int = Number(m.querySelector('[name=intervaloDias]').value) || 30;
+        const venc1 = m.querySelector('[name=primeiroVencimento]').value;
+        const valor = Number(m.querySelector('[name=valor]').value) || 0;
+        if (!parcelado || n < 2 || !valor || !venc1) { prev.innerHTML = ''; return; }
+        const cent = Math.round(valor * 100), base = Math.floor(cent / n);
+        const linhas = [];
+        for (let i = 1; i <= Math.min(n, 12); i++) {
+          const v = (i === n ? cent - base * (n - 1) : base) / 100;
+          linhas.push(`Parcela ${i} — R$ ${App.money(v)} — ${App.date(App.addDays(venc1, int * (i - 1)))}`);
+        }
+        prev.innerHTML = '<b>Parcelas que serão geradas:</b><br>' + linhas.join('<br>')
+          + (n > 12 ? `<br><span class="muted">… e mais ${n - 12} parcela(s)</span>` : '');
+      };
+      ['parcelado', 'parcelas', 'intervaloDias', 'primeiroVencimento', 'valor'].forEach(n =>
+        m.querySelector(`[name=${n}]`).addEventListener('input', previaOS));
+      previaOS();
     },
     printOne(id) {
       const o = oss.find(x => x.id === id);

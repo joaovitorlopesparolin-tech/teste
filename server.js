@@ -191,11 +191,37 @@ const REST = {
 /* Regras auxiliares                                                     */
 /* ===================================================================== */
 
+/* Situação de uma parcela a receber (boleto):
+     aberto    — a vencer;
+     vencida   — derivada na leitura, quando o vencimento já passou;
+     parcial   — recebida em parte, continua sendo cobrança pelo SALDO;
+     paga      — quitada;
+     cancelada — fora da cobrança, mas preservada no histórico.
+   "parcial" não vira "vencida": ela guarda o próprio estado e o atraso vai
+   como marca (`atrasada`), para a tela conseguir mostrar as duas coisas. */
+
+/** Quanto já entrou de uma parcela. A quitada vale pelo total. */
+function recebidoDaParcela(r) {
+  if (r.status === 'paga') return Math.round((Number(r.valor) || 0) * 100) / 100;
+  return Math.round((Number(r.recebido) || 0) * 100) / 100;
+}
+/** Quanto ainda falta receber de uma parcela (0 se paga ou cancelada). */
+function saldoDaParcela(r) {
+  if (r.status === 'paga' || r.status === 'cancelada') return 0;
+  return Math.round(((Number(r.valor) || 0) - (Number(r.recebido) || 0)) * 100) / 100;
+}
+/** Está em atraso? (vale para a que venceu e para a recebida em parte) */
+function emAtraso(r) { return r.status === 'vencida' || (r.status === 'parcial' && r.atrasada); }
+/** Continua sendo cobrança — conta no "a receber" pelo saldo. */
+function aReceber(r) { return r.status === 'aberto' || r.status === 'vencida' || r.status === 'parcial'; }
+
 /** Marca como vencidas as parcelas/contas em aberto com vencimento passado (derivado na leitura). */
 function withOverdue(list) {
   const t = domain.today();
   return list.map(r => {
-    if (r.status === 'aberto' && r.vencimento && r.vencimento < t) return Object.assign({}, r, { status: 'vencida' });
+    const venceu = !!(r.vencimento && r.vencimento < t);
+    if (r.status === 'aberto' && venceu) return Object.assign({}, r, { status: 'vencida' });
+    if (r.status === 'parcial') return Object.assign({}, r, { atrasada: venceu });
     return r;
   });
 }
@@ -458,9 +484,10 @@ function dashboard(user) {
     base.faturamentoMes = fat;
     base.vendasMes.valor = faturamentoVendas;
     base.servicosMes.valor = faturamentoServicos;
-    base.contasReceber = receiv.filter(r => r.status === 'aberto').reduce((s, r) => s + r.valor, 0);
+    // Parcela recebida em parte entra pelo que ainda falta, nunca pelo total.
+    base.contasReceber = receiv.filter(r => aReceber(r) && !emAtraso(r)).reduce((s, r) => s + saldoDaParcela(r), 0);
     base.contasPagar = pay.filter(p => p.status === 'aberto').reduce((s, p) => s + p.valor, 0);
-    base.vencidosReceber = receiv.filter(r => r.status === 'vencida').reduce((s, r) => s + r.valor, 0);
+    base.vencidosReceber = receiv.filter(emAtraso).reduce((s, r) => s + saldoDaParcela(r), 0);
     base.vencidosPagar = pay.filter(p => p.status === 'vencida').reduce((s, p) => s + p.valor, 0);
     base.saldoCaixa = flows.reduce((s, f) => s + (f.tipo === 'entrada' ? f.valor : -f.valor), 0);
 
@@ -1437,12 +1464,12 @@ function assistantContext(user) {
   }
 
   if (can(user, 'receivables')) {
-    const recs = withOverdue(db.all('receivables')).filter(r => r.status === 'aberto' || r.status === 'vencida')
+    const recs = withOverdue(db.all('receivables')).filter(aReceber)
       .sort((a, b) => (a.vencimento < b.vencimento ? -1 : 1));
     ctx.contasAReceber = {
-      totalEmAberto: money(recs.reduce((s, r) => s + r.valor, 0)),
-      vencidas: money(recs.filter(r => r.status === 'vencida').reduce((s, r) => s + r.valor, 0)),
-      proximas: recs.slice(0, 20).map(r => ({ descricao: r.descricao, cliente: (db.get('clients', r.clienteId) || {}).nome || '', valor: money(r.valor), vencimento: r.vencimento, status: r.status }))
+      totalEmAberto: money(recs.reduce((s, r) => s + saldoDaParcela(r), 0)),
+      vencidas: money(recs.filter(emAtraso).reduce((s, r) => s + saldoDaParcela(r), 0)),
+      proximas: recs.slice(0, 20).map(r => ({ descricao: r.descricao, cliente: (db.get('clients', r.clienteId) || {}).nome || '', valor: money(saldoDaParcela(r)), vencimento: r.vencimento, status: r.status }))
     };
   }
 
@@ -1572,9 +1599,9 @@ route('GET', '/api/clients/:id/profile', 'clients', async (req, res, user, param
   const receb = withOverdue(db.all('receivables').filter(r => r.clienteId === id));
   const totalComprado = compras.reduce((s, v) => s + (v.valorTotal || 0), 0)
     + oss.filter(o => o.status !== 'cancelado').reduce((s, o) => s + (o.valorTotal || 0), 0);
-  const totalPago = receb.filter(r => r.status === 'paga').reduce((s, r) => s + r.valor, 0);
-  const emAberto = receb.filter(r => r.status === 'aberto').reduce((s, r) => s + r.valor, 0);
-  const vencido = receb.filter(r => r.status === 'vencida').reduce((s, r) => s + r.valor, 0);
+  const totalPago = receb.reduce((s, r) => s + recebidoDaParcela(r), 0);
+  const emAberto = receb.filter(r => aReceber(r) && !emAtraso(r)).reduce((s, r) => s + saldoDaParcela(r), 0);
+  const vencido = receb.filter(emAtraso).reduce((s, r) => s + saldoDaParcela(r), 0);
   const hist = db.all('audit').filter(a => a.action === 'timeline' && a.clientId === id).sort((a, b) => a.at < b.at ? 1 : -1);
   /* Crédito fica fora de "em aberto": ali é o que o cliente deve à empresa,
      e o crédito corre no sentido contrário. Vai como número próprio. */
@@ -1781,6 +1808,7 @@ route('POST', '/api/quotes/:id/approve', 'quotes', async (req, res, user, params
   const fin = gerarFinanceiroDaOS(os, user, {
     forma: b.forma, condicao: b.parcelado ? 'parcelado' : 'a_vista',
     parcelas: b.parcelas, intervaloDias: b.intervaloDias,
+    primeiroVencimento: b.primeiroVencimento,
     vencimento: b.vencimento, dataBase: b.dataBase || domain.today()
   });
   // Entrada paga na aprovação (ex.: metade agora, metade na entrega).
@@ -1928,7 +1956,8 @@ route('PUT', '/api/os/:id', 'os', async (req, res, user, params) => {
       forma: (os.pagamento || {}).forma,
       condicao: (os.pagamento || {}).condicao,
       parcelas: (os.pagamento || {}).parcelas,
-      intervaloDias: (os.pagamento || {}).intervaloDias
+      intervaloDias: (os.pagamento || {}).intervaloDias,
+      primeiroVencimento: primeiroVencimentoVigente(os)
     });
   }
   audit(user, 'alterou', 'serviceOrders', os.id, `OS nº ${os.numero} editada${mudou.length ? ' — ' + mudou.join('; ') : ''}`);
@@ -2055,8 +2084,8 @@ function resumoFinanceiroOS(os) {
      duas vezes. */
   const pagas = db.all('receivables')
     .filter(r => r.refType === 'serviceOrders' && r.refId === os.id &&
-                 r.status === 'paga' && !r.auto && r.origem !== 'saldo')
-    .reduce((s, r) => s + (Number(r.valor) || 0), 0);
+                 (r.status === 'paga' || r.status === 'parcial') && !r.auto && r.origem !== 'saldo')
+    .reduce((s, r) => s + recebidoDaParcela(r), 0);
   const quitado = Math.round((recebido + pagas) * 100) / 100;
   return { total, recebido: quitado, saldo: Math.round((total - quitado) * 100) / 100 };
 }
@@ -2065,8 +2094,18 @@ function resumoFinanceiroOS(os) {
  * (Re)monta as contas a receber de uma OS. Só mexe no que está em aberto e
  * foi gerado pelo sistema — parcela já recebida nunca é tocada.
  * opcoes: { forma, condicao: 'a_vista'|'parcelado', parcelas, intervaloDias,
- *           vencimento, dataBase, entrada }
+ *           primeiroVencimento, vencimento, dataBase, entrada }
+ * Com `primeiroVencimento`, a 1ª parcela cai no dia informado e as demais
+ * andam de `intervaloDias` a partir dele.
  */
+/* Ao refazer sozinho o plano de cobrança (mudou o valor da OS, migração),
+   vale a data de 1º vencimento que a OS já tinha — desde que ainda esteja
+   à frente. Data velha geraria parcelas já nascendo vencidas. */
+function primeiroVencimentoVigente(os) {
+  const d = (os.pagamento || {}).primeiroVencimento || '';
+  return d && d >= domain.today() ? d : '';
+}
+
 function gerarFinanceiroDaOS(os, user, opcoes = {}) {
   const cliente = db.get('clients', os.clienteId);
   const total = Number(os.valorTotal) || 0;
@@ -2078,7 +2117,8 @@ function gerarFinanceiroDaOS(os, user, opcoes = {}) {
 
   // Limpa só as parcelas em aberto criadas automaticamente para esta OS.
   for (const r of db.all('receivables').filter(r =>
-    r.refType === 'serviceOrders' && r.refId === os.id && r.status !== 'paga' && r.status !== 'cancelada')) {
+    r.refType === 'serviceOrders' && r.refId === os.id &&
+    r.status !== 'paga' && r.status !== 'parcial' && r.status !== 'cancelada')) {
     db.remove('receivables', r.id);
   }
   if (aCobrar <= 0.005) {
@@ -2093,7 +2133,8 @@ function gerarFinanceiroDaOS(os, user, opcoes = {}) {
 
   let criadas = 0;
   if (parcelado) {
-    const parcels = domain.generateInstallments(base, aCobrar, parcelas, opcoes.intervaloDias);
+    const parcels = domain.generateInstallments(base, aCobrar, parcelas,
+      opcoes.intervaloDias, opcoes.primeiroVencimento);
     for (const p of parcels) {
       db.insert('receivables', {
         clienteId: os.clienteId, origem: 'servico', refType: 'serviceOrders', refId: os.id,
@@ -2117,7 +2158,8 @@ function gerarFinanceiroDaOS(os, user, opcoes = {}) {
     pagamentoStatus: jaRecebido > 0 ? 'parcial' : (parcelado ? 'parcelado' : 'pendente'),
     pagamento: Object.assign({}, os.pagamento, {
       forma, condicao: parcelado ? 'parcelado' : 'a_vista',
-      parcelas: parcelado ? parcelas : 1, intervaloDias: opcoes.intervaloDias || 30, valor: total
+      parcelas: parcelado ? parcelas : 1, intervaloDias: opcoes.intervaloDias || 30,
+      primeiroVencimento: parcelado ? (opcoes.primeiroVencimento || '') : '', valor: total
     })
   });
   return { criadas, aCobrar };
@@ -2138,7 +2180,8 @@ route('POST', '/api/os/:id/payment', 'receivables', async (req, res, user, param
   if (b.aVistaAgora) {
     const data = b.data || domain.today();
     for (const r of db.all('receivables').filter(r =>
-      r.refType === 'serviceOrders' && r.refId === os.id && r.status !== 'paga' && r.status !== 'cancelada')) {
+      r.refType === 'serviceOrders' && r.refId === os.id &&
+      r.status !== 'paga' && r.status !== 'parcial' && r.status !== 'cancelada')) {
       db.remove('receivables', r.id);
     }
     db.insert('cashflow', {
@@ -2161,6 +2204,7 @@ route('POST', '/api/os/:id/payment', 'receivables', async (req, res, user, param
     gerarFinanceiroDaOS(os, user, {
       forma: b.forma, condicao: b.parcelado ? 'parcelado' : 'a_vista',
       parcelas: b.parcelas, intervaloDias: b.intervaloDias,
+      primeiroVencimento: b.primeiroVencimento,
       vencimento: b.vencimento, dataBase: b.dataVenda || domain.today()
     });
   }
@@ -2197,7 +2241,8 @@ function receberDaOS(os, user, b) {
 
   // A cobrança cheia dá lugar ao saldo: o mesmo dinheiro não pode aparecer duas vezes.
   for (const r of db.all('receivables').filter(r =>
-    r.refType === 'serviceOrders' && r.refId === os.id && r.origem !== 'saldo' && r.status !== 'paga' && r.status !== 'cancelada')) {
+    r.refType === 'serviceOrders' && r.refId === os.id && r.origem !== 'saldo' &&
+    r.status !== 'paga' && r.status !== 'parcial' && r.status !== 'cancelada')) {
     db.remove('receivables', r.id);
   }
   const atualizada = db.get('serviceOrders', os.id);
@@ -2489,7 +2534,8 @@ function gerarFinanceiroDaVenda(sale, cliente, user) {
   // Financeiro: contas a receber / caixa conforme forma de pagamento.
   const formaAVista = ['pix', 'dinheiro'].includes(pagamento.forma) && pagamento.condicao !== 'parcelado';
   if (pagamento.condicao === 'parcelado' && (pagamento.forma === 'boleto' || pagamento.forma === 'cheque')) {
-    const parcels = domain.generateInstallments(sale.dataPedido, valorTotal, pagamento.parcelas, pagamento.intervaloDias);
+    const parcels = domain.generateInstallments(sale.dataPedido, valorTotal,
+      pagamento.parcelas, pagamento.intervaloDias, pagamento.primeiroVencimento);
     for (const p of parcels) {
       db.insert('receivables', {
         clienteId: cliente.id, origem: 'venda', refType: 'sales', refId: sale.id,
@@ -2710,7 +2756,8 @@ route('DELETE', '/api/sales/:id', 'sales', async (req, res, user, params) => {
 function reequilibrarReceberDaVenda(sale, { data, forma, vencimentoSaldo }) {
   const lista = sale.recebimentos || [];
   for (const r of db.all('receivables').filter(r =>
-    r.refType === 'sales' && r.refId === sale.id && r.origem !== 'saldo' && r.status !== 'paga')) {
+    r.refType === 'sales' && r.refId === sale.id && r.origem !== 'saldo' &&
+    r.status !== 'paga' && r.status !== 'parcial')) {
     db.remove('receivables', r.id);
   }
   const novoSaldo = Math.round((sale.valorTotal - lista.reduce((s, r) => s + r.valor, 0)) * 100) / 100;
@@ -4482,7 +4529,8 @@ route('POST', '/api/receivables/generate', 'receivables', async (req, res, user)
   const b = await readBody(req);
   const cliente = db.get('clients', b.clienteId);
   if (!cliente) return bad(res, 'Cliente é obrigatório');
-  const parcels = domain.generateInstallments(b.dataVenda || domain.today(), b.valor, b.parcelas, b.intervaloDias);
+  const parcels = domain.generateInstallments(b.dataVenda || domain.today(), b.valor,
+    b.parcelas, b.intervaloDias, b.primeiroVencimento);
   const out = [];
   for (const p of parcels) {
     out.push(db.insert('receivables', {
@@ -4509,6 +4557,18 @@ route('PUT', '/api/receivables/:id', 'receivables', async (req, res, user, param
     if (b[k] !== undefined) patch[k] = b[k];
   }
   if (b.valor !== undefined) patch.valor = Number(b.valor) || 0;
+  /* Situação editável à mão: só entre "em cobrança" e "cancelada". Marcar
+     uma parcela como paga por aqui criaria dinheiro que nunca passou pelo
+     caixa — a baixa é sempre pelo recebimento. */
+  if (b.status !== undefined && b.status !== antes.status) {
+    if (!['aberto', 'cancelada'].includes(b.status)) {
+      return bad(res, 'A situação só pode ser alterada entre "em cobrança" e "cancelada". Para dar baixa, use Receber.');
+    }
+    if (antes.status === 'paga' || antes.status === 'parcial') {
+      return bad(res, 'Esta parcela já tem recebimento lançado — estorne o recebimento antes de mudar a situação.');
+    }
+    if (!(b.status === 'aberto' && antes.status === 'vencida')) patch.status = b.status;
+  }
   if (b.clienteId !== undefined) {
     const c = db.get('clients', b.clienteId);
     if (!c) return bad(res, 'Cliente não encontrado.');
@@ -4516,28 +4576,49 @@ route('PUT', '/api/receivables/:id', 'receivables', async (req, res, user, param
   }
 
   const NOMES = { clienteId: 'Cliente', descricao: 'Descrição', forma: 'Forma', valor: 'Valor',
-                  vencimento: 'Vencimento', observacoes: 'Observações' };
+                  vencimento: 'Vencimento', observacoes: 'Observações', status: 'Situação' };
   const mudancas = Object.keys(patch)
     .filter(k => JSON.stringify(antes[k] ?? '') !== JSON.stringify(patch[k] ?? ''))
     .map(k => `${NOMES[k]}: ${antes[k] ?? '—'} → ${patch[k] === '' ? '—' : patch[k]}`);
   if (!mudancas.length) return ok(res, antes);
 
   const mexeuDinheiro = patch.valor !== undefined && patch.valor !== antes.valor;
-  if (antes.status === 'paga') {
+  const temMovimento = antes.status === 'paga' || antes.status === 'parcial';
+  if (temMovimento) {
     if (!b.confirmar) {
       return send(res, 409, {
-        error: 'Esta parcela já possui movimentação financeira (recebida). Deseja realmente alterar seus dados?',
+        error: antes.status === 'paga'
+          ? 'Esta parcela já possui movimentação financeira (recebida). Deseja realmente alterar seus dados?'
+          : `Esta parcela já possui movimentação financeira (${brl(recebidoDaParcela(antes))} recebidos em parte). Deseja realmente alterar seus dados?`,
         precisaConfirmar: true
       });
     }
-    if (mexeuDinheiro) {
+    if (mexeuDinheiro && antes.status === 'paga') {
       // O caixa acompanha, para os relatórios não divergirem do recebível.
       for (const c of db.all('cashflow').filter(c => c.refType === 'receivables' && c.refId === antes.id)) {
         db.update('cashflow', c.id, { valor: patch.valor });
       }
       mudancas.push('(entrada de caixa ligada ajustada junto)');
     }
+    /* Recebida em parte: os recebimentos já lançados continuam valendo como
+       estão — mudar o valor da parcela só muda o que ainda falta. Se o novo
+       valor já estiver coberto pelo que entrou, a parcela fica quitada. */
+    if (mexeuDinheiro && antes.status === 'parcial') {
+      const recebido = recebidoDaParcela(antes);
+      if (recebido >= patch.valor - 0.005) {
+        patch.status = 'paga';
+        mudancas.push(`(o que já entrou — ${brl(recebido)} — cobre o novo valor: parcela quitada)`);
+      } else {
+        mudancas.push(`(${brl(recebido)} já recebidos continuam lançados; falta ${brl(Math.round((patch.valor - recebido) * 100) / 100)})`);
+      }
+    }
   }
+
+  /* Histórico da própria parcela: quem mudou o quê e quando. É aqui que
+     ficam registradas as alterações de data de vencimento e de valor. */
+  patch.historico = (antes.historico || []).concat([{
+    em: new Date().toISOString(), por: user.name, tipo: 'edicao', mudancas: mudancas.slice()
+  }]);
 
   const rec = db.update('receivables', antes.id, patch);
   audit(user, 'alterou', 'receivables', rec.id,
@@ -4580,8 +4661,10 @@ route('POST', '/api/receivables/replan', 'receivables', async (req, res, user) =
   const grupo = ids.map(id => db.get('receivables', id)).filter(Boolean);
   if (!grupo.length) return bad(res, 'Nenhuma parcela informada.');
 
-  const pagas = grupo.filter(r => r.status === 'paga');
-  const abertas = grupo.filter(r => r.status !== 'paga' && r.status !== 'cancelada');
+  /* Parcela com dinheiro dentro (paga ou recebida em parte) não é refeita:
+     ela fica como está e o valor dela sai do que será redistribuído. */
+  const pagas = grupo.filter(r => r.status === 'paga' || r.status === 'parcial');
+  const abertas = grupo.filter(r => r.status === 'aberto' || r.status === 'vencida');
   if (!abertas.length) return bad(res, 'Todas as parcelas deste grupo já foram recebidas ou canceladas.');
 
   const totalNovo = Number(b.valorTotal) || grupo.reduce((s, r) => s + r.valor, 0);
@@ -4596,10 +4679,10 @@ route('POST', '/api/receivables/replan', 'receivables', async (req, res, user) =
   const modelo = abertas[0];
   const base = (modelo.descricao || 'Boleto').replace(/ — parcela \d+\/\d+$/, '');
 
-  // Datas: a partir da primeira data informada, ou recalculadas da data-base.
+  // Datas: a 1ª parcela cai na data informada; sem ela, conta da data-base.
+  const primeiro = b.primeiroVencimento || b.primeiraData || '';
   const parcels = domain.generateInstallments(
-    b.primeiraData ? domain.addDays(b.primeiraData, -intervalo) : (b.dataVenda || domain.today()),
-    restante, futuras, intervalo);
+    b.dataVenda || domain.today(), restante, futuras, intervalo, primeiro);
 
   for (const r of abertas) db.remove('receivables', r.id);
   const criadas = [];
@@ -4629,21 +4712,55 @@ route('POST', '/api/receivables/replan', 'receivables', async (req, res, user) =
   ok(res, { pagas: pagas.length, criadas });
 });
 
+/* Baixa de um boleto. Sem `valor` informado, recebe tudo que falta (é o
+   caminho de sempre). Com um valor menor, a parcela fica "recebida em parte":
+   o que entrou vai para o caixa na hora e o restante continua sendo cobrado
+   — sem lançamento duplicado, porque o caixa registra só o que foi recebido. */
 route('POST', '/api/receivables/:id/receive', 'receivables', async (req, res, user, params) => {
   const b = await readBody(req);
   const r = db.get('receivables', params.id);
   if (!r) return notFound(res);
   if (r.status === 'paga') return bad(res, 'Parcela já recebida');
+  if (r.status === 'cancelada') return bad(res, 'Parcela cancelada — não é possível receber.');
+
   const data = b.data || domain.today();
-  db.update('receivables', r.id, { status: 'paga', dataRecebimento: data });
+  const total = Math.round((Number(r.valor) || 0) * 100) / 100;
+  const antes = Math.round((Number(r.recebido) || 0) * 100) / 100;
+  const falta = Math.round((total - antes) * 100) / 100;
+  const informado = b.valor === undefined || b.valor === null || b.valor === '';
+  const valor = informado ? falta : Math.round(Number(b.valor) * 100) / 100;
+  if (!(valor > 0)) return bad(res, 'Informe um valor de recebimento maior que zero.');
+  if (valor > falta + 0.005) {
+    return bad(res, `Falta receber ${brl(falta)} desta parcela — não dá para lançar ${brl(valor)}.`);
+  }
+
+  const recebido = Math.round((antes + valor) * 100) / 100;
+  const quitada = recebido >= total - 0.005;
+  const forma = b.forma || r.forma || 'boleto';
+  const lancamento = { data, valor, forma, conta: b.conta || 'principal', obs: b.obs || '', por: user.name };
+
+  db.update('receivables', r.id, {
+    status: quitada ? 'paga' : 'parcial',
+    recebido, dataRecebimento: data,
+    recebimentos: (r.recebimentos || []).concat([lancamento]),
+    historico: (r.historico || []).concat([{
+      em: new Date().toISOString(), por: user.name, tipo: 'recebimento',
+      mudancas: [`Recebido ${brl(valor)} em ${dataBR(data)} (${forma})` +
+        (quitada ? ' — parcela quitada' : ` — falta ${brl(Math.round((total - recebido) * 100) / 100)}`)]
+    }])
+  });
+
   const categoria = r.origem === 'servico' ? 'servico' : 'venda_cabecote';
   db.insert('cashflow', {
-    tipo: 'entrada', valor: r.valor, data, conta: b.conta || 'principal',
+    tipo: 'entrada', valor, data, conta: b.conta || 'principal',
     categoria, origem: r.descricao, documento: '',
-    refType: 'receivables', refId: r.id, descricao: 'Recebimento'
+    refType: 'receivables', refId: r.id,
+    descricao: quitada ? 'Recebimento' : 'Recebimento parcial'
   });
-  audit(user, 'recebeu', 'receivables', r.id, `${r.descricao} — R$ ${r.valor.toFixed(2)} em ${data}`);
-  ok(res, { ok: true });
+  audit(user, 'recebeu', 'receivables', r.id,
+    `${r.descricao} — R$ ${valor.toFixed(2)} em ${data}` +
+    (quitada ? '' : ` (parcial — falta R$ ${(total - recebido).toFixed(2)})`));
+  ok(res, { ok: true, valor, recebido, saldo: Math.round((total - recebido) * 100) / 100, quitada });
 });
 
 route('POST', '/api/receivables/:id/cancel', 'receivables', async (req, res, user, params) => {
@@ -5244,7 +5361,8 @@ function reconciliarProducaoEFinanceiro(user) {
       forma: (os.pagamento || {}).forma,
       condicao: (os.pagamento || {}).condicao,
       parcelas: (os.pagamento || {}).parcelas,
-      intervaloDias: (os.pagamento || {}).intervaloDias
+      intervaloDias: (os.pagamento || {}).intervaloDias,
+      primeiroVencimento: primeiroVencimentoVigente(os)
     });
     if (r.criadas) out.receberServicos += r.criadas;
   }

@@ -289,6 +289,14 @@ const App = {
     return dt.toLocaleDateString('pt-BR') + ' ' + dt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
   },
   today() { return new Date().toISOString().slice(0, 10); },
+  /** 'YYYY-MM-DD' + n dias. Meio-dia para o horário de verão não virar o dia. */
+  addDays(s, n) {
+    if (!s) return '';
+    const d = new Date(String(s).slice(0, 10) + 'T12:00:00');
+    d.setDate(d.getDate() + Number(n || 0));
+    const p = x => String(x).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  },
   esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   },

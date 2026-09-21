@@ -287,42 +287,64 @@ App.registerView('receivables', async (view) => {
     return '—';
   };
 
+  /* ---------- números de uma parcela ----------------------------------
+     Parcela recebida em parte continua sendo cobrança: vale pelo SALDO,
+     nunca pelo valor cheio — senão o total a receber ficaria inflado. */
+  const recebidoDe = (r) => r.status === 'paga'
+    ? Math.round((Number(r.valor) || 0) * 100) / 100
+    : Math.round((Number(r.recebido) || 0) * 100) / 100;
+  const saldoDe = (r) => (r.status === 'paga' || r.status === 'cancelada') ? 0
+    : Math.round(((Number(r.valor) || 0) - (Number(r.recebido) || 0)) * 100) / 100;
+  const emAtraso = (r) => r.status === 'vencida' || (r.status === 'parcial' && r.atrasada);
+  const aberto = r => r.status === 'aberto' || r.status === 'vencida' || r.status === 'parcial';
+  /* Descrição sem o sufixo "— parcela 2/4": é a referência do título. */
+  const baseDesc = (r) => String(r.descricao || '').replace(/ — parcela \d+\/\d+$/, '');
+
   /* Vencimento crescente é a ordem que interessa aqui: o que vence antes
      precisa ser cobrado antes. */
   let ordemRecv = { chave: 'Vencimento', desc: false };
-  const aberto = r => r.status === 'aberto' || r.status === 'vencida';
   const open = receivables.filter(aberto);
-  const totalOpen = open.reduce((s, r) => s + r.valor, 0);
-  const totalOverdue = open.filter(r => r.status === 'vencida').reduce((s, r) => s + r.valor, 0);
-  const abertoDe = o => open.filter(r => origemDe(r) === o).reduce((s, r) => s + r.valor, 0);
+  const totalOpen = open.reduce((s, r) => s + saldoDe(r), 0);
+  const totalOverdue = open.filter(emAtraso).reduce((s, r) => s + saldoDe(r), 0);
+  const abertoDe = o => open.filter(r => origemDe(r) === o).reduce((s, r) => s + saldoDe(r), 0);
 
   view.innerHTML = `
-    <div class="grid cols-4">
-      <div class="card kpi ${totalOverdue ? 'k-danger' : ''}"><div class="label">Vencido</div>
-        <div class="value money">${App.money(totalOverdue)}</div></div>
-      <div class="card kpi k-warn"><div class="label">Total em aberto</div>
-        <div class="value money">${App.money(totalOpen)}</div></div>
-      <div class="card kpi"><div class="label">Venda de cabeçote</div>
-        <div class="value money">${App.money(abertoDe('venda'))}</div></div>
-      <div class="card kpi"><div class="label">Serviços</div>
-        <div class="value money">${App.money(abertoDe('servico'))}</div></div>
+    <div class="tabs" id="rtabs">
+      <button data-t="geral" class="active">Visão geral</button>
+      <button data-t="boletos">Boletos a receber</button>
     </div>
-    <div class="toolbar" style="margin-top:14px">
-      <button class="btn primary" onclick="Recv.generate()">+ Gerar boletos / parcelas</button>
-      <select id="rf-origem" style="max-width:210px">
-        <option value="">Toda a receita</option>
-        <option value="venda">Venda de cabeçote</option>
-        <option value="servico">Serviço</option>
-        <option value="avulso">Avulso</option>
-      </select>
-      <select id="rf" style="max-width:180px"><option value="">Todos os status</option>
-        <option value="aberto">Em aberto</option><option value="vencida">Vencidas</option>
-        <option value="paga">Pagas</option><option value="cancelada">Canceladas</option></select>
-      <div class="spacer"></div>
-      <span class="muted small" id="rf-contagem"></span>
-      <button class="btn" onclick="Recv.print()">🖨️ Imprimir</button>
+
+    <div id="rpane-geral">
+      <div class="grid cols-4">
+        <div class="card kpi ${totalOverdue ? 'k-danger' : ''}"><div class="label">Vencido</div>
+          <div class="value money">${App.money(totalOverdue)}</div></div>
+        <div class="card kpi k-warn"><div class="label">Total em aberto</div>
+          <div class="value money">${App.money(totalOpen)}</div></div>
+        <div class="card kpi"><div class="label">Venda de cabeçote</div>
+          <div class="value money">${App.money(abertoDe('venda'))}</div></div>
+        <div class="card kpi"><div class="label">Serviços</div>
+          <div class="value money">${App.money(abertoDe('servico'))}</div></div>
+      </div>
+      <div class="toolbar" style="margin-top:14px">
+        <button class="btn primary" onclick="Recv.generate()">+ Gerar boletos / parcelas</button>
+        <select id="rf-origem" style="max-width:210px">
+          <option value="">Toda a receita</option>
+          <option value="venda">Venda de cabeçote</option>
+          <option value="servico">Serviço</option>
+          <option value="avulso">Avulso</option>
+        </select>
+        <select id="rf" style="max-width:180px"><option value="">Todos os status</option>
+          <option value="aberto">Em aberto</option><option value="vencida">Vencidas</option>
+          <option value="parcial">Recebidas em parte</option>
+          <option value="paga">Pagas</option><option value="cancelada">Canceladas</option></select>
+        <div class="spacer"></div>
+        <span class="muted small" id="rf-contagem"></span>
+        <button class="btn" onclick="Recv.print()">🖨️ Imprimir</button>
+      </div>
+      <div id="r-table"></div>
     </div>
-    <div id="r-table"></div>`;
+
+    <div id="rpane-boletos" style="display:none"></div>`;
 
   const filtrada = () => {
     const f = document.getElementById('rf').value;
@@ -332,7 +354,7 @@ App.registerView('receivables', async (view) => {
 
   const render = () => {
     const list = filtrada();
-    const soma = list.filter(aberto).reduce((s, r) => s + r.valor, 0);
+    const soma = list.filter(aberto).reduce((s, r) => s + saldoDe(r), 0);
     document.getElementById('rf-contagem').textContent =
       `${list.length} lançamento(s) · R$ ${App.money(soma)} em aberto`;
     document.getElementById('r-table').innerHTML = App.table(list, [
@@ -343,27 +365,270 @@ App.registerView('receivables', async (view) => {
       { h: 'Forma', cell: r => App.esc(r.forma || '—') },
       { h: 'Parcela', cell: r => r.parcelas > 1 ? `${r.parcela}/${r.parcelas}` : 'única' },
       { h: 'Vencimento', sort: r => r.vencimento || '', sortDesc: false, cell: r => App.date(r.vencimento) },
-      { h: 'Valor', class: 'num', sort: r => Number(r.valor) || 0, cell: r => App.moneyHtml(r.valor) },
+      { h: 'Valor', class: 'num', sort: r => Number(r.valor) || 0,
+        cell: r => App.moneyHtml(r.valor) + (r.status === 'parcial'
+          ? `<div class="small muted">falta R$ ${App.money(saldoDe(r))}</div>` : '') },
       { h: 'Status', sort: r => r.status || '', sortDesc: false, cell: r => App.badge(r.status) },
-      { h: '', class: 'num', cell: r => `
-        <button class="btn sm ghost" onclick="Recv.detalhe(${r.id})" title="Total, parcelas, recebido e saldo">🔍</button>
-        ${(r.status === 'aberto' || r.status === 'vencida') ? `
-          <button class="btn sm primary" onclick="Recv.receive(${r.id})">✓ Receber</button>
-          <button class="btn sm ghost wa" onclick="Recv.wa(${r.id})" title="Cobrar no WhatsApp">✆</button>` : ''}
-        ${r.status !== 'cancelada' ? `<button class="btn sm ghost" onclick="Recv.edit(${r.id})" title="Editar parcela">✏️</button>` : ''}
-        ${r.parcelas > 1 && (r.status === 'aberto' || r.status === 'vencida') ? `
-          <button class="btn sm ghost" onclick="Recv.replan(${r.id})" title="Recalcular as parcelas futuras deste grupo">🔁</button>` : ''}
-        ${(r.status === 'aberto' || r.status === 'vencida') ? `<button class="btn sm ghost" onclick="Recv.cancel(${r.id})" title="Cancelar (mantém o histórico)">✕</button>` : ''}
-        <button class="btn sm ghost" onclick="Recv.excluir(${r.id})" title="Excluir lançamento">🗑️</button>` }
+      { h: '', class: 'num', cell: r => acoesDa(r) }
     ], {
       emptyMsg: 'Nenhum recebível nesta seleção',
       sortState: ordemRecv,
       onSort: (o) => { ordemRecv = o; render(); }
     });
   };
+
+  /* Os mesmos botões nas duas abas: o que se pode fazer com uma parcela não
+     muda conforme a tela em que ela está sendo olhada. */
+  const acoesDa = (r) => `
+    <button class="btn sm ghost" onclick="Recv.detalhe(${r.id})" title="Total, parcelas, recebido e saldo">🔍</button>
+    ${aberto(r) ? `
+      <button class="btn sm primary" onclick="Recv.receive(${r.id})">✓ Receber</button>
+      <button class="btn sm ghost wa" onclick="Recv.wa(${r.id})" title="Cobrar no WhatsApp">✆</button>` : ''}
+    ${r.status !== 'cancelada' ? `<button class="btn sm ghost" onclick="Recv.edit(${r.id})" title="Editar parcela">✏️</button>` : ''}
+    ${r.parcelas > 1 && aberto(r) ? `
+      <button class="btn sm ghost" onclick="Recv.replan(${r.id})" title="Recalcular as parcelas futuras deste grupo">🔁</button>` : ''}
+    ${aberto(r) ? `<button class="btn sm ghost" onclick="Recv.cancel(${r.id})" title="Cancelar (mantém o histórico)">✕</button>` : ''}
+    <button class="btn sm ghost" onclick="Recv.historico(${r.id})" title="Histórico da parcela">🕘</button>
+    <button class="btn sm ghost" onclick="Recv.excluir(${r.id})" title="Excluir lançamento">🗑️</button>`;
+
   render();
   document.getElementById('rf').addEventListener('change', render);
   document.getElementById('rf-origem').addEventListener('change', render);
+
+  /* =================== ABA: BOLETOS A RECEBER ========================
+     A visão geral responde "quanto a empresa tem para receber". Esta aba
+     responde "qual boleto, de quem, de qual venda, quando vence e o que já
+     foi pago dele" — uma linha por parcela, mês a mês. */
+
+  const MESES = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho',
+    'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'];
+  const rotuloMes = (m) => {
+    if (!m) return 'Todos os meses';
+    const [ano, mes] = m.split('-');
+    const nome = MESES[Number(mes) - 1] || mes;
+    return nome.charAt(0).toUpperCase() + nome.slice(1) + '/' + ano;
+  };
+  const somarMeses = (m, n) => {
+    const d = new Date(Number(m.slice(0, 4)), Number(m.slice(5, 7)) - 1 + n, 1);
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+  };
+
+  /* Os rótulos que a oficina usa para falar de boleto — diferentes dos
+     status internos da conta a receber. */
+  const SIT = {
+    aberto: ['A vencer', 'warn'], vencida: ['Vencido', 'danger'],
+    paga: ['Pago', 'ok'], parcial: ['Parcialmente pago', 'info'],
+    cancelada: ['Cancelado', 'danger']
+  };
+  const situacao = (r) => {
+    const [rotulo, cls] = SIT[r.status] || [r.status || '—', ''];
+    return `<span class="badge ${cls}">${App.esc(rotulo)}</span>` +
+      (r.status === 'parcial' && r.atrasada ? '<div class="small neg">em atraso</div>' : '');
+  };
+
+  const mesAtual = App.today().slice(0, 7);
+  const mesesComBoleto = [...new Set(receivables.map(r => (r.vencimento || '').slice(0, 7)).filter(Boolean))];
+  let mesBol = mesAtual;              // '' = todos os meses
+  let ordemBol = { chave: 'Vencimento', desc: false };
+
+  const bolEl = id => document.getElementById(id);
+  const parcelado = r => (Number(r.parcelas) || 1) > 1 || r.forma === 'boleto' || r.forma === 'cheque';
+
+  /* Filtros de cliente e de venda/OS listam só o que existe em cobrança —
+     um select com a base inteira de clientes seria inútil aqui. */
+  const clientesComBoleto = [...new Set(receivables.map(r => r.clienteId))]
+    .map(id => ({ id, nome: App.clientName(id, clients) || ('Cliente #' + id) }))
+    .sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
+  const refsComBoleto = [...new Set(receivables.filter(r => r.refType).map(r => r.refType + ':' + r.refId))]
+    .map(k => ({ k, rotulo: refDe({ refType: k.split(':')[0], refId: Number(k.split(':')[1]) }) }))
+    .sort((a, b) => a.rotulo.localeCompare(b.rotulo, 'pt-BR'));
+
+  document.getElementById('rpane-boletos').innerHTML = `
+    <div class="toolbar">
+      <button class="btn sm" id="bol-ant" title="Mês anterior">◀</button>
+      <select id="bol-mes" style="max-width:210px"></select>
+      <button class="btn sm" id="bol-prox" title="Próximo mês">▶</button>
+      <button class="btn sm ghost" id="bol-hoje">Mês atual</button>
+      <button class="btn sm ghost" id="bol-todos">Todos os meses</button>
+      <div class="spacer"></div>
+      <span class="small muted" id="bol-periodo-info"></span>
+    </div>
+
+    <div class="grid cols-4" id="bol-kpis"></div>
+
+    <div class="toolbar" style="margin-top:14px">
+      <select id="bol-status" style="max-width:190px">
+        <option value="">Todos os status</option>
+        <option value="aberto">A vencer</option>
+        <option value="vencida">Vencidos</option>
+        <option value="pagos">Pagos</option>
+        <option value="parcial">Parcialmente pagos</option>
+        <option value="cancelada">Cancelados</option>
+      </select>
+      <select id="bol-cliente" style="max-width:220px">
+        <option value="">Todos os clientes</option>
+        ${clientesComBoleto.map(c => `<option value="${c.id}">${App.esc(c.nome)}</option>`).join('')}
+      </select>
+      <select id="bol-ref" style="max-width:200px">
+        <option value="">Toda venda / OS</option>
+        ${refsComBoleto.map(r => `<option value="${App.esc(r.k)}">${App.esc(r.rotulo)}</option>`).join('')}
+      </select>
+      <select id="bol-tipo" style="max-width:190px">
+        <option value="">Todos os títulos</option>
+        <option value="boleto">Boletos e parcelas</option>
+        <option value="unica">Cobrança única</option>
+      </select>
+    </div>
+    <div class="toolbar">
+      <label class="small muted">Vencimento de
+        <input type="date" id="bol-de" style="max-width:160px"></label>
+      <label class="small muted">até
+        <input type="date" id="bol-ate" style="max-width:160px"></label>
+      <input class="search" id="bol-busca" placeholder="🔎 Buscar por cliente, venda, OS ou descrição…" style="max-width:320px">
+      <button class="btn sm ghost" id="bol-limpar">Limpar filtros</button>
+      <div class="spacer"></div>
+      <span class="muted small" id="bol-contagem"></span>
+      <button class="btn" onclick="Recv.printBoletos()">🖨️ Imprimir</button>
+    </div>
+    <div id="bol-tabela"></div>`;
+
+  const montarSeletorBol = () => {
+    const meses = [...new Set(mesesComBoleto.concat([mesAtual, mesBol].filter(Boolean)))].sort().reverse();
+    bolEl('bol-mes').innerHTML = ['<option value="">Todos os meses</option>']
+      .concat(meses.map(m => `<option value="${m}"${m === mesBol ? ' selected' : ''}>${
+        App.esc(rotuloMes(m))}${mesesComBoleto.includes(m) ? '' : ' (sem boletos)'}</option>`)).join('');
+  };
+
+  /* Seleção do mês / período + cliente + venda + tipo + busca.
+     O status fica de fora de propósito: é ele que muda a lista da tabela,
+     mas o "total do mês" precisa continuar sendo o total do mês. */
+  const selecaoBol = () => {
+    const de = bolEl('bol-de').value, ate = bolEl('bol-ate').value;
+    const cli = bolEl('bol-cliente').value, ref = bolEl('bol-ref').value, tipo = bolEl('bol-tipo').value;
+    let list = receivables.filter(r => {
+      const v = r.vencimento || '';
+      if (de && v < de) return false;
+      if (ate && v > ate) return false;
+      if (!de && !ate && mesBol && v.slice(0, 7) !== mesBol) return false;
+      if (cli && r.clienteId !== Number(cli)) return false;
+      if (ref && (r.refType + ':' + r.refId) !== ref) return false;
+      if (tipo === 'boleto' && !parcelado(r)) return false;
+      if (tipo === 'unica' && parcelado(r)) return false;
+      return true;
+    });
+    return App.filtraPor(list, bolEl('bol-busca').value, [
+      r => App.clientName(r.clienteId, clients), r => App.clientCode(r.clienteId, clients),
+      r => refDe(r), 'descricao', 'forma', 'vencimento', 'observacoes',
+      r => (SIT[r.status] || [''])[0]
+    ]);
+  };
+
+  const porStatus = (list) => {
+    const f = bolEl('bol-status').value;
+    if (!f) return list;
+    if (f === 'pagos') return list.filter(r => r.status === 'paga');
+    if (f === 'aberto') return list.filter(r => r.status === 'aberto');
+    if (f === 'vencida') return list.filter(r => r.status === 'vencida');
+    if (f === 'parcial') return list.filter(r => r.status === 'parcial');
+    return list.filter(r => r.status === f);
+  };
+
+  const renderBoletos = () => {
+    montarSeletorBol();
+    const selecao = selecaoBol();
+    const livre = !!(bolEl('bol-de').value || bolEl('bol-ate').value);
+    const rotulo = livre ? 'no período' : (mesBol ? 'em ' + rotuloMes(mesBol) : 'em todos os meses');
+
+    const emCobranca = selecao.filter(aberto);
+    const totalMes = emCobranca.reduce((s, r) => s + saldoDe(r), 0);
+    const vencidoMes = emCobranca.filter(emAtraso).reduce((s, r) => s + saldoDe(r), 0);
+    const aVencerMes = Math.round((totalMes - vencidoMes) * 100) / 100;
+    const recebidoMes = selecao.reduce((s, r) => s + recebidoDe(r), 0);
+
+    bolEl('bol-kpis').innerHTML = `
+      <div class="card kpi k-warn"><div class="label">Total de boletos a receber ${App.esc(rotulo)}</div>
+        <div class="value money">${App.money(totalMes)}</div>
+        <div class="hint">${emCobranca.length} boleto(s) em cobrança</div></div>
+      <div class="card kpi ${vencidoMes ? 'k-danger' : ''}"><div class="label">Vencido</div>
+        <div class="value money">${App.money(vencidoMes)}</div>
+        <div class="hint">${emCobranca.filter(emAtraso).length} boleto(s) em atraso</div></div>
+      <div class="card kpi"><div class="label">A vencer</div>
+        <div class="value money">${App.money(aVencerMes)}</div>
+        <div class="hint">ainda dentro do prazo</div></div>
+      <div class="card kpi k-ok"><div class="label">Já recebido ${App.esc(rotulo)}</div>
+        <div class="value money">${App.money(recebidoMes)}</div>
+        <div class="hint">inclui os pagamentos parciais</div></div>`;
+
+    bolEl('bol-periodo-info').textContent = livre
+      ? 'período de vencimento escolhido à mão'
+      : `${selecao.length} boleto(s) ${mesBol ? 'com vencimento em ' + rotuloMes(mesBol) : 'em todo o histórico'}`;
+
+    const list = porStatus(selecao);
+    bolEl('bol-contagem').textContent =
+      `${list.length} boleto(s) na lista · R$ ${App.money(list.filter(aberto).reduce((s, r) => s + saldoDe(r), 0))} a receber`;
+
+    bolEl('bol-tabela').innerHTML = App.table(list, [
+      { h: 'Cliente', sort: r => App.clientName(r.clienteId, clients) || '', sortDesc: false,
+        cell: r => `<b>${App.esc(App.clientName(r.clienteId, clients))}</b>` +
+          (App.clientCode(r.clienteId, clients) ? `<div class="small muted mono">${App.esc(App.clientCode(r.clienteId, clients))}</div>` : '') },
+      { h: 'Venda / OS', sort: r => refDe(r), sortDesc: false,
+        cell: r => `${App.esc(refDe(r))}<div class="small muted">${ORIGENS[origemDe(r)][0]}</div>` },
+      { h: 'Referência', sort: r => baseDesc(r), sortDesc: false,
+        cell: r => `<span class="small">${App.esc(baseDesc(r) || '—')}</span>` +
+          (r.forma ? `<div class="small muted">${App.esc(r.forma)}</div>` : '') },
+      { h: 'Parcela', sort: r => (Number(r.parcela) || 1), cell: r => r.parcelas > 1
+        ? `<b>${r.parcela}/${r.parcelas}</b>` : '<span class="muted">única</span>' },
+      { h: 'Valor', class: 'num', sort: r => Number(r.valor) || 0, cell: r => App.moneyHtml(r.valor) },
+      { h: 'Recebido', class: 'num', sort: r => recebidoDe(r),
+        cell: r => recebidoDe(r) ? `<span class="pos">R$ ${App.money(recebidoDe(r))}</span>` : '<span class="muted">—</span>' },
+      { h: 'A receber', class: 'num', sort: r => saldoDe(r),
+        cell: r => saldoDe(r) ? `<b class="${emAtraso(r) ? 'neg' : ''}">R$ ${App.money(saldoDe(r))}</b>` : '<span class="muted">—</span>' },
+      { h: 'Vencimento', sort: r => r.vencimento || '', sortDesc: false,
+        cell: r => `${App.date(r.vencimento)}${emAtraso(r) ? '<div class="small neg">vencido</div>' : ''}` },
+      { h: 'Situação', sort: r => (SIT[r.status] || [''])[0], sortDesc: false, cell: situacao },
+      { h: 'Pago em', sort: r => r.dataRecebimento || '', sortDesc: false,
+        cell: r => r.dataRecebimento ? App.date(r.dataRecebimento) : '<span class="muted">—</span>' },
+      { h: '', class: 'num', cell: r => acoesDa(r) }
+    ], {
+      emptyMsg: livre ? 'Nenhum boleto com vencimento neste período'
+        : mesBol ? `Nenhum boleto vencendo em ${rotuloMes(mesBol)} — use as setas para procurar outro mês.`
+          : 'Nenhum boleto nesta seleção',
+      sortState: ordemBol,
+      onSort: (o) => { ordemBol = o; renderBoletos(); }
+    });
+  };
+
+  /* Mês e período livre são dois jeitos de escolher a mesma coisa: quem usa
+     um desliga o outro, para a tela nunca mostrar um total ambíguo. */
+  const irParaMes = (m) => {
+    mesBol = m;
+    bolEl('bol-de').value = ''; bolEl('bol-ate').value = '';
+    renderBoletos();
+  };
+  bolEl('bol-mes').addEventListener('change', e => irParaMes(e.target.value));
+  bolEl('bol-ant').onclick = () => irParaMes(somarMeses(mesBol || mesAtual, -1));
+  bolEl('bol-prox').onclick = () => irParaMes(somarMeses(mesBol || mesAtual, 1));
+  bolEl('bol-hoje').onclick = () => irParaMes(mesAtual);
+  bolEl('bol-todos').onclick = () => irParaMes('');
+  ['bol-de', 'bol-ate'].forEach(id => bolEl(id).addEventListener('change', () => {
+    if (bolEl(id).value) { mesBol = ''; montarSeletorBol(); }
+    renderBoletos();
+  }));
+  ['bol-status', 'bol-cliente', 'bol-ref', 'bol-tipo'].forEach(id =>
+    bolEl(id).addEventListener('change', renderBoletos));
+  bolEl('bol-busca').addEventListener('input', renderBoletos);
+  bolEl('bol-limpar').onclick = () => {
+    ['bol-status', 'bol-cliente', 'bol-ref', 'bol-tipo', 'bol-de', 'bol-ate', 'bol-busca']
+      .forEach(id => { bolEl(id).value = ''; });
+    irParaMes(mesAtual);
+  };
+  renderBoletos();
+
+  document.querySelectorAll('#rtabs button').forEach(b => b.addEventListener('click', () => {
+    document.querySelectorAll('#rtabs button').forEach(x => x.classList.toggle('active', x === b));
+    document.getElementById('rpane-geral').style.display = b.dataset.t === 'geral' ? '' : 'none';
+    document.getElementById('rpane-boletos').style.display = b.dataset.t === 'boletos' ? '' : 'none';
+  }));
 
   /* Parcelas irmãs: mesma venda (refType/refId) ou, nos boletos avulsos,
      mesmo cliente e mesma descrição-base. */
@@ -371,7 +636,7 @@ App.registerView('receivables', async (view) => {
     x.id === r.id ||
     (r.refType && x.refType === r.refType && x.refId === r.refId) ||
     (!r.refType && !x.refType && x.clienteId === r.clienteId &&
-      String(x.descricao || '').replace(/ — parcela .*$/, '') === String(r.descricao || '').replace(/ — parcela .*$/, '')));
+      baseDesc(x) === baseDesc(r)));
 
   window.Recv = {
     /* Excluir um lançamento feito por engano. Sem recebimento, sai limpo;
@@ -399,24 +664,36 @@ App.registerView('receivables', async (view) => {
         } catch (e2) { App.toast(e2.message, 'err'); }
       }
     },
+
+    /* Edição de UMA parcela. Mudar o vencimento de uma não mexe nas outras
+       — é exatamente para isso que ela existe: o cliente pediu mais prazo
+       só na terceira, e só a terceira muda. */
     edit(id) {
       const r = receivables.find(x => x.id === id);
       if (!r) return;
       const recebida = r.status === 'paga';
+      const parcial = r.status === 'parcial';
+      /* Marcar "pago" à mão criaria dinheiro que não passou pelo caixa: a
+         baixa é sempre pelo botão ✓ Receber. Aqui só se ativa ou cancela. */
+      const podeStatus = App.can('receivables') && !recebida && !parcial;
       const m = App.form(`✏️ Editar parcela${r.parcelas > 1 ? ` ${r.parcela}/${r.parcelas}` : ''}`, [
         { name: 'clienteId', label: 'Cliente', type: 'select', value: r.clienteId, full: true,
           options: App.clientOptions(clients, r.clienteId) },
         { name: 'descricao', label: 'Descrição', value: r.descricao, full: true },
         { name: 'valor', label: 'Valor (R$)', type: 'number', step: '0.01', value: r.valor, required: true },
-        { name: 'vencimento', label: 'Vencimento', type: 'date', value: r.vencimento, required: true },
+        { name: 'vencimento', label: 'Vencimento desta parcela', type: 'date', value: r.vencimento, required: true },
         { name: 'forma', label: 'Forma', type: 'select', value: r.forma || 'boleto',
           options: ['boleto', 'pix', 'cartao', 'cheque', 'dinheiro', 'outro'].map(v => ({ value: v, label: v })) },
+        ...(podeStatus ? [{ name: 'status', label: 'Situação', type: 'select', value: r.status === 'vencida' ? 'aberto' : r.status,
+          options: [{ value: 'aberto', label: 'Em cobrança (a vencer / vencido)' },
+                    { value: 'cancelada', label: 'Cancelado' }] }] : []),
         { name: 'observacoes', label: 'Observações', type: 'textarea', value: r.observacoes || '', full: true }
       ], async d => {
         const corpo = {
           clienteId: Number(d.clienteId), descricao: d.descricao, valor: Number(d.valor),
           vencimento: d.vencimento, forma: d.forma, observacoes: d.observacoes
         };
+        if (podeStatus && d.status) corpo.status = d.status;
         const grava = async (confirmar) => {
           await App.put('/receivables/' + id, confirmar ? Object.assign({ confirmar: true }, corpo) : corpo);
           App.closeModal();
@@ -433,28 +710,72 @@ App.registerView('receivables', async (view) => {
           }
         }
       });
-      if (recebida) {
+      const aviso = recebida
+        ? `⚠ Parcela já recebida em ${App.date(r.dataRecebimento)} — alterações pedem confirmação.`
+        : parcial
+          ? `⚠ Já entraram R$ ${App.money(recebidoDe(r))} desta parcela — o que já foi recebido continua lançado; mudar o valor muda só o que falta.`
+          : '';
+      if (aviso) {
         m.querySelector('.actions').insertAdjacentHTML('afterbegin',
-          `<p class="small" style="margin-right:auto;color:var(--warn,#d29922)">⚠ Parcela já recebida em ${App.date(r.dataRecebimento)} — alterações pedem confirmação.</p>`);
+          `<p class="small" style="margin-right:auto;color:var(--warn,#d29922)">${App.esc(aviso)}</p>`);
+      } else {
+        m.querySelector('.actions').insertAdjacentHTML('afterbegin',
+          `<p class="small muted" style="margin-right:auto">Alterar o vencimento aqui muda <b>só esta parcela</b> — as outras do grupo ficam como estão.<br>
+           Data e valor alterados ficam registrados no histórico da parcela.</p>`);
       }
+    },
+
+    /* Histórico da parcela: quem mudou o quê, e cada recebimento lançado. */
+    historico(id) {
+      const r = receivables.find(x => x.id === id);
+      if (!r) return;
+      const linhas = (r.historico || []).slice().reverse();
+      const recs = (r.recebimentos || []).slice().reverse();
+      App.modal(`
+        <h2>🕘 Histórico da parcela${r.parcelas > 1 ? ` ${r.parcela}/${r.parcelas}` : ''}</h2>
+        <p class="small muted">${App.esc(App.clientName(r.clienteId, clients))} · ${App.esc(refDe(r))} ·
+          ${App.esc(baseDesc(r))}</p>
+        <div class="grid cols-4" style="margin-top:12px">
+          <div class="card kpi"><div class="label">Valor da parcela</div><div class="value money">${App.money(r.valor)}</div></div>
+          <div class="card kpi k-ok"><div class="label">Já recebido</div><div class="value money">${App.money(recebidoDe(r))}</div></div>
+          <div class="card kpi ${saldoDe(r) ? 'k-warn' : 'k-ok'}"><div class="label">Falta receber</div><div class="value money">${App.money(saldoDe(r))}</div></div>
+          <div class="card kpi"><div class="label">Situação</div>
+            <div class="value" style="font-size:15px;padding-top:6px">${situacao(r)}</div></div>
+        </div>
+        <div class="section-title">RECEBIMENTOS LANÇADOS</div>
+        ${App.table(recs, [
+          { h: 'Data', cell: x => App.date(x.data) },
+          { h: 'Forma', cell: x => App.esc(x.forma || '—') },
+          { h: 'Conta', cell: x => App.esc(x.conta || '—') },
+          { h: 'Lançado por', cell: x => `<span class="small muted">${App.esc(x.por || '—')}</span>` },
+          { h: 'Observação', cell: x => `<span class="small muted">${App.esc(x.obs || '—')}</span>` },
+          { h: 'Valor', class: 'num', cell: x => App.moneyHtml(x.valor) }
+        ], { emptyMsg: 'Nenhum recebimento lançado nesta parcela' })}
+        <div class="section-title">ALTERAÇÕES</div>
+        ${linhas.length ? `<ul class="timeline">${linhas.map(h => `
+          <li><b>${App.esc(h.tipo === 'recebimento' ? 'Recebimento' : 'Edição')}</b>
+            <span class="small muted">${App.esc(App.dateTime(h.em))} · ${App.esc(h.por || '—')}</span>
+            <div class="small">${(h.mudancas || []).map(x => App.esc(x)).join('<br>')}</div></li>`).join('')}</ul>`
+          : '<p class="small muted">Nenhuma alteração registrada nesta parcela.</p>'}
+        <div class="actions"><button class="btn" onclick="App.closeModal()">Fechar</button></div>`, { wide: true });
     },
 
     replan(id) {
       const r = receivables.find(x => x.id === id);
       if (!r) return;
       const grupo = grupoDe(r).filter(x => x.status !== 'cancelada');
-      const pagas = grupo.filter(x => x.status === 'paga');
+      const pagas = grupo.filter(x => x.status === 'paga' || x.status === 'parcial');
       const total = grupo.reduce((s, x) => s + x.valor, 0);
       const m = App.form(`🔁 Recalcular parcelas — ${App.clientName(r.clienteId, clients)}`, [
         { name: 'valorTotal', label: 'Valor total (R$)', type: 'number', step: '0.01', value: total.toFixed(2), required: true },
         { name: 'parcelas', label: 'Nº total de parcelas', type: 'number', value: grupo.length, required: true },
         { name: 'intervaloDias', label: 'Intervalo entre parcelas (dias)', type: 'number', value: 30, required: true },
-        { name: 'primeiraData', label: 'Vencimento da próxima parcela', type: 'date',
-          value: (grupo.find(x => x.status !== 'paga') || {}).vencimento || App.today(), required: true }
+        { name: 'primeiroVencimento', label: 'Vencimento da próxima parcela', type: 'date',
+          value: (grupo.find(x => x.status === 'aberto' || x.status === 'vencida') || {}).vencimento || App.today(), required: true }
       ], async d => {
         const out = await App.post('/receivables/replan', {
           ids: grupo.map(x => x.id), valorTotal: Number(d.valorTotal), parcelas: Number(d.parcelas),
-          intervaloDias: Number(d.intervaloDias), primeiraData: d.primeiraData
+          intervaloDias: Number(d.intervaloDias), primeiroVencimento: d.primeiroVencimento
         });
         App.closeModal();
         App.toast(`Recalculado: ${out.pagas} recebida(s) preservada(s) + ${out.criadas.length} futura(s): `
@@ -462,8 +783,9 @@ App.registerView('receivables', async (view) => {
         App.route();
       }, { submitLabel: 'Recalcular futuras' });
       m.querySelector('.actions').insertAdjacentHTML('afterbegin',
-        `<p class="small muted" style="margin-right:auto">${grupo.length} parcela(s) no grupo · ${pagas.length} já recebida(s)
-         ${pagas.length ? '(não serão tocadas — só as futuras mudam)' : ''}</p>`);
+        `<p class="small muted" style="margin-right:auto">${grupo.length} parcela(s) no grupo · ${pagas.length} já com recebimento
+         ${pagas.length ? '(não serão tocadas — só as futuras mudam)' : ''}<br>
+         A 1ª parcela recalculada cai na data informada; as seguintes andam pelo intervalo.</p>`);
     },
 
     wa(id) {
@@ -471,6 +793,7 @@ App.registerView('receivables', async (view) => {
       const c = clients.find(x => x.id === r.clienteId);
       App.waShare(`Cobrança — ${(c && c.nome) || 'cliente'}`, App.waPhoneOf(c), App.waMsg.charge(r, c));
     },
+
     generate() {
       const m = App.form('Gerar boletos / parcelas automáticas', [
         { name: 'clienteId', label: 'Cliente', type: 'select', required: true, full: true,
@@ -479,19 +802,22 @@ App.registerView('receivables', async (view) => {
         { name: 'dataVenda', label: 'Data da venda', type: 'date', value: App.today(), required: true },
         { name: 'valor', label: 'Valor total (R$)', type: 'number', step: '0.01', required: true },
         { name: 'parcelas', label: 'Nº de parcelas', type: 'number', value: 3, required: true },
-        { name: 'intervaloDias', label: 'Intervalo entre parcelas (dias)', type: 'number', value: 20, required: true },
+        { name: 'intervaloDias', label: 'Intervalo entre parcelas (dias)', type: 'number', value: 30, required: true },
+        { name: 'primeiroVencimento', label: 'Vencimento da 1ª parcela', type: 'date', value: App.addDays(App.today(), 30), required: true },
         { name: 'forma', label: 'Forma', type: 'select', value: 'boleto',
           options: ['boleto', 'pix', 'cartao', 'cheque', 'outro'].map(v => ({ value: v, label: v })) }
       ], async d => {
         const out = await App.post('/receivables/generate', {
           clienteId: Number(d.clienteId), descricao: d.descricao, dataVenda: d.dataVenda,
-          valor: Number(d.valor), parcelas: Number(d.parcelas), intervaloDias: Number(d.intervaloDias), forma: d.forma
+          valor: Number(d.valor), parcelas: Number(d.parcelas), intervaloDias: Number(d.intervaloDias),
+          primeiroVencimento: d.primeiroVencimento, forma: d.forma
         });
         App.closeModal();
         App.toast(`${out.length} parcela(s) geradas: ` + out.map(p => App.date(p.vencimento)).join(', '), 'ok');
         App.route();
       });
-      // pré-visualização das parcelas ao digitar
+      /* Pré-visualização: as mesmas contas do servidor, para a pessoa ver as
+         datas e o valor de cada parcela ANTES de gerar. */
       const preview = document.createElement('div');
       preview.className = 'small muted'; preview.style.margin = '4px 0 10px';
       m.querySelector('.actions').before(preview);
@@ -499,30 +825,64 @@ App.registerView('receivables', async (view) => {
         const g = n => m.querySelector(`[name=${n}]`).value;
         const valor = Number(g('valor')) || 0, n = Number(g('parcelas')) || 1, int = Number(g('intervaloDias')) || 30;
         if (!valor) { preview.textContent = ''; return; }
-        const base = new Date(g('dataVenda') + 'T12:00:00');
+        const primeiro = g('primeiroVencimento');
         const parts = [];
+        const cent = Math.round(valor * 100), base = Math.floor(cent / n);
         for (let i = 1; i <= Math.min(n, 12); i++) {
-          const dt = new Date(base); dt.setDate(dt.getDate() + int * i);
-          parts.push(`${i}ª — ${dt.toLocaleDateString('pt-BR')} — R$ ${App.money(valor / n)}`);
+          const dia = primeiro ? App.addDays(primeiro, int * (i - 1)) : App.addDays(g('dataVenda'), int * i);
+          const v = (i === n ? cent - base * (n - 1) : base) / 100;
+          parts.push(`Parcela ${i} — R$ ${App.money(v)} — ${App.date(dia)}`);
         }
-        preview.innerHTML = '<b>Pré-visualização:</b><br>' + parts.join('<br>');
+        preview.innerHTML = '<b>Pré-visualização:</b><br>' + parts.join('<br>')
+          + (n > 12 ? `<br><span class="muted">… e mais ${n - 12} parcela(s)</span>` : '');
       });
     },
+
+    /* Baixa do boleto. Por padrão recebe tudo que falta; marcando
+       "recebimento parcial", entra só o valor informado e a parcela fica
+       "Parcialmente paga" com o restante ainda em cobrança. */
     receive(id) {
       const r = receivables.find(x => x.id === id);
-      App.form(`Receber: ${r.descricao} — R$ ${App.money(r.valor)}`, [
+      if (!r) return;
+      const falta = saldoDe(r);
+      const m = App.form(`✓ Receber — ${r.descricao}`, [
         { name: 'data', label: 'Data do recebimento', type: 'date', value: App.today(), required: true },
-        { name: 'conta', label: 'Conta bancária', value: 'principal' }
+        { name: 'forma', label: 'Forma', type: 'select', value: r.forma || 'boleto',
+          options: ['boleto', 'pix', 'cartao', 'cheque', 'dinheiro', 'outro'].map(v => ({ value: v, label: v })) },
+        { name: 'conta', label: 'Conta bancária', value: 'principal' },
+        { name: 'parcialmente', label: 'Recebimento parcial (o cliente pagou só uma parte)', type: 'checkbox', value: false, full: true },
+        { name: 'valor', label: 'Valor recebido agora (R$)', type: 'number', step: '0.01', value: falta.toFixed(2) },
+        { name: 'obs', label: 'Observação', full: true }
       ], async d => {
-        await App.post(`/receivables/${id}/receive`, d);
-        App.closeModal(); App.toast('Recebimento lançado no fluxo de caixa', 'ok'); App.route();
-      });
+        const corpo = { data: d.data, conta: d.conta, forma: d.forma, obs: d.obs };
+        if (d.parcialmente) corpo.valor = Number(d.valor);
+        const out = await App.post(`/receivables/${id}/receive`, corpo);
+        App.closeModal();
+        App.toast(out.quitada
+          ? 'Recebimento lançado no fluxo de caixa — parcela quitada'
+          : `Recebido R$ ${App.money(out.valor)} — falta R$ ${App.money(out.saldo)} nesta parcela`, 'ok');
+        App.route();
+      }, { submitLabel: 'Lançar recebimento' });
+
+      const campoValor = m.querySelector('[name=valor]').closest('.field');
+      const ajustar = () => { campoValor.style.display = m.querySelector('[name=parcialmente]').checked ? '' : 'none'; };
+      m.querySelector('[name=parcialmente]').addEventListener('change', ajustar);
+      ajustar();
+      m.querySelector('.actions').insertAdjacentHTML('afterbegin',
+        `<p class="small muted" style="margin-right:auto">Falta receber <b>R$ ${App.money(falta)}</b> desta parcela` +
+        (recebidoDe(r) ? ` (R$ ${App.money(recebidoDe(r))} já recebidos).` : '.') +
+        `<br>O valor entra no Fluxo de caixa na hora, sem lançamento duplicado.</p>`);
     },
+
     async cancel(id) {
-      if (!await App.confirm('Cancelar esta parcela?')) return;
+      const r = receivables.find(x => x.id === id);
+      if (!await App.confirm(recebidoDe(r)
+        ? `Esta parcela já tem R$ ${App.money(recebidoDe(r))} recebidos. Cancelar tira o restante da cobrança, mas o que já entrou continua no caixa. Confirma?`
+        : 'Cancelar esta parcela?')) return;
       await App.post(`/receivables/${id}/cancel`, {});
       App.route();
     },
+
     /* Painel do título: total combinado, parcelas, o que já entrou e o que
        falta — para venda de cabeçote e para serviço, do mesmo jeito. */
     detalhe(id) {
@@ -532,8 +892,7 @@ App.registerView('receivables', async (view) => {
         String(a.vencimento || '').localeCompare(String(b.vencimento || '')) || a.id - b.id);
       const vivos = grupo.filter(x => x.status !== 'cancelada');
       const total = vivos.reduce((s, x) => s + x.valor, 0);
-      const pagas = vivos.filter(x => x.status === 'paga');
-      const recebidoParcelas = pagas.reduce((s, x) => s + x.valor, 0);
+      const recebidoParcelas = vivos.reduce((s, x) => s + recebidoDe(x), 0);
 
       // Recebimentos parciais ficam guardados na venda / na OS.
       const fonte = r.refType === 'sales' ? sales.find(x => x.id === r.refId)
@@ -542,7 +901,7 @@ App.registerView('receivables', async (view) => {
       const recebidoParcial = parciais.reduce((s, x) => s + (Number(x.valor) || 0), 0);
       const valorContratado = fonte
         ? Number(fonte.valorTotal) || 0
-        : total + recebidoParcial;
+        : total;
       const recebido = Math.round((recebidoParcelas + recebidoParcial) * 100) / 100;
       const saldo = Math.round((valorContratado - recebido) * 100) / 100;
       const pag = (fonte && fonte.pagamento) || {};
@@ -561,17 +920,21 @@ App.registerView('receivables', async (view) => {
         </div>
         <div class="section-title">FORMA DE PAGAMENTO</div>
         <p class="small">${App.esc(pag.forma || r.forma || '—')}${
-          vivos.length > 1 ? ` · ${vivos.length} parcelas de ~R$ ${App.money(total / vivos.length)}` : ' · parcela única'}</p>
+          vivos.length > 1 ? ` · ${vivos.length} parcelas de ~R$ ${App.money(total / vivos.length)}` : ' · parcela única'}${
+          pag.primeiroVencimento ? ` · 1º vencimento em ${App.date(pag.primeiroVencimento)}` : ''}${
+          pag.intervaloDias && vivos.length > 1 ? ` · a cada ${pag.intervaloDias} dias` : ''}</p>
         <div class="section-title">PARCELAS</div>
         ${App.table(grupo, [
           { h: 'Parcela', cell: x => x.parcelas > 1 ? `${x.parcela}/${x.parcelas}` : 'única' },
           { h: 'Descrição', cell: x => `<span class="small">${App.esc(x.descricao)}</span>` },
           { h: 'Vencimento', cell: x => App.date(x.vencimento) },
           { h: 'Valor', class: 'num', cell: x => App.moneyHtml(x.valor) },
+          { h: 'Recebido', class: 'num', cell: x => recebidoDe(x) ? 'R$ ' + App.money(recebidoDe(x)) : '—' },
+          { h: 'A receber', class: 'num', cell: x => saldoDe(x) ? 'R$ ' + App.money(saldoDe(x)) : '—' },
           { h: 'Recebida em', cell: x => x.dataRecebimento ? App.date(x.dataRecebimento) : '—' },
-          { h: 'Status', cell: x => App.badge(x.status) }
+          { h: 'Situação', cell: situacao }
         ], { emptyMsg: 'Sem parcelas' })}
-        ${parciais.length ? `<div class="section-title">RECEBIMENTOS PARCIAIS</div>
+        ${parciais.length ? `<div class="section-title">RECEBIMENTOS PARCIAIS (na venda / OS)</div>
           ${App.table(parciais, [
             { h: 'Data', cell: x => App.date(x.data) },
             { h: 'Forma', cell: x => App.esc(x.forma || '—') },
@@ -588,14 +951,43 @@ App.registerView('receivables', async (view) => {
       const titulo = 'Contas a receber' +
         (fo ? ' — ' + ORIGENS[fo][0] : '') +
         (f ? ' — ' + (App.STATUS[f] || [f])[0] : '');
-      const emAberto = list.filter(aberto).reduce((s, r) => s + r.valor, 0);
+      const emAberto = list.filter(aberto).reduce((s, r) => s + saldoDe(r), 0);
       App.print(titulo,
-        `<table><tr><th>Origem</th><th>Referência</th><th>Cliente</th><th>Descrição</th><th>Parcela</th><th>Vencimento</th><th class="num">Valor</th><th>Status</th></tr>
+        `<table><tr><th>Origem</th><th>Referência</th><th>Cliente</th><th>Descrição</th><th>Parcela</th><th>Vencimento</th><th class="num">Valor</th><th class="num">A receber</th><th>Status</th></tr>
         ${list.map(r => `<tr><td>${ORIGENS[origemDe(r)][0]}</td><td>${App.esc(refDe(r))}</td>
         <td>${App.esc(App.clientName(r.clienteId, clients))}</td><td>${App.esc(r.descricao)}</td>
         <td>${r.parcelas > 1 ? r.parcela + '/' + r.parcelas : 'única'}</td><td>${App.date(r.vencimento)}</td>
-        <td class="num">R$ ${App.money(r.valor)}</td><td>${(App.STATUS[r.status] || [r.status])[0]}</td></tr>`).join('')}</table>`,
+        <td class="num">R$ ${App.money(r.valor)}</td><td class="num">R$ ${App.money(saldoDe(r))}</td>
+        <td>${(App.STATUS[r.status] || [r.status])[0]}</td></tr>`).join('')}</table>`,
         `${list.length} título(s) — R$ ${App.money(emAberto)} em aberto`);
+    },
+
+    /* Folha de cobrança do mês: uma linha por boleto, na ordem da tela. */
+    printBoletos() {
+      const list = porStatus(selecaoBol());
+      const livre = !!(bolEl('bol-de').value || bolEl('bol-ate').value);
+      const periodo = livre
+        ? `${App.date(bolEl('bol-de').value) || '…'} a ${App.date(bolEl('bol-ate').value) || '…'}`
+        : (mesBol ? rotuloMes(mesBol) : 'todos os meses');
+      const aReceber = list.filter(aberto).reduce((s, r) => s + saldoDe(r), 0);
+      const vencido = list.filter(emAtraso).reduce((s, r) => s + saldoDe(r), 0);
+      App.print(`Boletos a receber — ${periodo}`,
+        `<table><tr><th>Cliente</th><th>Venda / OS</th><th>Referência</th><th>Parcela</th>
+          <th>Vencimento</th><th class="num">Valor</th><th class="num">Recebido</th>
+          <th class="num">A receber</th><th>Situação</th><th>Pago em</th></tr>
+        ${list.map(r => `<tr>
+          <td>${App.esc(App.clientName(r.clienteId, clients))}</td>
+          <td>${App.esc(refDe(r))}</td>
+          <td>${App.esc(baseDesc(r))}</td>
+          <td>${r.parcelas > 1 ? r.parcela + '/' + r.parcelas : 'única'}</td>
+          <td>${App.date(r.vencimento)}</td>
+          <td class="num">R$ ${App.money(r.valor)}</td>
+          <td class="num">${recebidoDe(r) ? 'R$ ' + App.money(recebidoDe(r)) : '—'}</td>
+          <td class="num">${saldoDe(r) ? 'R$ ' + App.money(saldoDe(r)) : '—'}</td>
+          <td>${(SIT[r.status] || [r.status])[0]}</td>
+          <td>${r.dataRecebimento ? App.date(r.dataRecebimento) : '—'}</td></tr>`).join('')}</table>`,
+        `${list.length} boleto(s) — R$ ${App.money(aReceber)} a receber` +
+        (vencido ? ` · R$ ${App.money(vencido)} vencido` : ''));
     }
   };
 });

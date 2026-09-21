@@ -480,6 +480,37 @@ async function saleEditor(view, editId) {
     document.getElementById('v-card-fields').style.display = isCard ? '' : 'none';
     const taxa = isCard ? Number(document.getElementById('v-taxa').value) || 0 : 0;
     document.getElementById('v-liquido').textContent = 'R$ ' + App.money(total() - taxa);
+    previewParcelas();
+  };
+
+  /* Boleto/cheque parcelado: mostra na hora quanto fica cada parcela e em
+     que dia cada uma vence, a partir do 1º vencimento informado. É o mesmo
+     cálculo do servidor — o que está aqui é o que vai para Contas a receber. */
+  const previewParcelas = () => {
+    const forma = document.getElementById('v-forma').value;
+    const parcelado = document.getElementById('v-cond').value === 'parcelado';
+    const n = Math.max(1, Number(document.getElementById('v-parcelas').value) || 1);
+    const boleto = forma === 'boleto' || forma === 'cheque';
+    const campo1 = document.getElementById('v-venc1-campo');
+    const alvo = document.getElementById('v-parcelas-preview');
+    campo1.style.display = parcelado && boleto ? '' : 'none';
+    if (!(parcelado && boleto && n > 1)) { alvo.innerHTML = ''; return; }
+
+    const venc1 = document.getElementById('v-venc1');
+    const dataPedido = document.getElementById('v-data').value || App.today();
+    const intervalo = Number(document.getElementById('v-intervalo').value) || 30;
+    // Sem data informada, sugere o primeiro vencimento um intervalo à frente.
+    if (!venc1.value) venc1.value = App.addDays(dataPedido, intervalo);
+
+    const cent = Math.round(total() * 100), base = Math.floor(cent / n);
+    if (!cent) { alvo.innerHTML = ''; return; }
+    const linhas = [];
+    for (let i = 1; i <= Math.min(n, 12); i++) {
+      const v = (i === n ? cent - base * (n - 1) : base) / 100;
+      linhas.push(`Parcela ${i} — R$ ${App.money(v)} — ${App.date(App.addDays(venc1.value, intervalo * (i - 1)))}`);
+    }
+    alvo.innerHTML = `<b>${n}x de R$ ${App.money(base / 100)}</b> — vencimentos:<br>` + linhas.join('<br>')
+      + (n > 12 ? `<br><span class="muted">… e mais ${n - 12} parcela(s)</span>` : '');
   };
 
   view.innerHTML = `
@@ -534,7 +565,9 @@ async function saleEditor(view, editId) {
             <select id="v-cond"><option value="avista">À vista</option><option value="parcelado">Parcelado</option></select></label>
           <label class="field"><span>Nº de parcelas</span><input type="number" id="v-parcelas" value="1" min="1"></label>
           <label class="field"><span>Intervalo entre parcelas (dias)</span><input type="number" id="v-intervalo" value="30"></label>
+          <label class="field" id="v-venc1-campo"><span>Vencimento da 1ª parcela</span><input type="date" id="v-venc1"></label>
         </div>
+        <div id="v-parcelas-preview" class="small muted" style="margin:2px 0 8px"></div>
         <div id="v-card-fields" style="display:none">
           <div class="formgrid">
             <label class="field"><span>Taxa da operadora (R$)</span><input type="number" step="0.01" id="v-taxa" value="0"></label>
@@ -584,6 +617,8 @@ async function saleEditor(view, editId) {
   document.getElementById('v-comando').addEventListener('change', refreshTuchos);
   document.getElementById('v-forma').addEventListener('change', updatePayment);
   document.getElementById('v-taxa').addEventListener('input', updatePayment);
+  ['v-cond', 'v-parcelas', 'v-intervalo', 'v-venc1', 'v-data'].forEach(id =>
+    document.getElementById(id).addEventListener('input', previewParcelas));
   document.getElementById('v-peca').addEventListener('change', hintPeca);
   document.getElementById('v-peca-qtd').addEventListener('input', hintPeca);
   refreshCombos();
@@ -600,6 +635,7 @@ async function saleEditor(view, editId) {
     document.getElementById('v-cond').value = pg.condicao || 'avista';
     document.getElementById('v-parcelas').value = pg.parcelas || 1;
     document.getElementById('v-intervalo').value = pg.intervaloDias || 30;
+    document.getElementById('v-venc1').value = pg.primeiroVencimento || '';
     document.getElementById('v-taxa').value = pg.taxa || 0;
     document.getElementById('v-recebimento').value = pg.dataPrevRecebimento || '';
     document.getElementById('v-pgobs').value = pg.obs || '';
@@ -659,6 +695,7 @@ async function saleEditor(view, editId) {
           condicao: document.getElementById('v-cond').value,
           parcelas: Number(document.getElementById('v-parcelas').value) || 1,
           intervaloDias: Number(document.getElementById('v-intervalo').value) || 30,
+          primeiroVencimento: document.getElementById('v-venc1').value,
           taxa: Number(document.getElementById('v-taxa').value) || 0,
           dataPrevRecebimento: document.getElementById('v-recebimento').value,
           obs: document.getElementById('v-pgobs').value
