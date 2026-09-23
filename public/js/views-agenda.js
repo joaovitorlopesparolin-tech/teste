@@ -40,6 +40,9 @@ function agGradeDoMes(ym) {
   return cells;
 }
 
+/* De onde cada compromisso vem quando não é uma conta a pagar/receber. */
+const AG_MODULO = { freights: 'Fretes', hrPayments: 'RH' };
+
 App.registerView('agenda', async (view) => {
   App.setTitle('Agenda financeira', 'Contas a pagar e a receber no calendário — vem tudo dos módulos financeiros');
 
@@ -187,7 +190,10 @@ App.registerView('agenda', async (view) => {
         : '<span class="muted">—</span>' },
       { h: 'Descrição', cell: i => App.esc(i.descricao) +
         (i.categoria ? `<div class="small muted">${App.esc(agCategoria(i.categoria))}</div>` : '') +
-        (i.forma ? `<div class="small muted">${App.esc(i.forma)}</div>` : '') },
+        (i.forma ? `<div class="small muted">${App.esc(i.forma)}</div>` : '') +
+        /* Frete e RH não moram em Contas a pagar: dizer de onde veio evita
+           a pessoa procurar o lançamento na aba errada. */
+        (AG_MODULO[i.modulo] ? `<div class="small muted">baixa em ${AG_MODULO[i.modulo]}</div>` : '') },
       { h: 'Vencimento', cell: i => App.date(i.vencimento) +
         (i.dataProgramada && i.dataProgramada !== i.vencimento
           ? `<div class="small muted">pgto ${App.date(i.dataProgramada)}</div>` : '') },

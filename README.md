@@ -97,6 +97,28 @@ com o sistema parado.
   caixa, custo, resultado, DRE e histórico do cliente; serviço alimenta bem de
   terceiro, orçamento, OS, pagamento e devolução; compra alimenta estoque,
   fornecedor, contas a pagar, agenda e caixa.
+- **Um fato, um lançamento**: o mesmo trabalho aparece em abas diferentes, mas só
+  é informado uma vez. Cada informação tem uma fonte principal, e as outras a
+  recebem sozinhas:
+
+  | Informação | Fonte principal | Quem acompanha sozinho |
+  |---|---|---|
+  | Andamento físico do trabalho | **Produção** (checklist) | status da OS, status do pedido de venda |
+  | Conclusão do serviço | **OS** (status/envio) | checklist da produção, bem do cliente, entrada do cabeçote |
+  | Expedição | **Venda / OS** (enviado, entregue) | produção concluída, bem devolvido |
+  | Escopo e preço do serviço | **Orçamento** até aprovar; depois a **OS** | produção, contas a receber |
+  | O que a empresa tem a receber | **Contas a receber** | fluxo de caixa, agenda, painel, ficha do cliente |
+  | O que a empresa deve | **Contas a pagar / Compras / Fretes / RH** | fluxo de caixa, agenda |
+  | Estoque próprio | **Estoque** e suas movimentações | produção, venda, compra |
+
+  Toda alteração automática fica registrada no histórico e na auditoria, dizendo
+  o que mudou e por quê (“ordem de produção concluída automaticamente porque a
+  OS nº 12 ficou pronta para envio”).
+- **Cancelar uma vez**: cancelar um pedido cancela as parcelas em aberto, tira a
+  produção da fila e devolve as peças ao estoque; cancelar uma OS cancela as
+  parcelas e a produção e libera o cabeçote do cliente; recusar um orçamento
+  devolve a entrada para “aguardando orçamento”. O que já virou dinheiro no
+  caixa nunca é apagado por trás — fica registrado.
 - **Estoque ≠ bens de clientes** · **Receita ≠ recebimento** · **Despesa ≠ pagamento** —
   o caixa registra o dinheiro efetivo; contas a pagar/receber registram compromissos.
 - **Rastreabilidade**: cada cabeçote tem linha do tempo completa

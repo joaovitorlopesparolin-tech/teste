@@ -526,7 +526,12 @@ App.registerView('os', async (view) => {
   App.setTitle('Ordens de serviço', 'Serviços de preparação e retrabalho de cabeçotes de clientes');
   const [oss, clients] = await Promise.all([App.get('/serviceOrders'), App.get('/clients')]);
   oss.sort((a, b) => b.id - a.id);
-  const OS_ST = ['em_analise', 'em_andamento', 'aguardando_peca', 'finalizado', 'aguardando_pagamento', 'cancelado'];
+  /* 'cancelada' é a forma que a OS realmente grava. A lista usava
+     'cancelado', então o filtro "Cancelado" nunca achava nenhuma. */
+  const OS_ST = ['em_analise', 'em_andamento', 'aguardando_peca', 'finalizado', 'aguardando_pagamento', 'cancelada'];
+  /* No detalhe da OS, cancelar tem botão próprio (que cancela junto a
+     produção e as parcelas) — não é uma opção do seletor de status. */
+  const OS_ST_EDITAVEIS = OS_ST.filter(s => s !== 'cancelada');
   /* "Pendentes" reúne, num filtro só, tudo que ainda precisa de alguma ação —
      é a lista que a equipe imprime para saber o que falta fazer. Finalizado e
      cancelado ficam de fora por definição. */
@@ -578,7 +583,7 @@ App.registerView('os', async (view) => {
         ${App.can('finance_sensitive') ? `<button class="btn sm ghost" onclick="OS.custos(${o.id})" title="Custo estimado × custo real">💲</button>` : ''}
         <button class="btn sm ghost" onclick="OS.editar(${o.id})" title="Editar OS">✏️</button>
         <button class="btn sm ghost" onclick="OS.duplicar(${o.id})" title="Duplicar OS">📋</button>
-        ${o.status === 'cancelada' ? '' : `<button class="btn sm ghost" onclick="OS.cancelar(${o.id})" title="Cancelar OS">🚫</button>`}
+        ${o.status === 'cancelada' || o.status === 'cancelado' ? '' : `<button class="btn sm ghost" onclick="OS.cancelar(${o.id})" title="Cancelar OS — cancela junto a produção e as parcelas em aberto">🚫</button>`}
         <button class="btn sm ghost" onclick="OS.excluir(${o.id})" title="Excluir OS">🗑</button>` }
     ]);
   };
@@ -735,13 +740,18 @@ App.registerView('os', async (view) => {
         <hr class="sep">
         <div class="formgrid">
           <label class="field"><span>Status</span>
-            <select id="os-st">${OS_ST.map(s => `<option value="${s}" ${o.status === s ? 'selected' : ''}>${(App.STATUS[s] || [s])[0]}</option>`).join('')}</select></label>
+            ${o.status === 'cancelada' || o.status === 'cancelado'
+              ? `<select id="os-st" disabled><option value="cancelada" selected>Cancelada</option></select>
+                 <span class="small muted">OS cancelada — para refazer o trabalho, use Duplicar.</span>`
+              : `<select id="os-st">${OS_ST_EDITAVEIS.map(s => `<option value="${s}" ${o.status === s ? 'selected' : ''}>${(App.STATUS[s] || [s])[0]}</option>`).join('')}</select>
+                 <span class="small muted">Finalizar aqui conclui a produção deste serviço junto.</span>`}</label>
           <label class="field"><span>Responsável</span>
             <select id="os-resp"><option value="">—</option>${users.map(u =>
               `<option value="${u.id}" ${o.responsavelId === u.id ? 'selected' : ''}>${App.esc(u.name)}</option>`).join('')}</select></label>
           <label class="field"><span>Envio / entrega</span>
             <select id="os-envio">${['na_empresa', 'pronto', 'enviado', 'entregue'].map(s =>
-              `<option value="${s}" ${o.envioStatus === s ? 'selected' : ''}>${(App.STATUS[s] || [s])[0]}</option>`).join('')}</select></label>
+              `<option value="${s}" ${o.envioStatus === s ? 'selected' : ''}>${(App.STATUS[s] || [s])[0]}</option>`).join('')}</select>
+            <span class="small muted">“Pronto para envio” conclui a Produção e finaliza a OS; “Enviado/Entregue” baixa o bem do cliente.</span></label>
           <label class="field"><span>NF de retorno</span><input id="os-nf" value="${App.esc(o.nfRetorno || '')}"></label>
         </div>
         <h3 style="margin:8px 0">Serviços</h3>
@@ -846,9 +856,12 @@ App.registerView('os', async (view) => {
     },
     async save(id) {
       const o = oss.find(x => x.id === id);
-      const st = document.getElementById('os-st').value;
+      const selSt = document.getElementById('os-st');
+      const st = selSt.value;
       const resp = document.getElementById('os-resp').value;
-      if (st !== o.status || Number(resp || 0) !== (o.responsavelId || 0)) {
+      /* OS cancelada tem o seletor travado: salvar não pode reabri-la por
+         acidente só porque o campo mostrava outra coisa. */
+      if (!selSt.disabled && (st !== o.status || Number(resp || 0) !== (o.responsavelId || 0))) {
         await App.post(`/os/${id}/status`, { status: st, responsavelId: resp ? Number(resp) : null });
       }
       const envio = document.getElementById('os-envio').value;

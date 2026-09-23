@@ -390,16 +390,49 @@ App.registerView('sales', async (view, args) => {
       const c = clients.find(x => x.id === s.clienteId);
       App.waShare(`Pedido nº ${s.numero} — ${(c && c.nome) || 'cliente'}`, App.waPhoneOf(c), App.waMsg.sale(s, c));
     },
+    /* O andamento do pedido é o andamento da produção dele: quem marca o
+       checklist na Produção não precisa vir repetir aqui. O que continua
+       sendo decisão de gente é a expedição (enviado/entregue) e o
+       cancelamento. */
     status(id) {
       const s = sales.find(x => x.id === id);
-      App.form(`Status do pedido nº ${s.numero}`, [
+      const automaticos = ['nao_produzido', 'preparacao', 'usinagem', 'montagem', 'pronto'];
+      const m = App.form(`Status do pedido nº ${s.numero}`, [
         { name: 'status', label: 'Novo status', type: 'select', value: s.status, full: true,
-          options: ST.map(x => ({ value: x, label: (App.STATUS[x] || [x])[0] })) },
-        { name: 'data', label: 'Data (para envio)', type: 'date', value: App.today() }
+          options: ST.map(x => ({ value: x,
+            label: (App.STATUS[x] || [x])[0] + (automaticos.includes(x) ? ' — automático pela produção' : '') })) },
+        { name: 'data', label: 'Data (para envio)', type: 'date', value: App.today() },
+        { name: 'motivo', label: 'Motivo (se for cancelar)', full: true }
       ], async d => {
+        if (d.status === 'cancelado') {
+          App.closeModal();
+          return Sales.cancelar(id, d.motivo);
+        }
         await App.post(`/sales/${id}/status`, d);
         App.closeModal(); App.route();
       });
+      m.querySelector('.actions').insertAdjacentHTML('afterbegin',
+        `<p class="small muted" style="margin-right:auto">O pedido acompanha sozinho a produção dos cabeçotes
+         (fica no estágio do mais atrasado).<br>Marcar <b>Pronto/Enviado/Entregue</b> aqui conclui a produção junto.</p>`);
+    },
+
+    /* Cancelar um pedido não é só trocar a etiqueta: tira os boletos da
+       cobrança, tira a produção da fila e devolve as peças ao estoque. */
+    async cancelar(id, motivo) {
+      const s = sales.find(x => x.id === id);
+      if (!await App.confirm(
+        `Cancelar o <b>pedido nº ${s.numero}</b>?<br><br>` +
+        'O sistema vai, na mesma hora:<br>' +
+        '• cancelar as <b>parcelas em aberto</b> em Contas a receber;<br>' +
+        '• cancelar as <b>ordens de produção</b> deste pedido;<br>' +
+        '• devolver ao <b>estoque</b> as peças de revenda.<br><br>' +
+        '<span class="small">O que já foi recebido continua no caixa, e componentes já consumidos por uma ordem pronta não voltam sozinhos.</span>',
+        { html: true })) return;
+      try {
+        const out = await App.post(`/sales/${id}/cancel`, { motivo: motivo || '' });
+        App.toast('Pedido cancelado' + (out.efeitos && out.efeitos.length ? ' — ' + out.efeitos.join('; ') : ''), 'ok');
+        App.route();
+      } catch (e) { App.toast(e.message, 'err'); }
     },
     async result(id) {
       const r = await App.get(`/sales/${id}/result`);

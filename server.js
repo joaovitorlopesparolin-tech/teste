@@ -456,7 +456,7 @@ function dashboard(user) {
   const sales = db.all('sales').filter(s => s.status !== 'cancelado');
   const os = db.all('serviceOrders');
   const salesMonth = sales.filter(s => inMonth(s.dataPedido));
-  const osMonth = os.filter(o => inMonth(o.dataFinalizacao) && o.status !== 'cancelado');
+  const osMonth = os.filter(o => inMonth(o.dataFinalizacao) && !osCancelada(o));
 
   /* Bloco operacional — o que todo perfil com dashboard enxerga */
   const base = {
@@ -1598,7 +1598,7 @@ route('GET', '/api/clients/:id/profile', 'clients', async (req, res, user, param
   const orcamentos = db.all('quotes').filter(q => q.clienteId === id);
   const receb = withOverdue(db.all('receivables').filter(r => r.clienteId === id));
   const totalComprado = compras.reduce((s, v) => s + (v.valorTotal || 0), 0)
-    + oss.filter(o => o.status !== 'cancelado').reduce((s, o) => s + (o.valorTotal || 0), 0);
+    + oss.filter(o => !osCancelada(o)).reduce((s, o) => s + (o.valorTotal || 0), 0);
   const totalPago = receb.reduce((s, r) => s + recebidoDaParcela(r), 0);
   const emAberto = receb.filter(r => aReceber(r) && !emAtraso(r)).reduce((s, r) => s + saldoDaParcela(r), 0);
   const vencido = receb.filter(emAtraso).reduce((s, r) => s + saldoDaParcela(r), 0);
@@ -1833,7 +1833,26 @@ route('POST', '/api/quotes/:id/reject', 'quotes', async (req, res, user, params)
   const q = db.get('quotes', params.id);
   if (!q) return notFound(res);
   const status = b.status === 'cancelado' ? 'cancelado' : 'recusado';
+  /* Orçamento aprovado já virou OS: recusá-lo aqui deixaria uma OS e uma
+     produção ativas penduradas num orçamento morto. */
+  if (q.osId) {
+    const os = db.get('serviceOrders', q.osId);
+    if (os && !osCancelada(os)) {
+      return bad(res, `Este orçamento já foi aprovado e gerou a OS nº ${os.numero}. ` +
+        'Cancele a OS — ela cancela junto a produção e as parcelas em aberto.');
+    }
+  }
   db.update('quotes', q.id, { status });
+  /* O cabeçote continua na empresa: a entrada volta a esperar orçamento,
+     em vez de ficar "orçado" apontando para um orçamento recusado. */
+  if (q.entryId) {
+    const entry = db.get('headEntries', q.entryId);
+    if (entry && entry.quoteId === q.id && !['entregue', 'aprovado'].includes(entry.status)) {
+      db.update('headEntries', entry.id, { status: 'aguardando_orcamento', quoteId: null });
+      audit(user, 'sincronizou', 'headEntries', entry.id,
+        `Entrada ${entry.codigo} liberada para novo orçamento porque o orçamento nº ${q.numero} foi ${status}`);
+    }
+  }
   audit(user, status === 'cancelado' ? 'cancelou' : 'recusou', 'quotes', q.id, `Orçamento nº ${q.numero}`);
   db.insert('audit', {
     at: new Date().toISOString(), userId: user.id, userName: user.name, action: 'timeline',
@@ -1843,7 +1862,15 @@ route('POST', '/api/quotes/:id/reject', 'quotes', async (req, res, user, params)
 });
 
 /* ---- ordens de serviço ---- */
-const OS_STATUS = ['em_analise', 'em_andamento', 'aguardando_peca', 'finalizado', 'aguardando_pagamento', 'cancelado'];
+/* Uma OS cancelada sempre gravou 'cancelada', mas metade do sistema
+   comparava com 'cancelado' — e assim OS canceladas continuavam somando
+   faturamento no painel, na DRE, no analytics e na ficha do cliente.
+   'cancelada' é a forma oficial; a outra continua sendo aceita na leitura
+   para os registros que já existem. */
+const OS_STATUS = ['em_analise', 'em_andamento', 'aguardando_peca', 'finalizado', 'aguardando_pagamento', 'cancelada'];
+function osCancelada(os) { return !!os && (os.status === 'cancelada' || os.status === 'cancelado'); }
+/* Situação do envio do cabeçote do cliente, na ordem em que acontece. */
+const OS_ENVIO = ['na_empresa', 'pronto', 'enviado', 'entregue'];
 
 /* ---- custos do serviço (OS) ----
    custoBase: estimativa por linha (mão de obra, materiais, componentes,
@@ -2025,6 +2052,16 @@ route('POST', '/api/os/:id/cancel', 'os', async (req, res, user, params) => {
     evento: `OS cancelada${b.motivo ? ' — ' + b.motivo : ''}${recs.length ? ` (${recs.length} parcela(s) em aberto cancelada(s))` : ''}`
   }]);
   db.update('serviceOrders', os.id, { status: 'cancelada', historico: hist });
+  /* Cancelada, a OS deixa de ser trabalho a fazer: a entrada de cabeçote
+     volta a ser um cabeçote parado na empresa, esperando decisão. */
+  if (os.entryId) {
+    const entry = db.get('headEntries', os.entryId);
+    if (entry && entry.status !== 'entregue') {
+      db.update('headEntries', entry.id, { status: 'aguardando_orcamento', osId: null });
+      audit(user, 'sincronizou', 'headEntries', entry.id,
+        `Entrada ${entry.codigo} devolvida para "aguardando orçamento" porque a OS nº ${os.numero} foi cancelada`);
+    }
+  }
   for (const p of db.all('productionOrders').filter(p => p.osId === os.id && p.status !== 'cancelado')) {
     db.update('productionOrders', p.id, { status: 'cancelado', osStatus: 'cancelada' });
   }
@@ -2036,16 +2073,36 @@ route('POST', '/api/os/:id/status', 'os', async (req, res, user, params) => {
   const b = await readBody(req);
   const os = db.get('serviceOrders', params.id);
   if (!os) return notFound(res);
-  const patch = { status: b.status };
-  if (b.status === 'finalizado') patch.dataFinalizacao = b.data || domain.today();
+  // 'cancelado' virava um status órfão que nenhum relatório reconhecia.
+  const novo = b.status === 'cancelado' ? 'cancelada' : b.status;
+  if (!OS_STATUS.includes(novo)) return bad(res, 'Status inválido: ' + b.status);
+  if (novo === 'cancelada') {
+    return bad(res, 'Para cancelar a OS use o botão Cancelar — ele cancela junto as parcelas em aberto e a produção.');
+  }
+  /* Reabrir uma OS cancelada por aqui deixaria a produção cancelada e as
+     parcelas canceladas para trás. O caminho é duplicar. */
+  if (osCancelada(os)) {
+    return bad(res, `A OS nº ${os.numero} está cancelada. Para refazer o trabalho, use Duplicar — assim o cancelamento continua registrado.`);
+  }
+  const patch = { status: novo };
+  if (novo === 'finalizado') patch.dataFinalizacao = b.data || domain.today();
   if (b.responsavelId !== undefined) patch.responsavelId = b.responsavelId;
   os.historico = os.historico || [];
-  os.historico.push({ at: new Date().toISOString(), por: user.name, evento: 'Status → ' + b.status });
+  os.historico.push({ at: new Date().toISOString(), por: user.name, evento: 'Status → ' + novo });
   db.update('serviceOrders', os.id, patch);
   for (const p of db.all('productionOrders').filter(p => p.osId === os.id && p.status !== 'cancelado')) {
-    db.update('productionOrders', p.id, { osStatus: b.status });
+    db.update('productionOrders', p.id, { osStatus: novo });
   }
-  audit(user, 'status', 'serviceOrders', os.id, `OS nº ${os.numero} → ${b.status}`);
+  /* Finalizar a OS é dizer que o trabalho acabou. A Produção mostra o mesmo
+     trabalho: ela conclui junto, sem ninguém remarcar o checklist. */
+  if (novo === 'finalizado') {
+    const r = concluirProducaoDe(p => p.osId === os.id, user, `a OS nº ${os.numero} foi finalizada`);
+    if (r.ordens) {
+      historicoOS(db.get('serviceOrders', os.id),
+        `${r.ordens} ordem(ns) de produção concluída(s) automaticamente junto com a OS`, user);
+    }
+  }
+  audit(user, 'status', 'serviceOrders', os.id, `OS nº ${os.numero} → ${novo}`);
   db.insert('audit', {
     at: new Date().toISOString(), userId: user.id, userName: user.name, action: 'timeline',
     entity: 'serviceOrders', entityId: os.id, clientId: os.clienteId, details: `OS nº ${os.numero}: status ${b.status}`
@@ -2057,11 +2114,40 @@ route('POST', '/api/os/:id/envio', 'os', async (req, res, user, params) => {
   const b = await readBody(req);
   const os = db.get('serviceOrders', params.id);
   if (!os) return notFound(res);
+  if (!OS_ENVIO.includes(b.envioStatus)) return bad(res, 'Situação de envio inválida: ' + b.envioStatus);
   db.update('serviceOrders', os.id, { envioStatus: b.envioStatus, nfRetorno: b.nfRetorno !== undefined ? b.nfRetorno : os.nfRetorno });
+  os.historico = os.historico || [];
   os.historico.push({ at: new Date().toISOString(), por: user.name, evento: 'Envio/entrega → ' + b.envioStatus });
   db.save();
+
+  /* "Pronto para envio" (ou já despachado) quer dizer que a bancada
+     terminou: a Produção reconhece a conclusão sem ninguém remarcar o
+     checklist, e a OS fica finalizada se ainda não estava. */
+  if (['pronto', 'enviado', 'entregue'].includes(b.envioStatus)) {
+    const rotulo = { pronto: 'ficou pronta para envio', enviado: 'foi enviada', entregue: 'foi entregue' }[b.envioStatus];
+    const r = concluirProducaoDe(p => p.osId === os.id, user, `a OS nº ${os.numero} ${rotulo}`);
+    const atual = db.get('serviceOrders', os.id);
+    if (!osCancelada(atual) && !['finalizado', 'aguardando_pagamento'].includes(atual.status)) {
+      db.update('serviceOrders', os.id, { status: 'finalizado', dataFinalizacao: atual.dataFinalizacao || domain.today() });
+      for (const p of db.all('productionOrders').filter(p => p.osId === os.id && p.status !== 'cancelado')) {
+        db.update('productionOrders', p.id, { osStatus: 'finalizado' });
+      }
+      historicoOS(db.get('serviceOrders', os.id),
+        `OS finalizada automaticamente porque o serviço ${rotulo}`, user);
+      audit(user, 'sincronizou', 'serviceOrders', os.id,
+        `OS nº ${os.numero} → Finalizado automaticamente porque ${rotulo}`);
+    }
+    if (r.ordens) {
+      historicoOS(db.get('serviceOrders', os.id),
+        `${r.ordens} ordem(ns) de produção concluída(s) automaticamente porque a OS ${rotulo}`, user);
+    }
+  }
+  /* Despachado o cabeçote, o bem de terceiro e a entrada acompanham: o
+     mesmo fato não precisa ser baixado em três telas. */
+  sincronizarEntregaDaOS(db.get('serviceOrders', os.id), user);
+
   audit(user, 'envio', 'serviceOrders', os.id, `OS nº ${os.numero} → ${b.envioStatus}`);
-  ok(res, { ok: true });
+  ok(res, db.get('serviceOrders', os.id));
 });
 
 /* ---- financeiro do serviço ----
@@ -2413,6 +2499,15 @@ function reverterVenda(sale, user) {
  * nada: quem entra é o cabeçote do cliente.
  */
 function concluirSePronto(po, user) {
+  const atual = baixarComponentesSePronto(po, user);
+  /* O trabalho é um só: quando a ordem anda, quem mostra o mesmo trabalho
+     em outra aba anda junto. */
+  sincronizarOSComProducao(atual, user);
+  sincronizarVendaComProducao(atual, user);
+  return andamentoDaOrdem(db.get('productionOrders', atual.id)) || atual;
+}
+
+function baixarComponentesSePronto(po, user) {
   const atual = andamentoDaOrdem(po);
   if (atual.status !== 'pronto' || atual.estoqueBaixado || atual.origem === 'servico') return atual;
   const cascoCat = atual.tipo === 'crossflow' ? 'casco_crossflow' : 'casco_unilateral';
@@ -2465,6 +2560,164 @@ function andamentoDaOrdem(po) {
   });
 }
 
+/* ===================================================================== */
+/* Sincronização entre módulos                                           */
+/* --------------------------------------------------------------------- */
+/* O mesmo trabalho aparece em abas diferentes — a OS é o lado comercial, a
+   Produção é o lado físico, a Venda é o lado do pedido. Quem registra o
+   fato uma vez não deve precisar repetir nas outras. As funções abaixo são
+   o único lugar onde essa propagação acontece, e cada uma:
+     - só mexe quando o dado realmente representa a MESMA etapa;
+     - nunca sobrescreve uma decisão humana (cancelamento);
+     - deixa registrado por que mexeu, no histórico e na auditoria.          */
+/* ===================================================================== */
+
+/* A ordem em que a produção anda. Serve para saber qual ordem está mais
+   atrasada quando uma venda tem vários cabeçotes. */
+const PRODUCAO_ORDEM = ['nao_produzido', 'preparacao', 'usinagem', 'montagem', 'pronto'];
+/* Estágios de venda que são do EXPEDIÇÃO, não da produção: depois que saiu
+   da empresa, a produção não manda mais no status do pedido. */
+const VENDA_EXPEDIDA = ['enviado', 'entregue', 'cancelado', 'cancelada'];
+
+/** Anota no histórico da OS o que o sistema fez sozinho, e por quê. */
+function historicoOS(os, texto, user) {
+  const hist = (os.historico || []).concat([{
+    at: new Date().toISOString(), por: user ? user.name : 'sistema',
+    evento: texto, automatico: true
+  }]);
+  db.update('serviceOrders', os.id, { historico: hist });
+}
+
+/**
+ * Conclui o checklist das ordens de produção de uma OS ou venda.
+ *
+ * O status de uma ordem de produção NÃO é digitado: ele nasce do checklist
+ * (statusPorEtapa). Então, para a Produção reconhecer que o trabalho acabou,
+ * o caminho certo é marcar os itens que faltavam — escrever no status seria
+ * desfeito no próximo cálculo.
+ */
+function concluirProducaoDe(filtro, user, motivo) {
+  let ordens = 0, itens = 0;
+  for (const po of db.all('productionOrders').filter(p => filtro(p) && p.status !== 'cancelado')) {
+    const checklist = po.checklist || [];
+    const pendentes = checklist.filter(c => !c.done);
+    if (!pendentes.length) continue;
+    const em = new Date().toISOString();
+    for (const c of pendentes) {
+      c.done = true;
+      c.por = user ? user.name : 'sistema';
+      c.em = em;
+      c.automatico = motivo; // fica visível no checklist de quem abrir a ordem
+    }
+    db.update('productionOrders', po.id, { checklist });
+    itens += pendentes.length;
+    ordens++;
+    audit(user, 'sincronizou', 'productionOrders', po.id,
+      `Ordem de produção #${po.id} concluída automaticamente porque ${motivo} ` +
+      `(${pendentes.length} item(ns) do checklist marcados)`);
+    // Ordem pronta baixa os componentes do estoque — uma vez só, como sempre.
+    baixarComponentesSePronto(db.get('productionOrders', po.id), user);
+  }
+  return { ordens, itens };
+}
+
+/**
+ * Produção → OS.
+ * Quando TODAS as ordens de produção de um serviço ficam prontas, o trabalho
+ * acabou: a OS passa a "Finalizado" e o cabeçote fica "Pronto para envio".
+ * Não mexe em OS cancelada, nem em OS que já passou desse ponto (aguardando
+ * pagamento é etapa seguinte, não anterior).
+ */
+function sincronizarOSComProducao(po, user) {
+  if (!po || po.origem !== 'servico' || !po.osId) return;
+  const os = db.get('serviceOrders', po.osId);
+  if (!os || osCancelada(os)) return;
+  const irmas = db.all('productionOrders').filter(p => p.osId === os.id && p.status !== 'cancelado');
+  if (!irmas.length || !irmas.every(p => p.status === 'pronto')) return;
+  if (['finalizado', 'aguardando_pagamento'].includes(os.status)) return;
+
+  const patch = { status: 'finalizado', dataFinalizacao: os.dataFinalizacao || domain.today() };
+  // O cabeçote está pronto para sair; quem já despachou não volta atrás.
+  if (!os.envioStatus || os.envioStatus === 'na_empresa') patch.envioStatus = 'pronto';
+  db.update('serviceOrders', os.id, patch);
+  for (const p of irmas) db.update('productionOrders', p.id, { osStatus: 'finalizado' });
+
+  historicoOS(os, `OS finalizada automaticamente — a produção concluiu o trabalho` +
+    (patch.envioStatus === 'pronto' ? ' (cabeçote pronto para envio)' : ''), user);
+  audit(user, 'sincronizou', 'serviceOrders', os.id,
+    `OS nº ${os.numero} → Finalizado automaticamente porque a ordem de produção #${po.id} ficou pronta`);
+  db.insert('audit', {
+    at: new Date().toISOString(), userId: user ? user.id : null, userName: user ? user.name : 'sistema',
+    action: 'timeline', entity: 'serviceOrders', entityId: os.id, clientId: os.clienteId,
+    details: `OS nº ${os.numero} finalizada automaticamente pela conclusão da produção`
+  });
+}
+
+/**
+ * Produção → Venda.
+ * O status do pedido de cabeçote é o andamento do que está sendo produzido
+ * nele — o pedido não tem andamento próprio. Com vários cabeçotes, vale o
+ * mais atrasado: o pedido só fica pronto quando o último ficar.
+ * Pedido já enviado/entregue/cancelado é assunto da expedição, não da
+ * produção: esse não é tocado.
+ */
+function sincronizarVendaComProducao(po, user) {
+  if (!po || po.origem === 'servico' || !po.saleId) return;
+  const sale = db.get('sales', po.saleId);
+  if (!sale || VENDA_EXPEDIDA.includes(sale.status)) return;
+  const irmas = db.all('productionOrders').filter(p => p.saleId === sale.id && p.status !== 'cancelado');
+  if (!irmas.length) return;
+  const indice = irmas.reduce((menor, p) => {
+    const i = PRODUCAO_ORDEM.indexOf(p.status);
+    return Math.min(menor, i < 0 ? 0 : i);
+  }, PRODUCAO_ORDEM.length - 1);
+  const novo = PRODUCAO_ORDEM[indice];
+  if (!novo || novo === sale.status) return;
+
+  db.update('sales', sale.id, { status: novo });
+  audit(user, 'sincronizou', 'sales', sale.id,
+    `Pedido nº ${sale.numero} → ${novo} automaticamente, acompanhando a produção` +
+    (irmas.length > 1 ? ` (${irmas.length} cabeçotes — vale o mais atrasado)` : ''));
+}
+
+/**
+ * OS → Bem de terceiro e Entrada de cabeçote.
+ * O cabeçote do cliente aparece em três lugares: a entrada que o registrou, o
+ * bem guardado e a OS. Quem despachou o cabeçote pela OS não precisa ir
+ * baixar o bem em "Bens de clientes" nem mexer na entrada.
+ */
+function sincronizarEntregaDaOS(os, user) {
+  if (!os) return;
+  const entregue = os.envioStatus === 'entregue' || os.envioStatus === 'enviado';
+  const entry = os.entryId ? db.get('headEntries', os.entryId) : null;
+
+  if (entry && entregue && entry.status !== 'entregue') {
+    db.update('headEntries', entry.id, { status: 'entregue' });
+    audit(user, 'sincronizou', 'headEntries', entry.id,
+      `Entrada ${entry.codigo} → entregue automaticamente porque a OS nº ${os.numero} foi ${
+        os.envioStatus === 'entregue' ? 'entregue' : 'enviada'}`);
+  }
+  /* O bem só sai da empresa de verdade quando é entregue. "Enviado" ainda
+     está a caminho, mas já não está aqui — a data de saída é a do envio. */
+  const assetId = (entry && entry.assetId) || null;
+  const asset = assetId ? db.get('assets', assetId) : null;
+  if (asset && entregue && asset.status !== 'devolvido') {
+    db.update('assets', asset.id, {
+      status: 'devolvido',
+      dataSaida: asset.dataSaida || domain.today(),
+      nfRetorno: asset.nfRetorno || os.nfRetorno || ''
+    });
+    audit(user, 'sincronizou', 'assets', asset.id,
+      `Bem "${asset.identificacao}" baixado automaticamente porque a OS nº ${os.numero} foi ${
+        os.envioStatus === 'entregue' ? 'entregue' : 'enviada'}${os.nfRetorno ? ' — NF retorno ' + os.nfRetorno : ''}`);
+    db.insert('audit', {
+      at: new Date().toISOString(), userId: user ? user.id : null, userName: user ? user.name : 'sistema',
+      action: 'timeline', entity: 'assets', entityId: asset.id, clientId: asset.clienteId,
+      details: `Bem devolvido junto com o envio da OS nº ${os.numero}: ${asset.identificacao}`
+    });
+  }
+}
+
 /** Cria as ordens de produção dos cabeçotes de uma venda. */
 function gerarProducaoDaVenda(sale, cliente, user) {
   const itens = sale.itens || [], numero = sale.numero;
@@ -2492,7 +2745,7 @@ function gerarProducaoDaVenda(sale, cliente, user) {
  * os dados (menos o que já foi marcado) em vez de criar outra.
  */
 function gerarProducaoDaOS(os, user) {
-  if (!os || os.status === 'cancelado' || os.status === 'cancelada') return null;
+  if (!os || osCancelada(os)) return null;
   const cliente = db.get('clients', os.clienteId);
   const operacoes = (os.itens || []).filter(i => i && i.nome)
     .map(i => ({ nome: i.nome, qtd: Number(i.qtd) || 1 }));
@@ -2628,14 +2881,91 @@ route('POST', '/api/sales', 'sales', async (req, res, user) => {
 });
 
 const SALE_STATUS = ['nao_produzido', 'preparacao', 'usinagem', 'montagem', 'pronto', 'enviado', 'entregue', 'cancelado'];
+/**
+ * Cancelar um pedido é uma decisão comercial que precisa atravessar o
+ * sistema inteiro. Antes, marcar "Cancelado" mudava só a etiqueta: os
+ * boletos continuavam sendo cobrados, a produção continuava na fila e as
+ * peças seguiam baixadas do estoque.
+ */
+function cancelarVendaEDependentes(sale, user, motivo) {
+  const efeitos = [];
+
+  // Parcelas em aberto saem da cobrança; as recebidas ficam (o dinheiro entrou).
+  const recs = db.all('receivables').filter(r => r.refType === 'sales' && r.refId === sale.id);
+  const aCancelar = recs.filter(r => r.status !== 'paga' && r.status !== 'cancelada');
+  for (const r of aCancelar) db.update('receivables', r.id, { status: 'cancelada' });
+  if (aCancelar.length) efeitos.push(`${aCancelar.length} parcela(s) em aberto cancelada(s)`);
+  const recebidas = recs.filter(r => r.status === 'paga' || r.status === 'parcial');
+  if (recebidas.length) {
+    efeitos.push(`${recebidas.length} parcela(s) já com recebimento mantida(s) — o dinheiro entrou e continua no caixa`);
+  }
+
+  // Produção: sai da fila. A que já consumiu componentes fica registrada.
+  const pos = db.all('productionOrders').filter(p => p.saleId === sale.id && p.status !== 'cancelado');
+  let consumiram = 0;
+  for (const po of pos) {
+    db.update('productionOrders', po.id, { status: 'cancelado', vendaStatus: 'cancelado' });
+    if (po.estoqueBaixado) consumiram++;
+  }
+  if (pos.length) efeitos.push(`${pos.length} ordem(ns) de produção cancelada(s)`);
+  if (consumiram) {
+    efeitos.push(`${consumiram} dela(s) já tinha(m) consumido componentes — o estoque desses NÃO foi devolvido automaticamente`);
+  }
+
+  // Peças de revenda voltam para a prateleira: não foram vendidas.
+  if (sale.estoquePecasBaixado) {
+    estoquePecasDaVenda(sale, user, { devolver: true });
+    efeitos.push('peças de revenda devolvidas ao estoque');
+  }
+
+  db.update('sales', sale.id, { status: 'cancelado', canceladaEm: domain.today(), motivoCancelamento: motivo || '' });
+  audit(user, 'cancelou', 'sales', sale.id,
+    `Pedido nº ${sale.numero} cancelado${motivo ? ' — ' + motivo : ''}` +
+    (efeitos.length ? `; ${efeitos.join('; ')}` : ''));
+  db.insert('audit', {
+    at: new Date().toISOString(), userId: user.id, userName: user.name, action: 'timeline',
+    entity: 'sales', entityId: sale.id, clientId: sale.clienteId,
+    details: `Pedido nº ${sale.numero} cancelado${motivo ? ': ' + motivo : ''}`
+  });
+  return efeitos;
+}
+
+route('POST', '/api/sales/:id/cancel', 'sales', async (req, res, user, params) => {
+  const b = await readBody(req);
+  const sale = db.get('sales', params.id);
+  if (!sale) return notFound(res);
+  if (sale.status === 'cancelado') return bad(res, 'Este pedido já está cancelado.');
+  const efeitos = cancelarVendaEDependentes(sale, user, b.motivo);
+  ok(res, { ok: true, efeitos, venda: db.get('sales', sale.id) });
+});
+
 route('POST', '/api/sales/:id/status', 'sales', async (req, res, user, params) => {
   const b = await readBody(req);
   const sale = db.get('sales', params.id);
   if (!sale) return notFound(res);
   if (!SALE_STATUS.includes(b.status)) return bad(res, 'Status inválido');
+
+  /* Cancelar não é uma etiqueta: passa pelo caminho que desfaz a cobrança,
+     a produção e o estoque. */
+  if (b.status === 'cancelado') {
+    if (sale.status === 'cancelado') return bad(res, 'Este pedido já está cancelado.');
+    const efeitos = cancelarVendaEDependentes(sale, user, b.motivo);
+    return ok(res, Object.assign({}, db.get('sales', sale.id), { efeitos }));
+  }
+  if (sale.status === 'cancelado') {
+    return bad(res, 'Este pedido está cancelado. Para refazer o trabalho, use Duplicar — assim o histórico do cancelamento continua de pé.');
+  }
+
   const patch = { status: b.status };
   if (b.status === 'enviado') patch.dataEnvio = b.data || domain.today();
   db.update('sales', sale.id, patch);
+
+  /* Despachar o pedido quer dizer que os cabeçotes ficaram prontos: a
+     produção reconhece a conclusão sem ninguém remarcar o checklist. */
+  if (['pronto', 'enviado', 'entregue'].includes(b.status)) {
+    const rotulo = { pronto: 'ficou pronto', enviado: 'foi enviado', entregue: 'foi entregue' }[b.status];
+    concluirProducaoDe(p => p.saleId === sale.id, user, `o pedido nº ${sale.numero} ${rotulo}`);
+  }
   audit(user, 'status', 'sales', sale.id, `Pedido nº ${sale.numero} → ${b.status}`);
   ok(res, db.get('sales', sale.id));
 });
@@ -4817,6 +5147,49 @@ function agendaItemPagar(p) {
   };
 }
 
+/* Frete em aberto é dinheiro que a empresa deve — antes ele só aparecia no
+   caixa DEPOIS de pago, e a agenda dizia "isto é tudo que vence no período"
+   sem contá-lo. O mesmo vale para os pagamentos de RH programados. */
+function agendaItemFrete(f) {
+  const c = f.clienteId ? db.get('clients', f.clienteId) : null;
+  return {
+    tipo: 'pagar', id: f.id, modulo: 'freights',
+    descricao: `Frete ${f.transportadora || ''}`.trim() + (f.conhecimento ? ` — CT-e ${f.conhecimento}` : ''),
+    contraparte: f.transportadora || (c ? c.nome : ''),
+    contraparteId: null,
+    valor: Number(f.valor) || 0,
+    vencimento: f.dataPagamento || f.dataEnvio || null,
+    dataProgramada: null,
+    dataBaixa: f.status === 'pago' ? (f.dataPagamento || null) : null,
+    status: f.status === 'pago' ? 'pago' : 'aberto',
+    liquidado: f.status === 'pago',
+    cancelado: false,
+    categoria: 'frete_venda',
+    documento: f.conhecimento || '',
+    observacoes: f.observacoes || ''
+  };
+}
+
+function agendaItemRH(h) {
+  const emp = h.employeeId ? db.get('employees', h.employeeId) : null;
+  return {
+    tipo: 'pagar', id: h.id, modulo: 'hrPayments',
+    descricao: `RH — ${h.descricao || h.tipo || 'pagamento'}`,
+    contraparte: emp ? emp.nome : '',
+    contraparteId: null,
+    valor: Number(h.valor) || 0,
+    vencimento: h.vencimento || h.data || null,
+    dataProgramada: null,
+    dataBaixa: h.status === 'pago' ? (h.dataPagamento || null) : null,
+    status: h.status === 'pago' ? 'pago' : 'aberto',
+    liquidado: h.status === 'pago',
+    cancelado: false,
+    categoria: h.tipo === 'beneficio' ? 'beneficios' : 'salarios',
+    documento: '',
+    observacoes: h.observacoes || ''
+  };
+}
+
 function agendaItemReceber(r) {
   const c = r.clienteId ? db.get('clients', r.clienteId) : null;
   return {
@@ -4825,7 +5198,11 @@ function agendaItemReceber(r) {
     contraparte: c ? c.nome : '',
     contraparteId: c ? c.id : null,
     contraparteCodigo: c ? (c.codigo || '') : '',
-    valor: Number(r.valor) || 0,
+    /* Recebida em parte entra pelo que ainda falta: o que já caiu no caixa
+       não é compromisso futuro. */
+    valor: r.status === 'parcial' ? saldoDaParcela(r) : (Number(r.valor) || 0),
+    valorTotal: Number(r.valor) || 0,
+    recebido: recebidoDaParcela(r),
     vencimento: r.vencimento || null,
     dataProgramada: null,
     dataBaixa: r.dataRecebimento || null,
@@ -4852,6 +5229,10 @@ route('GET', '/api/agenda', ['agenda', 'payables', 'receivables'], async (req, r
   const podeVerReceber = can(user, 'receivables');
   const itens = []
     .concat(podeVerPagar ? withOverdue(db.all('payables')).map(agendaItemPagar) : [])
+    /* Frete e RH não passam por Contas a pagar, mas vencem como qualquer
+       compromisso: sem eles a agenda mostrava um mês mais folgado do que é. */
+    .concat(podeVerPagar ? withOverdue(db.all('freights').map(agendaItemFrete)) : [])
+    .concat(podeVerPagar && can(user, 'hr') ? withOverdue(db.all('hrPayments').map(agendaItemRH)) : [])
     .concat(podeVerReceber ? withOverdue(db.all('receivables')).map(agendaItemReceber) : []);
 
   const dias = new Map();
@@ -4923,7 +5304,7 @@ route('GET', '/api/analytics', 'dashboard', async (req, res, user, params, query
   const inWindow = d => d && months.includes(String(d).slice(0, 7));
 
   const sales = db.all('sales').filter(s => s.status !== 'cancelado');
-  const oss = db.all('serviceOrders').filter(o => o.status !== 'cancelado');
+  const oss = db.all('serviceOrders').filter(o => !osCancelada(o));
   const out = { janelaMeses: meses };
 
   // Faturamento mensal: só para quem tem acesso ao financeiro (Produção não recebe valores)
@@ -5343,14 +5724,14 @@ function reconciliarProducaoEFinanceiro(user) {
 
   // 3. Ordens de serviço em andamento sem ordem de produção.
   for (const os of db.all('serviceOrders')) {
-    if (['cancelado', 'cancelada'].includes(os.status)) continue;
+    if (osCancelada(os)) continue;
     if (db.all('productionOrders').some(p => p.osId === os.id)) continue;
     if (gerarProducaoDaOS(os, quem)) out.producaoServicos++;
   }
 
   // 4. Serviços com valor a receber que nunca chegaram ao financeiro.
   for (const os of db.all('serviceOrders')) {
-    if (['cancelado', 'cancelada'].includes(os.status)) continue;
+    if (osCancelada(os)) continue;
     if (!(Number(os.valorTotal) > 0)) continue;
     if (os.pagamentoStatus === 'pago') continue;
     // Já tem cobrança ou dinheiro registrado? Então não se mexe.
