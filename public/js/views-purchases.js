@@ -8,8 +8,9 @@ App.registerView('purchases', async (view) => {
     App.get('/purchases'), App.get('/suppliers'), App.get('/clients'),
     App.get('/serviceOrders'), App.get('/sales')]);
   /* A referência é sempre a DATA DA COMPRA — não o vencimento nem o pagamento.
-     Padrão: mais recente primeiro. */
-  let ordemData = 'desc';
+     Padrão: mais recente primeiro. A ordem vive fora do render, para
+     sobreviver ao redesenho que a busca provoca a cada tecla. */
+  let ordemCompras = { chave: 'Data', desc: true };
   let periodo = 'todos', de = '', ate = '';
 
   const hoje = App.today();
@@ -72,42 +73,73 @@ App.registerView('purchases', async (view) => {
         <span class="muted small">até</span>
         <input type="date" id="pc-ate" style="max-width:150px" title="Até">
       </span>
-      <select id="pc-ordem" style="max-width:200px" title="Ordenar pela data da compra">
-        <option value="desc">Mais recentes primeiro</option>
-        <option value="asc">Mais antigas primeiro</option>
-      </select>
+      <input class="search" id="pc-busca" style="max-width:340px"
+        placeholder="🔎 Buscar por fornecedor, item, categoria, data, valor, pagamento ou nº da nota…">
+      <button class="btn sm ghost" id="pc-limpar" title="Limpar a busca e os filtros">Limpar filtros</button>
       <div class="spacer"></div>
       <span class="muted small" id="pc-contagem"></span>
       <button class="btn" onclick="Purch.print()">🖨️ Imprimir</button>
     </div>
+    <div class="small muted" style="margin:-4px 0 10px">Clique no cabeçalho da coluna para ordenar — a ordenação é só da visualização, não muda nada no registro.</div>
     <div id="pc-tabela"></div>`;
 
+  /* Tudo que descreve a compra vira texto pesquisável: quem procura
+     "retifoz agosto" ou "nf 1234" acha do mesmo jeito. Sem acento e em
+     qualquer ordem — é o mesmo mecanismo de busca das outras abas. */
+  const docDaCompra = p => p.documentoTipo === 'sem_documento'
+    ? 'sem documento'
+    : `${DOCS[p.documentoTipo] || p.documentoTipo || ''} ${p.documentoNumero || ''}`;
+  const CAMPOS_BUSCA = [
+    'fornecedorNome', 'observacoes', 'formaPagamento', 'data', 'documentoNumero',
+    p => (p.itens || []).map(i => i.descricao).join(' '),
+    p => App.catCompraNome(p.categoria),
+    p => docDaCompra(p),
+    p => agendNome(p.tipoPagamento),
+    p => App.vincCompraNome((p.vinculo || {}).tipo) + ' ' + ((p.vinculo || {}).refNome || ''),
+    p => App.date(p.data),                       // 23/09/2026
+    p => App.money(p.valor) + ' ' + p.valor,     // 1.234,56 e 1234.56
+    p => '#' + p.id + ' compra ' + p.id,
+    p => p.parcelas > 1 ? p.parcelas + 'x parcelado' : 'parcela unica'
+  ];
+
   const colunas = [
-      { h: 'Data', cell: p => App.date(p.data) },
-      { h: 'Fornecedor', cell: p => `<b>${App.esc(p.fornecedorNome || '—')}</b>` },
-      { h: 'Itens', cell: p => `<span class="small">${(p.itens || []).slice(0, 3).map(i => App.esc(i.descricao)).join(', ') || '—'}</span>` },
-      { h: 'Valor', class: 'num', cell: p => App.moneyHtml(p.valor) },
-      { h: 'Documento', cell: p => p.documentoTipo === 'sem_documento'
+      { h: 'Data', sort: p => p.data || '', cell: p => App.date(p.data) },
+      { h: 'Fornecedor', sort: p => p.fornecedorNome || '', sortDesc: false,
+        cell: p => `<b>${App.esc(p.fornecedorNome || '—')}</b>` },
+      { h: 'Itens', key: 'Itens', sort: p => (p.itens || []).map(i => i.descricao).join(', '), sortDesc: false,
+        cell: p => `<span class="small">${(p.itens || []).slice(0, 3).map(i => App.esc(i.descricao)).join(', ') || '—'}</span>` },
+      { h: 'Valor', class: 'num', sort: p => Number(p.valor) || 0, cell: p => App.moneyHtml(p.valor) },
+      { h: 'Documento', sort: p => docDaCompra(p), sortDesc: false, cell: p => p.documentoTipo === 'sem_documento'
           ? '<span class="badge warn">sem documento</span>'
           : `${DOCS[p.documentoTipo] || p.documentoTipo} ${App.esc(p.documentoNumero || '')}` },
-      { h: 'Categoria', cell: p => `<span class="small">${App.esc(App.catCompraNome(p.categoria))}</span>` },
+      { h: 'Categoria', sort: p => App.catCompraNome(p.categoria), sortDesc: false,
+        cell: p => `<span class="small">${App.esc(App.catCompraNome(p.categoria))}</span>` },
       { h: 'Vínculo', cell: p => `<span class="small muted">${App.esc(App.vincCompraNome((p.vinculo || {}).tipo))}${p.vinculo && p.vinculo.refNome ? ': ' + App.esc(p.vinculo.refNome) : ''}</span>` },
-      { h: 'Pagamento', cell: p => `<span class="small">${App.esc(agendNome(p.tipoPagamento))}${p.parcelas > 1 ? ` · ${p.parcelas}x` : ''}</span>` },
+      { h: 'Pagamento', sort: p => agendNome(p.tipoPagamento), sortDesc: false,
+        cell: p => `<span class="small">${App.esc(agendNome(p.tipoPagamento))}${p.parcelas > 1 ? ` · ${p.parcelas}x` : ''}</span>` },
     { h: '', class: 'num', cell: p => `
       <button class="btn sm ghost" onclick="Purch.edit(${p.id})" title="Editar esta compra">✏️ Editar</button>
       <button class="btn sm ghost" onclick="Purch.excluir(${p.id})" title="Excluir esta compra">🗑️ Excluir</button>` }
   ];
 
+  /* O que está na tela: período + busca. A ordem vem dos cabeçalhos.
+     Um lugar só decide isso, para o papel sair igual ao que se está vendo. */
+  const visiveis = () => {
+    const base = purchases.filter(p => noPeriodo(p.data))
+      // Empate de data mantém o lançamento mais novo em cima (sort é estável).
+      .slice().sort((a, b) => b.id - a.id);
+    return App.filtraPor(base, (document.getElementById('pc-busca') || {}).value || '', CAMPOS_BUSCA);
+  };
+
   const renderCompras = () => {
-    const lista = purchases
-      .filter(p => noPeriodo(p.data))
-      .sort((a, b) => {
-        const d = String(a.data || '').localeCompare(String(b.data || ''));
-        // Mesmo dia: o lançamento mais novo primeiro, para não embaralhar.
-        return (ordemData === 'asc' ? d : -d) || (ordemData === 'asc' ? a.id - b.id : b.id - a.id);
-      });
-    document.getElementById('pc-tabela').innerHTML =
-      App.table(lista, colunas, { emptyMsg: 'Nenhuma compra neste período' });
+    const lista = visiveis();
+    document.getElementById('pc-tabela').innerHTML = App.table(lista, colunas, {
+      emptyMsg: (document.getElementById('pc-busca') || {}).value
+        ? 'Nenhuma compra encontrada com esse texto'
+        : 'Nenhuma compra neste período',
+      sortState: ordemCompras,
+      onSort: (o) => { ordemCompras = o; renderCompras(); }
+    });
     const soma = lista.reduce((s, p) => s + (Number(p.valor) || 0), 0);
     document.getElementById('pc-contagem').textContent =
       `${lista.length} compra(s) · R$ ${App.money(soma)}`;
@@ -120,7 +152,17 @@ App.registerView('purchases', async (view) => {
   });
   document.getElementById('pc-de').addEventListener('change', e => { de = e.target.value; renderCompras(); });
   document.getElementById('pc-ate').addEventListener('change', e => { ate = e.target.value; renderCompras(); });
-  document.getElementById('pc-ordem').addEventListener('change', e => { ordemData = e.target.value; renderCompras(); });
+  document.getElementById('pc-busca').addEventListener('input', renderCompras);
+  document.getElementById('pc-limpar').onclick = () => {
+    document.getElementById('pc-busca').value = '';
+    document.getElementById('pc-periodo').value = 'todos';
+    document.getElementById('pc-custom').style.display = 'none';
+    document.getElementById('pc-de').value = '';
+    document.getElementById('pc-ate').value = '';
+    periodo = 'todos'; de = ''; ate = '';
+    ordemCompras = { chave: 'Data', desc: true };
+    renderCompras();
+  };
   renderCompras();
 
   window.Purch = {
@@ -289,15 +331,20 @@ App.registerView('purchases', async (view) => {
         } catch (err) { App.toast(err.message, 'err'); }
       });
     },
+    /* Imprime exatamente o que está na tela: mesmo filtro, mesma busca,
+       mesma ordem dos cabeçalhos. */
     print() {
-      const visiveis = purchases.filter(p => noPeriodo(p.data))
-        .sort((a, b) => (ordemData === 'asc' ? 1 : -1) * String(a.data || '').localeCompare(String(b.data || '')));
-      App.print('Compras registradas',
-        `<table><tr><th>Data</th><th>Fornecedor</th><th class="num">Valor</th><th>Documento</th><th>Pagamento</th></tr>
-        ${visiveis.map(p => `<tr><td>${App.date(p.data)}</td><td>${App.esc(p.fornecedorNome || '')}</td>
+      const lista = App.ordenaComo(visiveis(), colunas, ordemCompras);
+      const busca = document.getElementById('pc-busca').value;
+      const soma = lista.reduce((s, p) => s + (Number(p.valor) || 0), 0);
+      App.print('Compras registradas' + (busca ? ` — busca: “${busca}”` : ''),
+        `<table><tr><th>Data</th><th>Fornecedor</th><th>Itens</th><th>Categoria</th><th class="num">Valor</th><th>Documento</th><th>Pagamento</th></tr>
+        ${lista.map(p => `<tr><td>${App.date(p.data)}</td><td>${App.esc(p.fornecedorNome || '')}</td>
+        <td>${App.esc((p.itens || []).map(i => i.descricao).filter(Boolean).join(', '))}</td>
+        <td>${App.esc(App.catCompraNome(p.categoria))}</td>
         <td class="num">R$ ${App.money(p.valor)}</td><td>${p.documentoTipo === 'sem_documento' ? 'SEM DOCUMENTO' : App.esc(p.documentoNumero || p.documentoTipo)}</td>
-        <td>${App.esc(p.formaPagamento || '')}</td></tr>`).join('')}</table>`,
-        visiveis.length + ' compra(s)');
+        <td>${App.esc(agendNome(p.tipoPagamento))}${p.parcelas > 1 ? ` (${p.parcelas}x)` : ''}</td></tr>`).join('')}</table>`,
+        `${lista.length} compra(s) — R$ ${App.money(soma)}`);
     }
   };
 });

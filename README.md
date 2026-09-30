@@ -68,8 +68,8 @@ com o sistema parado.
 | **Ordens de serviço** | Status (Em análise, Em andamento, Aguardando peça, Finalizado, Aguardando pagamento, Cancelado) + envio/entrega, responsável, pagamento (à vista ou parcelado com boletos automáticos), NF de retorno, histórico |
 | **Vendas** | 6 configurações (Unilateral/Crossflow × Stage 1–3); **valida comandos por Stage** (S1: 288 · S2: 290x300, 290x290 · S3: 300x308, 300x318, 316x320, 316x316, 308x320) e **tuchos** (S1/S2: 35 mm · S3: 37 mm, com exceção 300x308 = 35 ou 37); cartão/link com taxa da operadora, valor líquido e data prevista de recebimento; custos adicionais por venda; resultado e margem |
 | **Produção** | Ordem de produção por cabeçote vendido com checklist automático (separações, montagem, controle, embalagem, expedição) incluindo operações extras: retrabalho dos dutos de escape (Stage 3) e abertura do alojamento para tucho 37 mm; baixa automática de componentes ao concluir |
-| **Estoque próprio** | Cascos usinados (unilateral/crossflow), válvulas, molas, pratos, travas, tuchos 35/37, comandos; mínimos com alerta de compra; movimentações rastreadas |
-| **Compras** | Com ou sem NF (NF, recibo, comprovante, sem documento); **leitura automática de NF-e (XML)** com conferência antes de confirmar; vínculo a cliente/OS/pedido/produção/uso interno; gera contas a pagar (parceladas) automaticamente |
+| **Estoque próprio** | Cascos usinados (unilateral/crossflow), válvulas, molas, pratos, travas, tuchos 35/37, comandos; mínimos com alerta de compra; movimentações rastreadas. Lista única em **ordem alfabética**, com **busca** por nome, código ou categoria, filtros de categoria e de situação (ativos / abaixo do mínimo / inativos) e colunas ordenáveis (nome, quantidade, custo, valor em estoque) |
+| **Compras** | Com ou sem NF (NF, recibo, comprovante, sem documento); **leitura automática de NF-e (XML)** com conferência antes de confirmar; vínculo a cliente/OS/pedido/produção/uso interno; gera contas a pagar (parceladas) automaticamente. **Busca** por fornecedor, item, categoria, data, valor, forma de pagamento ou nº da nota, filtro por período e colunas ordenáveis (data, fornecedor, itens, valor, categoria, documento, pagamento) |
 | **Fornecedores** | Fechamento mensal (Jaú Auto Peças, Retifos, Ferragens Brasil, Mangopar…): gastos registrados no dia, acumulado em aberto e **conferência da fatura com alerta de divergência** antes do pagamento |
 | **Contas a pagar** | Categorias completas; **agenda de sextas-feiras** — a data de pagamento é calculada automaticamente como a sexta anterior ao vencimento (ex.: venc. qui 20/08 → pgto sex 14/08); pagamentos imediatos entram na data em que ocorrem; contas recorrentes com lembrete mensal |
 | **Contas a receber** | Duas visões: a geral, com tudo que a empresa tem a receber, e a aba **Boletos a receber**, uma linha por parcela (cliente, nº da venda/OS, referência, parcela 2/4, valor, vencimento, situação e data do pagamento), com **filtros** por situação, cliente, venda/OS, período de vencimento e busca, **navegação mês a mês** e o **total de boletos a receber no mês**. Parcelas com **geração automática** a partir da **data do 1º vencimento** (ex.: R$ 12.000, 3× a cada 30 dias com 1º em 10/10/2026 → 10/10, 09/11, 09/12 de R$ 4.000; sem data informada, conta da venda: 27/07, 3× a cada 20 dias → 16/08, 05/09, 25/09). O **vencimento de cada parcela se edita sozinho**, sem mexer nas irmãs, e data/valor alterados ficam no **histórico da parcela**. Recebimento **total ou parcial**: o que entra vai para o Fluxo de caixa na hora, sem lançamento duplicado, e a parcela fica *Parcialmente paga* pelo saldo. Situações: a vencer / vencido / parcialmente pago / pago / cancelado |
@@ -126,6 +126,11 @@ com o sistema parado.
   auditoria de alterações por usuário.
 - **Permissões**: perfil Produção não vê salários, custos, margens nem financeiro
   sensível — controlado pela permissão “Dados financeiros sensíveis”.
+- **Busca e ordenação iguais em todas as abas**: a mesma barra de pesquisa
+  (sem acento, palavras em qualquer ordem), os mesmos cabeçalhos clicáveis
+  com seta (⇅ ▲ ▼) e o mesmo botão de limpar filtros. Filtrar e ordenar é
+  sempre só visualização: nunca altera o registro nem a ordem guardada no
+  banco. A impressão sai com o mesmo recorte e a mesma ordem da tela.
 
 ## Arquitetura
 

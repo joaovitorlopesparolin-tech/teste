@@ -535,25 +535,31 @@ const App = {
    *
    * sortState: { chave, desc } — objeto que a view guarda e passa de volta.
    */
+  /**
+   * Ordena uma lista como a tabela ordenaria, dado o mesmo sortState.
+   * Existe separado para a IMPRESSÃO sair na mesma ordem da tela — o papel
+   * nunca deve divergir do que a pessoa está vendo.
+   * A ordenação é sempre uma cópia: a lista original nunca é mexida.
+   */
+  ordenaComo(rows, cols, sortState) {
+    if (!sortState || !sortState.chave) return rows;
+    const col = cols.find(c => (c.key || c.h) === sortState.chave && c.sort);
+    if (!col) return rows;
+    /* localeCompare para texto e subtração para número: ordenar data
+       como texto ISO já sai certo, e valor precisa ser numérico para
+       1.000 não vir antes de 900. */
+    return rows.slice().sort((a, b) => {
+      const va = col.sort(a), vb = col.sort(b);
+      const cmp = (typeof va === 'number' && typeof vb === 'number')
+        ? va - vb
+        : String(va == null ? '' : va).localeCompare(String(vb == null ? '' : vb), 'pt-BR');
+      return sortState.desc ? -cmp : cmp;
+    });
+  },
+
   table(rows, cols, { onRow, emptyMsg, sortState, onSort } = {}) {
     const ordenavel = cols.some(c => c.sort);
-    let lista = rows;
-
-    if (ordenavel && sortState && sortState.chave) {
-      const col = cols.find(c => (c.key || c.h) === sortState.chave && c.sort);
-      if (col) {
-        /* localeCompare para texto e subtração para número: ordenar data
-           como texto ISO já sai certo, e valor precisa ser numérico para
-           1.000 não vir antes de 900. */
-        lista = rows.slice().sort((a, b) => {
-          const va = col.sort(a), vb = col.sort(b);
-          const cmp = (typeof va === 'number' && typeof vb === 'number')
-            ? va - vb
-            : String(va == null ? '' : va).localeCompare(String(vb == null ? '' : vb), 'pt-BR');
-          return sortState.desc ? -cmp : cmp;
-        });
-      }
-    }
+    const lista = ordenavel ? this.ordenaComo(rows, cols, sortState) : rows;
 
     if (!lista.length) return `<div class="tablewrap"><div class="empty">${emptyMsg || 'Nenhum registro encontrado'}</div></div>`;
     const id = 'tb' + Math.random().toString(36).slice(2, 8);
