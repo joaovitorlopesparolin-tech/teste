@@ -246,11 +246,16 @@ App.registerView('sales', async (view, args) => {
     /* Tudo que saiu da listagem para ela caber na tela: comando, tucho,
        valores, pagamento e recebimentos de um pedido só. Quem não enxerga
        financeiro continua sem ver valor nenhum aqui. */
-    detalhes(id) {
+    async detalhes(id) {
       const s = sales.find(x => x.id === id);
       if (!s) return;
-      const rec = (s.recebimentos || []).reduce((a, r) => a + r.valor, 0);
-      const saldo = Math.round((s.valorTotal - rec) * 100) / 100;
+      /* Quem diz quanto entrou é o servidor: ele soma os recebimentos da
+         venda E as parcelas baixadas em Contas a receber, cada um uma vez.
+         Somar aqui por conta própria foi o que já fez a tela mostrar
+         "recebido" maior que o total e saldo negativo. */
+      let fin = { total: s.valorTotal, recebido: 0, saldo: s.valorTotal };
+      if (verValores) { try { fin = await App.get(`/sales/${id}/financeiro`); } catch (e) { /* sem permissão */ } }
+      const rec = fin.recebido, saldo = fin.saldo;
       const pg = s.pagamento || {};
       App.modal(`
         <h2>Pedido nº ${s.numero} — ${App.esc(App.clientName(s.clienteId, clients))}</h2>
@@ -295,18 +300,27 @@ App.registerView('sales', async (view, args) => {
 
     /* Recebimento em etapas: entrada agora, saldo na entrega.
        O que falta continua em Contas a receber e na projeção. */
-    receber(id) {
+    async receber(id) {
       const s = sales.find(x => x.id === id);
-      const lista = s.recebimentos || [];
-      const recebido = lista.reduce((a, r) => a + r.valor, 0);
-      const saldo = Math.round((s.valorTotal - recebido) * 100) / 100;
+      let fin;
+      try { fin = await App.get(`/sales/${id}/financeiro`); }
+      catch (e) { return App.toast(e.message, 'err'); }
+      const lista = fin.recebimentos || [];
+      const recebido = fin.recebido, saldo = fin.saldo;
+      /* Parcelas de boleto baixadas em Contas a receber também são dinheiro
+         desta venda: entram no "já recebido" e no saldo. */
+      const noBoleto = (fin.parcelas || []).filter(x => (Number(x.recebido) || 0) > 0 || x.status === 'paga');
       const m = App.modal(`
         <h2>Recebimentos — pedido nº ${s.numero}</h2>
         <table style="font-size:13.5px;margin-bottom:10px">
-          <tr><td>Valor total da venda</td><td class="num"><b>R$ ${App.money(s.valorTotal)}</b></td></tr>
+          <tr><td>Valor total da venda</td><td class="num"><b>R$ ${App.money(fin.total)}</b></td></tr>
           <tr><td>Já recebido</td><td class="num pos">R$ ${App.money(recebido)}</td></tr>
           <tr><td><b>Saldo em aberto</b></td><td class="num"><b class="${saldo > 0.005 ? 'neg' : 'pos'}">R$ ${App.money(saldo)}</b></td></tr>
         </table>
+        <p class="small muted" style="margin:-4px 0 10px">Cadastrar a venda não lança dinheiro no caixa.
+        O Fluxo de caixa recebe o valor a partir daqui, quando o cliente paga — total ou em parte.</p>
+        ${noBoleto.length ? `<p class="small">Já baixado em Contas a receber:
+          ${noBoleto.map(x => `${App.esc(x.descricao || 'parcela')} — R$ ${App.money((Number(x.recebido) || 0) || x.valor)}`).join(' · ')}</p>` : ''}
         ${lista.length ? App.table(lista.map((r, i) => Object.assign({ _i: i }, r)), [
           { h: 'Data', cell: r => App.date(r.data) },
           { h: 'Forma', cell: r => App.esc(r.forma) },
@@ -331,17 +345,28 @@ App.registerView('sales', async (view, args) => {
       const btn = m.querySelector('#rc-ok');
       if (btn) btn.onclick = async () => {
         try {
-          const r = await App.post(`/sales/${id}/receive`, {
+          const corpo = {
             valor: Number(m.querySelector('#rc-valor').value),
             data: m.querySelector('#rc-data').value,
             forma: m.querySelector('#rc-forma').value,
             vencimentoSaldo: m.querySelector('#rc-venc').value
-          });
-          App.closeModal();
-          App.toast(r.saldo > 0.005
-            ? `Recebido — falta R$ ${App.money(r.saldo)}, que segue em Contas a receber`
-            : 'Venda quitada', 'ok');
-          App.route();
+          };
+          const lancar = async (confirmar) => {
+            const r = await App.post(`/sales/${id}/receive`,
+              confirmar ? Object.assign({ confirmar: true }, corpo) : corpo);
+            App.closeModal();
+            App.toast(r.saldo > 0.005
+              ? `Recebido — falta R$ ${App.money(r.saldo)}, que segue em Contas a receber`
+              : 'Venda quitada', 'ok');
+            App.route();
+          };
+          try {
+            await lancar(false);
+          } catch (e) {
+            // Mesmo valor na mesma data: quase sempre é o segundo clique.
+            if (!/Já existe um recebimento/.test(e.message)) throw e;
+            if (await App.confirm(e.message, { html: false })) await lancar(true);
+          }
         } catch (e) { App.toast(e.message, 'err'); }
       };
     },
@@ -595,7 +620,8 @@ async function saleEditor(view, editId) {
               ${['pix', 'dinheiro', 'cartao', 'link', 'boleto', 'cheque'].map(f => `<option value="${f}">${f}</option>`).join('')}
             </select></label>
           <label class="field"><span>Condição</span>
-            <select id="v-cond"><option value="avista">À vista</option><option value="parcelado">Parcelado</option></select></label>
+            <select id="v-cond"><option value="avista">À vista</option><option value="parcelado">Parcelado</option></select>
+            <span class="small muted">Condição de pagamento — não lança dinheiro no caixa.</span></label>
           <label class="field"><span>Nº de parcelas</span><input type="number" id="v-parcelas" value="1" min="1"></label>
           <label class="field"><span>Intervalo entre parcelas (dias)</span><input type="number" id="v-intervalo" value="30"></label>
           <label class="field" id="v-venc1-campo"><span>Vencimento da 1ª parcela</span><input type="date" id="v-venc1"></label>
@@ -608,6 +634,9 @@ async function saleEditor(view, editId) {
           </div>
         </div>
         <p style="margin:8px 0">Valor líquido estimado: <b id="v-liquido">R$ 0,00</b></p>
+        <p class="small muted" style="margin:-4px 0 8px">A venda registra o que o cliente <b>deve</b> pagar e vira cobrança em
+        Contas a receber. O dinheiro só entra no <b>Fluxo de caixa</b> quando você usar <b>💵 Registrar recebimento</b> no pedido —
+        total ou em parte.</p>
         <label class="field"><span>Observações de pagamento</span><input id="v-pgobs"></label>
         <div class="actions" style="border:none">
           <button class="btn primary" id="v-save" onclick="VE.save()">Registrar venda</button>

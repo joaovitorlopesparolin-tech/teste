@@ -2262,30 +2262,31 @@ route('POST', '/api/os/:id/payment', 'receivables', async (req, res, user, param
   const cliente = db.get('clients', os.clienteId);
   const valor = Number(b.valor) || os.valorTotal || 0;
 
-  // "Recebido agora, à vista": entra no caixa e a OS fica quitada.
+  /* "Já recebido à vista": isto É um recebimento, pedido de propósito por
+     quem marcou a caixinha. Então entra pelo mesmo caminho de qualquer
+     recebimento — fica registrado em os.recebimentos e gera UMA entrada no
+     caixa. Antes criava também um recebível "pago" espelho que o resumo da
+     OS não contava: a OS continuava mostrando o valor cheio em aberto e
+     dava para receber de novo, dobrando o dinheiro no caixa. */
   if (b.aVistaAgora) {
     const data = b.data || domain.today();
+    const jaRecebido = resumoFinanceiroOS(os).recebido;
+    const aReceber = Math.round((valor - jaRecebido) * 100) / 100;
+    if (aReceber <= 0.005) {
+      return bad(res, `Esta OS já tem ${brl(jaRecebido)} recebidos — não há o que receber à vista.`);
+    }
     for (const r of db.all('receivables').filter(r =>
       r.refType === 'serviceOrders' && r.refId === os.id &&
       r.status !== 'paga' && r.status !== 'parcial' && r.status !== 'cancelada')) {
       db.remove('receivables', r.id);
     }
-    db.insert('cashflow', {
-      tipo: 'entrada', valor, data, conta: b.conta || 'principal',
-      categoria: 'servico', origem: `OS nº ${os.numero}${cliente ? ' — ' + cliente.nome : ''}`,
-      documento: b.documento || '', refType: 'serviceOrders', refId: os.id, descricao: 'Pagamento de serviço'
-    });
-    db.insert('receivables', {
-      clienteId: os.clienteId, origem: 'servico', refType: 'serviceOrders', refId: os.id,
-      descricao: `OS nº ${os.numero} — à vista (${b.forma || 'pix'})`,
-      forma: b.forma || 'pix', valor, vencimento: data,
-      // auto: baixa lançada pelo próprio sistema, pode ser desfeita ao editar.
-      status: 'paga', auto: true, dataRecebimento: data, parcela: 1, parcelas: 1
-    });
     db.update('serviceOrders', os.id, {
-      pagamentoStatus: 'pago',
       pagamento: { forma: b.forma || 'pix', condicao: 'a_vista', parcelas: 1, valor, data }
     });
+    const out = receberDaOS(db.get('serviceOrders', os.id), user,
+      { valor: aReceber, data, forma: b.forma || 'pix', conta: b.conta, documento: b.documento,
+        obs: 'Recebido à vista no registro da forma de pagamento' });
+    if (out.erro) return bad(res, out.erro);
   } else {
     gerarFinanceiroDaOS(os, user, {
       forma: b.forma, condicao: b.parcelado ? 'parcelado' : 'a_vista',
@@ -2334,7 +2335,7 @@ function receberDaOS(os, user, b) {
   const atualizada = db.get('serviceOrders', os.id);
   const saldo = resumoFinanceiroOS(atualizada).saldo;
   const saldoAberto = db.all('receivables').find(r =>
-    r.refType === 'serviceOrders' && r.refId === os.id && r.origem === 'saldo' && r.status !== 'paga');
+    r.refType === 'serviceOrders' && r.refId === os.id && r.origem === 'saldo');
   if (saldo > 0.005) {
     const dados = {
       clienteId: os.clienteId, origem: 'saldo', refType: 'serviceOrders', refId: os.id,
@@ -2343,11 +2344,19 @@ function receberDaOS(os, user, b) {
       vencimento: b.vencimentoSaldo || os.previsaoEntrega || domain.addDays(data, 30),
       status: 'aberto', parcela: 1, parcelas: 1
     };
-    if (saldoAberto) db.update('receivables', saldoAberto.id, { valor: saldo, vencimento: dados.vencimento });
-    else db.insert('receivables', dados);
+    if (saldoAberto) {
+      db.update('receivables', saldoAberto.id, {
+        valor: saldo, vencimento: saldoAberto.vencimento || dados.vencimento,
+        status: 'aberto', dataRecebimento: null, recebido: 0
+      });
+    } else db.insert('receivables', dados);
     db.update('serviceOrders', os.id, { pagamentoStatus: 'parcial' });
   } else {
-    if (saldoAberto) db.update('receivables', saldoAberto.id, { status: 'paga', dataRecebimento: data });
+    /* Quitada, a linha de saldo SAI de Contas a receber em vez de ficar lá
+       marcada como "paga" com o valor antigo — era isso que fazia o painel
+       do título somar o mesmo dinheiro de novo e mostrar saldo negativo.
+       O recebimento continua registrado na OS e no Fluxo de caixa. */
+    if (saldoAberto) db.remove('receivables', saldoAberto.id);
     db.update('serviceOrders', os.id, { pagamentoStatus: 'pago' });
   }
 
@@ -2781,11 +2790,21 @@ function gerarProducaoDaOS(os, user) {
 }
 
 /** Cria contas a receber / caixa de uma venda, conforme a forma de pagamento. */
+/**
+ * Financeiro de uma venda: o que o cliente DEVE pagar.
+ *
+ * REGRA FUNDAMENTAL: cadastrar uma venda não é receber dinheiro. Esta função
+ * só cria contas a receber — nunca lança entrada no Fluxo de caixa. O caixa
+ * é alimentado exclusivamente por "Registrar recebimento" (que grava o
+ * recebimento na venda e a entrada correspondente no caixa).
+ *
+ * Isto já esteve errado: venda em Pix ou dinheiro "à vista" lançava sozinha
+ * o valor cheio no caixa e criava um recebível já quitado. Quem depois
+ * registrava o recebimento de verdade via o mesmo valor entrar duas vezes.
+ * "À vista" é condição de pagamento, não comprovante de pagamento.
+ */
 function gerarFinanceiroDaVenda(sale, cliente, user) {
   const { valorTotal, numero, pagamento } = sale;
-  const b = {};
-  // Financeiro: contas a receber / caixa conforme forma de pagamento.
-  const formaAVista = ['pix', 'dinheiro'].includes(pagamento.forma) && pagamento.condicao !== 'parcelado';
   if (pagamento.condicao === 'parcelado' && (pagamento.forma === 'boleto' || pagamento.forma === 'cheque')) {
     const parcels = domain.generateInstallments(sale.dataPedido, valorTotal,
       pagamento.parcelas, pagamento.intervaloDias, pagamento.primeiroVencimento);
@@ -2812,29 +2831,41 @@ function gerarFinanceiroDaVenda(sale, cliente, user) {
         refType: 'sales', refId: sale.id, descricao: 'Taxa da operadora (cartão/link)'
       });
     }
-  } else if (formaAVista) {
-    db.insert('cashflow', {
-      tipo: 'entrada', valor: valorTotal, data: sale.dataPedido, conta: b.conta || 'principal',
-      categoria: 'venda_cabecote', origem: `Pedido nº ${numero} — ${cliente.nome}`,
-      documento: '', refType: 'sales', refId: sale.id, descricao: 'Venda à vista'
-    });
-    db.insert('receivables', {
-      clienteId: cliente.id, origem: 'venda', refType: 'sales', refId: sale.id,
-      descricao: `Pedido nº ${numero} — à vista (${pagamento.forma})`,
-      forma: pagamento.forma, valor: valorTotal, vencimento: sale.dataPedido,
-      // auto: lançado pelo próprio sistema junto com a venda (não é uma baixa
-      // que alguém confirmou), então pode ser desfeito ao editar/excluir.
-      status: 'paga', auto: true, dataRecebimento: sale.dataPedido, parcela: 1, parcelas: 1
-    });
   } else {
-    // fallback: um recebível único no vencimento informado
+    /* Todo o resto — Pix, dinheiro, boleto/cheque à vista, outro — vira uma
+       cobrança em aberto. À vista só muda o vencimento: é para hoje. */
+    const aVista = pagamento.condicao !== 'parcelado';
     db.insert('receivables', {
       clienteId: cliente.id, origem: 'venda', refType: 'sales', refId: sale.id,
-      descricao: `Pedido nº ${numero}`, forma: pagamento.forma || 'outro',
-      valor: valorTotal, vencimento: pagamento.vencimento || domain.addDays(sale.dataPedido, 7),
+      descricao: `Pedido nº ${numero}` + (aVista ? ` — à vista (${pagamento.forma || 'a combinar'})` : ''),
+      forma: pagamento.forma || 'outro',
+      valor: valorTotal,
+      vencimento: pagamento.vencimento || (aVista ? sale.dataPedido : domain.addDays(sale.dataPedido, 7)),
       status: 'aberto', parcela: 1, parcelas: 1
     });
   }
+}
+
+/* ---------------------------------------------------------------------
+   Quanto já entrou de uma venda, e quanto falta.
+
+   O dinheiro de uma venda pode chegar por dois caminhos, e só por eles:
+     1. "Registrar recebimento" na venda  → sale.recebimentos
+     2. baixa de uma parcela em Contas a receber → recebido da parcela
+   Os dois são somados aqui, uma vez cada. Nenhum outro lugar cria
+   recebimento de venda — é isso que impede o valor de contar em dobro.   */
+function recebidoDaVenda(sale) {
+  const naVenda = (sale.recebimentos || []).reduce((s, r) => s + (Number(r.valor) || 0), 0);
+  const nasParcelas = db.all('receivables')
+    .filter(r => r.refType === 'sales' && r.refId === sale.id && r.origem !== 'saldo')
+    .reduce((s, r) => s + recebidoDaParcela(r), 0);
+  return Math.round((naVenda + nasParcelas) * 100) / 100;
+}
+
+function resumoFinanceiroVenda(sale) {
+  const total = Math.round((Number(sale.valorTotal) || 0) * 100) / 100;
+  const recebido = recebidoDaVenda(sale);
+  return { total, recebido, saldo: Math.round((total - recebido) * 100) / 100 };
 }
 
 route('POST', '/api/sales', 'sales', async (req, res, user) => {
@@ -3083,45 +3114,83 @@ route('DELETE', '/api/sales/:id', 'sales', async (req, res, user, params) => {
  * Sem isto o mesmo valor apareceria duas vezes: a cobrança cheia e o saldo.
  * Devolve o saldo que sobrou.
  */
-function reequilibrarReceberDaVenda(sale, { data, forma, vencimentoSaldo }) {
-  const lista = sale.recebimentos || [];
+/**
+ * Deixa o registro de saldo em Contas a receber igual ao que ainda falta
+ * receber da venda. Não mexe em dinheiro: só na cobrança.
+ *
+ * Quitada, a linha de saldo SAI de Contas a receber. Antes ela ficava lá
+ * marcada como "paga" guardando o valor antigo — e aí o sistema somava
+ * aquele valor como recebido ALÉM dos recebimentos da venda, mostrando
+ * "recebido" maior que o total e saldo negativo ("a devolver ao cliente").
+ * O que foi recebido continua registrado na venda e no Fluxo de caixa.
+ */
+function ajustarSaldoDaVenda(sale, { data, forma, vencimentoSaldo } = {}) {
+  const atual = db.get('sales', sale.id) || sale;
+  const novoSaldo = resumoFinanceiroVenda(atual).saldo;
+  const saldoRec = db.all('receivables').find(r =>
+    r.refType === 'sales' && r.refId === sale.id && r.origem === 'saldo');
+  if (novoSaldo > 0.005) {
+    const vencimento = vencimentoSaldo || (saldoRec && saldoRec.vencimento)
+      || atual.previsaoEntrega || domain.addDays(data || domain.today(), 30);
+    if (saldoRec) {
+      db.update('receivables', saldoRec.id, {
+        valor: novoSaldo, vencimento, status: 'aberto', dataRecebimento: null, recebido: 0
+      });
+    } else {
+      db.insert('receivables', {
+        clienteId: atual.clienteId, origem: 'saldo', refType: 'sales', refId: atual.id,
+        descricao: `Pedido nº ${atual.numero} — saldo em aberto`,
+        forma: forma || (atual.pagamento || {}).forma || 'pix', valor: novoSaldo,
+        vencimento, status: 'aberto', parcela: 1, parcelas: 1
+      });
+    }
+  } else if (saldoRec) {
+    db.remove('receivables', saldoRec.id);
+  }
+  return novoSaldo;
+}
+
+/**
+ * Depois de abater qualquer coisa numa venda — dinheiro recebido ou crédito
+ * do cliente usado — Contas a receber precisa mostrar só o que ainda falta.
+ * A cobrança cheia em aberto dá lugar ao saldo.
+ */
+function reequilibrarReceberDaVenda(sale, opcoes = {}) {
   for (const r of db.all('receivables').filter(r =>
     r.refType === 'sales' && r.refId === sale.id && r.origem !== 'saldo' &&
     r.status !== 'paga' && r.status !== 'parcial')) {
     db.remove('receivables', r.id);
   }
-  const novoSaldo = Math.round((sale.valorTotal - lista.reduce((s, r) => s + r.valor, 0)) * 100) / 100;
-  const saldoAberto = db.all('receivables').find(r =>
-    r.refType === 'sales' && r.refId === sale.id && r.origem === 'saldo' && r.status !== 'paga');
-  if (novoSaldo > 0.005) {
-    const dados = {
-      clienteId: sale.clienteId, origem: 'saldo', refType: 'sales', refId: sale.id,
-      descricao: `Pedido nº ${sale.numero} — saldo em aberto`,
-      forma: forma || 'pix', valor: novoSaldo,
-      vencimento: vencimentoSaldo || sale.previsaoEntrega || domain.addDays(data, 30),
-      status: 'aberto', parcela: 1, parcelas: 1
-    };
-    if (saldoAberto) db.update('receivables', saldoAberto.id, { valor: novoSaldo, vencimento: dados.vencimento });
-    else db.insert('receivables', dados);
-  } else if (saldoAberto) {
-    db.update('receivables', saldoAberto.id, { status: 'paga', dataRecebimento: data });
-  }
-  return novoSaldo;
+  return ajustarSaldoDaVenda(sale, opcoes);
 }
 
 route('POST', '/api/sales/:id/receive', 'receivables', async (req, res, user, params) => {
   const b = await readBody(req);
   const sale = db.get('sales', params.id);
   if (!sale) return notFound(res);
-  const valor = Number(b.valor) || 0;
+  const valor = Math.round((Number(b.valor) || 0) * 100) / 100;
   if (valor <= 0) return bad(res, 'Informe o valor recebido.');
-  const recebido = (sale.recebimentos || []).reduce((s, r) => s + r.valor, 0);
-  const saldo = Math.round((sale.valorTotal - recebido) * 100) / 100;
-  if (valor > saldo + 0.005) {
-    return bad(res, `O saldo em aberto é R$ ${saldo.toFixed(2)} — não dá para receber R$ ${valor.toFixed(2)}.`);
+  /* O saldo considera TUDO que já entrou desta venda — recebimentos
+     lançados aqui e parcelas baixadas em Contas a receber. É esta conta que
+     impede receber duas vezes o mesmo valor. */
+  const resumo = resumoFinanceiroVenda(sale);
+  if (valor > resumo.saldo + 0.005) {
+    return bad(res, `Desta venda já entraram ${brl(resumo.recebido)} de ${brl(resumo.total)}. ` +
+      `Falta receber ${brl(resumo.saldo)} — não dá para lançar ${brl(valor)}.`);
   }
   const data = b.data || domain.today();
-  const rec = { valor, data, forma: b.forma || 'pix', obs: b.obs || '' };
+  /* Proteção contra duplicidade: mesmo valor na mesma data já lançado nesta
+     venda quase sempre é o segundo clique, não um segundo pagamento. */
+  const igual = (sale.recebimentos || []).find(r =>
+    Math.round((Number(r.valor) || 0) * 100) === Math.round(valor * 100) && r.data === data);
+  if (igual && !b.confirmar) {
+    return send(res, 409, {
+      error: `Já existe um recebimento de ${brl(valor)} em ${dataBR(data)} neste pedido. ` +
+             'Lançar de novo somaria o mesmo dinheiro duas vezes. O cliente pagou duas vezes esse valor?',
+      precisaConfirmar: true
+    });
+  }
+  const rec = { valor, data, forma: b.forma || 'pix', obs: b.obs || '', por: user.name };
   const lista = (sale.recebimentos || []).concat([rec]);
   db.update('sales', sale.id, { recebimentos: lista });
   db.insert('cashflow', {
@@ -3151,11 +3220,22 @@ route('POST', '/api/sales/:id/unreceive', 'receivables', async (req, res, user, 
   const cx = db.all('cashflow').find(c => c.refType === 'sales' && c.refId === sale.id &&
     c.valor === removido.valor && c.data === removido.data && c.tipo === 'entrada');
   if (cx) db.remove('cashflow', cx.id);
-  const novoSaldo = Math.round((sale.valorTotal - lista.reduce((s, r) => s + r.valor, 0)) * 100) / 100;
-  const saldoRec = db.all('receivables').find(r => r.refType === 'sales' && r.refId === sale.id && r.origem === 'saldo');
-  if (saldoRec) db.update('receivables', saldoRec.id, { valor: novoSaldo, status: 'aberto', dataRecebimento: null });
+  // A dívida volta para Contas a receber pelo que passou a faltar.
+  const novoSaldo = ajustarSaldoDaVenda(sale, { data: removido.data });
   audit(user, 'estornou', 'sales', sale.id, `Recebimento de R$ ${removido.valor.toFixed(2)} desfeito — saldo R$ ${novoSaldo.toFixed(2)}`);
   ok(res, { saldo: novoSaldo });
+});
+
+/** Resumo financeiro da venda para a tela — a mesma conta que o servidor usa. */
+route('GET', '/api/sales/:id/financeiro', 'receivables', async (req, res, user, params) => {
+  const sale = db.get('sales', params.id);
+  if (!sale) return notFound(res);
+  const parcelas = withOverdue(db.all('receivables')
+    .filter(r => r.refType === 'sales' && r.refId === sale.id))
+    .sort((a, b) => String(a.vencimento || '').localeCompare(String(b.vencimento || '')));
+  ok(res, Object.assign(resumoFinanceiroVenda(sale), {
+    pagamento: sale.pagamento || {}, recebimentos: sale.recebimentos || [], parcelas
+  }));
 });
 
 route('GET', '/api/sales/:id/result', 'finance_sensitive', async (req, res, user, params) => {
@@ -5775,6 +5855,270 @@ function reconciliacaoInicial() {
     console.error('Falha na reconciliação inicial:', e.message);
   }
 }
+
+/* =====================================================================
+   AUDITORIA: entradas de venda lançadas em dobro no Fluxo de caixa
+   ---------------------------------------------------------------------
+   Houve um período em que cadastrar uma venda em Pix ou dinheiro "à vista"
+   lançava sozinha o valor cheio no Fluxo de caixa (descrição "Venda à
+   vista") e criava um recebível já quitado. Quem depois fazia o caminho
+   certo — Registrar recebimento → entrada de saldo — via o MESMO dinheiro
+   entrar uma segunda vez. O caixa ficava inflado.
+
+   A regra já foi corrigida: venda nenhuma lança dinheiro no caixa. Esta
+   auditoria existe para acertar o que ficou gravado antes disso.
+
+   Ela NÃO altera nada. Identifica as entradas automáticas pela assinatura
+   exata que o código antigo gravava — entrada + refType 'sales' +
+   descrição "Venda à vista", que nenhuma outra rotina escreve — e separa:
+
+     duplicada    a venda TAMBÉM tem recebimento registrado à mão. O
+                  dinheiro entrou uma vez e está no caixa duas vezes: a
+                  entrada automática é indevida e deve sair.
+
+     semRegistro  a venda não tem recebimento registrado. O dinheiro
+                  provavelmente entrou de verdade (venda em dinheiro ou
+                  Pix), só nunca passou pelo caminho certo. Aqui não se
+                  apaga nada: a entrada é CONVERTIDA em recebimento
+                  registrado, passando a contar uma vez só.
+
+   Nada é classificado por "dois valores iguais": a separação vem da
+   origem de cada lançamento e do vínculo com o mesmo pedido.              */
+
+const MARCA_VENDA_AUTOMATICA = 'Venda à vista';
+const c2 = v => Math.round((Number(v) || 0) * 100) / 100;
+
+/** Recebíveis "espelho": registros que repetem dinheiro contado em outro
+    lugar e por isso inflam o "já recebido" nas telas. */
+function espelhosDeRecebivel() {
+  return db.all('receivables').filter(r =>
+    (r.refType === 'sales' || r.refType === 'serviceOrders') && r.status === 'paga' &&
+    (r.auto === true || r.origem === 'saldo'));
+}
+
+function auditarDuplicidadeVendas() {
+  const automaticas = db.all('cashflow').filter(c =>
+    c.tipo === 'entrada' && c.refType === 'sales' && c.descricao === MARCA_VENDA_AUTOMATICA);
+
+  const casos = automaticas.map(c => {
+    const sale = c.refId ? db.get('sales', c.refId) : null;
+    const cliente = sale && sale.clienteId ? db.get('clients', sale.clienteId) : null;
+    const pg = (sale && sale.pagamento) || {};
+    const recebimentos = (sale && sale.recebimentos) || [];
+    const outrasEntradas = db.all('cashflow').filter(x =>
+      x.tipo === 'entrada' && x.refType === 'sales' && x.refId === c.refId && x.id !== c.id);
+    return {
+      cashflowId: c.id,
+      tipo: recebimentos.length ? 'duplicada' : 'semRegistro',
+      data: c.data, mes: String(c.data || '').slice(0, 7), valor: c2(c.valor),
+      conta: c.conta || '', categoria: c.categoria || '', origemTexto: c.origem || '',
+      vendaId: c.refId, vendaExiste: !!sale,
+      pedido: sale ? sale.numero : null,
+      clienteId: cliente ? cliente.id : null,
+      cliente: cliente ? cliente.nome : (sale ? '(cliente removido)' : '(venda removida)'),
+      valorVenda: sale ? c2(sale.valorTotal) : null,
+      dataVenda: sale ? sale.dataPedido : null,
+      formaPagamento: pg.forma || '', condicao: pg.condicao || '',
+      recebimentosManuais: recebimentos.map(r => ({ data: r.data, valor: c2(r.valor), forma: r.forma || '' })),
+      recebidoManual: c2(recebimentos.reduce((s, r) => s + (Number(r.valor) || 0), 0)),
+      outrasEntradasCaixa: outrasEntradas.map(x => ({
+        id: x.id, data: x.data, valor: c2(x.valor), descricao: x.descricao || ''
+      })),
+      totalNoCaixa: c2(c2(c.valor) + outrasEntradas.reduce((s, x) => s + (Number(x.valor) || 0), 0))
+    };
+  }).sort((a, b) => String(a.data || '').localeCompare(String(b.data || '')) || a.cashflowId - b.cashflowId);
+
+  const duplicadas = casos.filter(x => x.tipo === 'duplicada');
+  const semRegistro = casos.filter(x => x.tipo === 'semRegistro');
+
+  /* Quanto o caixa foi inflado em cada mês — só o que está comprovadamente
+     em dobro entra nesta conta. */
+  const porMes = {};
+  for (const x of duplicadas) {
+    const m = porMes[x.mes] = porMes[x.mes] || { mes: x.mes, quantidade: 0, valorInflado: 0, pedidos: [] };
+    m.quantidade++;
+    m.valorInflado = c2(m.valorInflado + x.valor);
+    if (x.pedido && !m.pedidos.includes(x.pedido)) m.pedidos.push(x.pedido);
+  }
+  const meses = Object.values(porMes).sort((a, b) => a.mes.localeCompare(b.mes));
+
+  /* Recebíveis espelho: não são dinheiro, mas fazem a tela do título somar
+     o mesmo valor outra vez e mostrar "saldo a devolver ao cliente". */
+  const espelhos = espelhosDeRecebivel().map(r => {
+    const fonte = r.refType === 'sales' ? db.get('sales', r.refId) : db.get('serviceOrders', r.refId);
+    const cliente = r.clienteId ? db.get('clients', r.clienteId) : null;
+    return {
+      recebivelId: r.id, refType: r.refType, refId: r.refId,
+      rotulo: r.refType === 'sales' ? `Pedido nº ${fonte ? fonte.numero : '?'}` : `OS nº ${fonte ? fonte.numero : '?'}`,
+      cliente: cliente ? cliente.nome : '', descricao: r.descricao || '',
+      valor: c2(r.valor), motivo: r.auto ? 'baixa automática da venda/OS' : 'linha de saldo marcada como paga',
+      recebimentosNaOrigem: ((fonte && fonte.recebimentos) || []).length
+    };
+  });
+
+  /* Serviços com entrada "à vista" E recebimentos registrados: aqui a
+     entrada no caixa foi pedida por quem marcou a caixinha, então o sistema
+     não decide nada — só mostra para conferência. */
+  const osConferir = [];
+  for (const os of db.all('serviceOrders')) {
+    const aVista = db.all('cashflow').filter(c =>
+      c.tipo === 'entrada' && c.refType === 'serviceOrders' && c.refId === os.id &&
+      c.descricao === 'Pagamento de serviço');
+    if (!aVista.length) continue;
+    const recebimentos = (os.recebimentos || []);
+    const todas = db.all('cashflow').filter(c =>
+      c.tipo === 'entrada' && c.refType === 'serviceOrders' && c.refId === os.id);
+    const somaCaixa = c2(todas.reduce((s, c) => s + (Number(c.valor) || 0), 0));
+    if (somaCaixa <= c2(os.valorTotal) + 0.005) continue; // não há excesso
+    const cliente = os.clienteId ? db.get('clients', os.clienteId) : null;
+    osConferir.push({
+      osId: os.id, numero: os.numero, cliente: cliente ? cliente.nome : '',
+      valorOS: c2(os.valorTotal), somaNoCaixa: somaCaixa,
+      excedente: c2(somaCaixa - c2(os.valorTotal)),
+      entradas: todas.map(c => ({ id: c.id, data: c.data, valor: c2(c.valor), descricao: c.descricao || '' })),
+      recebimentosRegistrados: recebimentos.length
+    });
+  }
+
+  const entradasTotais = db.all('cashflow').filter(c => c.tipo === 'entrada');
+  return {
+    geradoEm: new Date().toISOString(),
+    vendasAnalisadas: db.all('sales').length,
+    entradasDeCaixaAnalisadas: entradasTotais.length,
+    lancamentosAutomaticosEncontrados: casos.length,
+    duplicadas, semRegistro, meses, espelhos, osConferir,
+    totais: {
+      duplicadas: duplicadas.length,
+      valorDuplicado: c2(duplicadas.reduce((s, x) => s + x.valor, 0)),
+      semRegistro: semRegistro.length,
+      valorSemRegistro: c2(semRegistro.reduce((s, x) => s + x.valor, 0)),
+      espelhos: espelhos.length,
+      osConferir: osConferir.length
+    }
+  };
+}
+
+/* Só leitura: é o relatório para conferir ANTES de corrigir nada. */
+route('GET', '/api/auditoria/vendas-duplicadas', ['cashflow_edit', 'admin'], async (req, res) => {
+  ok(res, auditarDuplicidadeVendas());
+});
+
+/**
+ * Aplica a correção — e só no que vier listado no pedido, nunca "tudo".
+ *
+ *   remover:   ids de lançamento de caixa (entrada automática comprovadamente
+ *              em dobro) que saem do Fluxo de caixa.
+ *   converter: ids de lançamento de caixa que FICAM no caixa, mas passam a
+ *              ser um recebimento registrado na venda — o dinheiro entrou,
+ *              só não estava no lugar certo.
+ *   espelhos:  ids de recebível espelho a retirar de Contas a receber.
+ *
+ * Antes de mexer em qualquer coisa, grava uma cópia do banco. Nenhuma venda,
+ * cliente ou recebimento real é apagado em momento nenhum.
+ */
+route('POST', '/api/auditoria/vendas-duplicadas/corrigir', ['cashflow_edit', 'admin'], async (req, res, user) => {
+  const b = await readBody(req);
+  const remover = (Array.isArray(b.remover) ? b.remover : []).map(Number).filter(Boolean);
+  const converter = (Array.isArray(b.converter) ? b.converter : []).map(Number).filter(Boolean);
+  const espelhos = (Array.isArray(b.espelhos) ? b.espelhos : []).map(Number).filter(Boolean);
+  if (!remover.length && !converter.length && !espelhos.length) {
+    return bad(res, 'Nada selecionado para corrigir.');
+  }
+  if (String(req.headers['x-confirmar'] || '').toLowerCase() !== 'sim') {
+    return send(res, 409, {
+      error: `Confirma a correção? ${remover.length} entrada(s) sairão do Fluxo de caixa, ` +
+             `${converter.length} serão convertidas em recebimento registrado e ` +
+             `${espelhos.length} recebível(is) espelho sairão de Contas a receber. ` +
+             'Uma cópia do banco é gravada antes.',
+      precisaConfirmar: true
+    });
+  }
+
+  // Cópia de segurança antes de tocar em dinheiro.
+  let copia = '';
+  try {
+    db.persistNow();
+    const dir = path.join(db.DATA_DIR, 'backups');
+    fs.mkdirSync(dir, { recursive: true });
+    copia = path.join(dir, `antes-correcao-duplicidade-${new Date().toISOString().replace(/[:.]/g, '-')}.json`);
+    fs.copyFileSync(db.DB_FILE, copia);
+  } catch (e) { return bad(res, 'Não foi possível gravar a cópia de segurança: ' + e.message); }
+
+  const feito = { removidas: [], convertidas: [], espelhosRemovidos: [], ignorados: [] };
+  const vendasTocadas = new Set();
+
+  /* 1. Entradas automáticas em dobro: saem do caixa. */
+  for (const id of remover) {
+    const c = db.get('cashflow', id);
+    if (!c || c.descricao !== MARCA_VENDA_AUTOMATICA || c.refType !== 'sales') {
+      feito.ignorados.push({ cashflowId: id, motivo: 'não é um lançamento automático de venda' });
+      continue;
+    }
+    const sale = c.refId ? db.get('sales', c.refId) : null;
+    db.remove('cashflow', c.id);
+    if (sale) vendasTocadas.add(sale.id);
+    feito.removidas.push({ cashflowId: id, data: c.data, valor: c2(c.valor), pedido: sale ? sale.numero : null });
+    audit(user, 'corrigiu', 'cashflow', id,
+      `Auditoria de duplicidade: entrada automática de ${brl(c.valor)} em ${dataBR(c.data)} ` +
+      `${sale ? `do pedido nº ${sale.numero} ` : ''}retirada do Fluxo de caixa — o recebimento real registrado foi mantido`);
+  }
+
+  /* 2. Entradas automáticas sem recebimento registrado: viram recebimento. */
+  for (const id of converter) {
+    const c = db.get('cashflow', id);
+    if (!c || c.descricao !== MARCA_VENDA_AUTOMATICA || c.refType !== 'sales') {
+      feito.ignorados.push({ cashflowId: id, motivo: 'não é um lançamento automático de venda' });
+      continue;
+    }
+    const sale = c.refId ? db.get('sales', c.refId) : null;
+    if (!sale) {
+      feito.ignorados.push({ cashflowId: id, motivo: 'a venda não existe mais' });
+      continue;
+    }
+    const valor = c2(c.valor);
+    db.update('sales', sale.id, {
+      recebimentos: (sale.recebimentos || []).concat([{
+        valor, data: c.data, forma: (sale.pagamento || {}).forma || 'pix',
+        obs: 'Regularizado pela auditoria de duplicidade (entrada que a venda já havia lançado)',
+        por: user.name
+      }])
+    });
+    db.update('cashflow', c.id, { descricao: `Recebimento (${(sale.pagamento || {}).forma || 'à vista'})` });
+    vendasTocadas.add(sale.id);
+    feito.convertidas.push({ cashflowId: id, data: c.data, valor, pedido: sale.numero });
+    audit(user, 'corrigiu', 'cashflow', id,
+      `Auditoria de duplicidade: entrada de ${brl(valor)} em ${dataBR(c.data)} do pedido nº ${sale.numero} ` +
+      'passou a ser um recebimento registrado na venda — valor mantido no Fluxo de caixa, agora contado uma vez só');
+  }
+
+  /* 3. Recebíveis espelho: saem de Contas a receber. */
+  for (const id of espelhos) {
+    const r = db.get('receivables', id);
+    if (!r || r.status !== 'paga' || !(r.auto === true || r.origem === 'saldo')) {
+      feito.ignorados.push({ recebivelId: id, motivo: 'não é um recebível espelho' });
+      continue;
+    }
+    db.remove('receivables', r.id);
+    if (r.refType === 'sales') vendasTocadas.add(r.refId);
+    feito.espelhosRemovidos.push({ recebivelId: id, descricao: r.descricao || '', valor: c2(r.valor) });
+    audit(user, 'corrigiu', 'receivables', id,
+      `Auditoria de duplicidade: "${r.descricao || 'recebível'}" (${brl(r.valor)}) retirado de Contas a receber — ` +
+      'repetia dinheiro já registrado no recebimento da origem');
+  }
+
+  /* 4. Contas a receber de cada venda tocada volta a mostrar o que falta. */
+  for (const vendaId of vendasTocadas) {
+    const sale = db.get('sales', vendaId);
+    if (sale) ajustarSaldoDaVenda(sale, {});
+  }
+
+  db.persistNow();
+  audit(user, 'auditoria', 'cashflow', 0,
+    `Correção de duplicidade aplicada: ${feito.removidas.length} entrada(s) retirada(s) ` +
+    `(${brl(feito.removidas.reduce((s, x) => s + x.valor, 0))}), ${feito.convertidas.length} convertida(s), ` +
+    `${feito.espelhosRemovidos.length} recebível(is) espelho removido(s). Cópia: ${copia}`);
+  ok(res, Object.assign(feito, { copiaDeSeguranca: copia, auditoria: auditarDuplicidadeVendas() }));
+});
 
 route('POST', '/api/producao/reconciliar', 'admin', async (req, res, user) => {
   const r = reconciliarProducaoEFinanceiro(user);

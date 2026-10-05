@@ -17,14 +17,16 @@ App.registerView('admin', async (view) => {
 
   const tabs = {
     usuarios: renderUsers, permissoes: renderRoles, catalogo: renderCatalog,
-    config: renderSettings, contaazul: renderContaAzul, auditoria: renderAudit
+    config: renderSettings, contaazul: renderContaAzul, auditoria: renderAudit,
+    conferencia: renderConferencia
   };
   if (!tabs[abaAdmin]) abaAdmin = 'usuarios';
 
   const botoes = [
     ['usuarios', 'Usuários'], ['permissoes', 'Perfis e permissões'],
     ['catalogo', 'Catálogo de serviços'], ['config', 'Configurações'],
-    ['contaazul', 'Conta Azul'], ['auditoria', 'Histórico de alterações']
+    ['contaazul', 'Conta Azul'], ['auditoria', 'Histórico de alterações'],
+    ['conferencia', '🔎 Conferência do caixa']
   ];
 
   view.innerHTML = `
@@ -958,5 +960,202 @@ App.registerView('admin', async (view) => {
         { h: 'Entidade', cell: a => `<span class="small muted">${App.esc(a.entity)}${a.entityId ? ' #' + a.entityId : ''}</span>` },
         { h: 'Detalhes', cell: a => `<span class="small">${App.esc(a.details || '')}</span>` }
       ], { emptyMsg: 'Nenhum evento' })}`;
+  }
+
+  /* ---------- conferência do caixa: entradas de venda em dobro ----------
+     Houve um período em que cadastrar uma venda em Pix ou dinheiro "à vista"
+     lançava sozinha o valor no Fluxo de caixa. Quem depois registrava o
+     recebimento de verdade via o mesmo dinheiro entrar duas vezes.
+     A regra já foi corrigida; esta aba acerta o que ficou gravado antes.
+     Primeiro mostra, depois corrige — e só o que for marcado.             */
+  async function renderConferencia(el) {
+    el.innerHTML = '<div class="card"><div class="empty">Conferindo o Fluxo de caixa…</div></div>';
+    let a;
+    try { a = await App.get('/auditoria/vendas-duplicadas'); }
+    catch (e) { el.innerHTML = `<div class="card"><div class="empty">Não foi possível conferir: ${App.esc(e.message)}</div></div>`; return; }
+    window.Conf = { dados: a };
+
+    const nada = !a.duplicadas.length && !a.semRegistro.length && !a.espelhos.length && !a.osConferir.length;
+    const linhaCaso = (x) => `
+      <tr>
+        <td><input type="checkbox" class="cf-item" data-grupo="${x.tipo}" data-id="${x.cashflowId}" checked></td>
+        <td>${App.date(x.data)}</td>
+        <td>${x.pedido ? 'nº ' + x.pedido : '<span class="muted">venda removida</span>'}</td>
+        <td>${App.esc(x.cliente)}</td>
+        <td class="num">${x.valorVenda != null ? 'R$ ' + App.money(x.valorVenda) : '—'}</td>
+        <td>${App.esc(x.formaPagamento || '—')}${x.condicao ? `<div class="small muted">${App.esc(x.condicao)}</div>` : ''}</td>
+        <td class="num"><b class="neg">R$ ${App.money(x.valor)}</b>
+          <div class="small muted">lançada pela venda</div></td>
+        <td>${x.recebimentosManuais.length
+          ? x.recebimentosManuais.map(r => `${App.date(r.data)} — R$ ${App.money(r.valor)}`).join('<br>')
+          : '<span class="muted">nenhum</span>'}</td>
+        <td class="num">R$ ${App.money(x.totalNoCaixa)}</td>
+      </tr>`;
+
+    el.innerHTML = `
+      <div class="card">
+        <h3>CONFERÊNCIA DO FLUXO DE CAIXA — ENTRADAS DE VENDA EM DOBRO</h3>
+        <p class="small muted">Durante um período, cadastrar uma venda em <b>Pix</b> ou <b>dinheiro</b> na condição
+        “à vista” lançava sozinha o valor no Fluxo de caixa, com a descrição <b>“Venda à vista”</b>.
+        Quem depois fazia o caminho certo — <b>Registrar recebimento → entrada de saldo</b> — via o mesmo
+        dinheiro entrar uma segunda vez.<br>
+        <b>A regra já foi corrigida:</b> venda nenhuma lança dinheiro no caixa. Esta tela serve para acertar
+        o que ficou gravado antes. Nada é alterado até você marcar e confirmar.</p>
+        <div class="grid cols-4" style="margin-top:12px">
+          <div class="card kpi"><div class="label">Vendas analisadas</div><div class="value">${a.vendasAnalisadas}</div></div>
+          <div class="card kpi"><div class="label">Entradas de caixa analisadas</div><div class="value">${a.entradasDeCaixaAnalisadas}</div></div>
+          <div class="card kpi ${a.totais.duplicadas ? 'k-danger' : 'k-ok'}"><div class="label">Em dobro (comprovado)</div>
+            <div class="value">${a.totais.duplicadas}</div>
+            <div class="hint">R$ ${App.money(a.totais.valorDuplicado)} lançados a mais</div></div>
+          <div class="card kpi ${a.totais.semRegistro ? 'k-warn' : 'k-ok'}"><div class="label">Sem recebimento registrado</div>
+            <div class="value">${a.totais.semRegistro}</div>
+            <div class="hint">R$ ${App.money(a.totais.valorSemRegistro)} a regularizar</div></div>
+        </div>
+      </div>
+
+      ${nada ? `<div class="card"><div class="empty">✓ Nenhuma entrada automática de venda encontrada no Fluxo de caixa.
+        Nada para corrigir — o caixa já reflete só recebimentos registrados.</div></div>` : ''}
+
+      ${a.meses.length ? `
+      <div class="section-title">QUANTO O CAIXA FOI INFLADO EM CADA MÊS</div>
+      <div class="card">
+        ${App.table(a.meses, [
+          { h: 'Mês', cell: m => `<b>${App.esc(App.mesRotulo(m.mes))}</b>` },
+          { h: 'Lançamentos em dobro', class: 'num', cell: m => m.quantidade },
+          { h: 'Pedidos', cell: m => m.pedidos.map(n => 'nº ' + n).join(', ') || '—' },
+          { h: 'Valor lançado a mais', class: 'num', cell: m => `<b class="neg">R$ ${App.money(m.valorInflado)}</b>` }
+        ])}
+        <p class="small muted" style="margin-top:8px">Este é o valor que sai do Fluxo de caixa ao corrigir —
+        entradas, saldo do mês e saldo acumulado são sempre calculados a partir dos lançamentos,
+        então os fechamentos se refazem sozinhos.</p>
+      </div>` : ''}
+
+      ${a.duplicadas.length ? `
+      <div class="section-title">1. EM DOBRO — A ENTRADA AUTOMÁTICA DEVE SAIR DO CAIXA</div>
+      <div class="card">
+        <p class="small">Estas vendas têm <b>recebimento registrado à mão</b> E a entrada automática.
+        O dinheiro entrou uma vez e está no caixa duas. Ao corrigir, <b>o recebimento real é mantido</b>
+        e só a entrada automática sai.</p>
+        <div class="tablewrap"><table>
+          <tr><th><input type="checkbox" id="cf-todos-dup" checked></th><th>Data</th><th>Pedido</th><th>Cliente</th>
+              <th class="num">Valor da venda</th><th>Forma</th><th class="num">Entrada automática</th>
+              <th>Recebimentos registrados</th><th class="num">Total hoje no caixa</th></tr>
+          ${a.duplicadas.map(linhaCaso).join('')}
+        </table></div>
+      </div>` : ''}
+
+      ${a.semRegistro.length ? `
+      <div class="section-title">2. SEM RECEBIMENTO REGISTRADO — REGULARIZAR SEM APAGAR DINHEIRO</div>
+      <div class="card">
+        <p class="small">Aqui a venda <b>não tem recebimento registrado</b>. O dinheiro provavelmente entrou de
+        verdade (venda em dinheiro ou Pix), só nunca passou pelo caminho certo. Por isso o valor
+        <b>continua no caixa</b> e passa a ser um recebimento registrado na venda — contando uma vez só,
+        com a venda ficando quitada em Contas a receber.<br>
+        <span class="muted">Se alguma destas vendas <b>não foi paga</b>, desmarque: aí ela precisa sair do caixa.
+        Desmarcadas aqui, elas ficam para você decidir depois.</span></p>
+        <div class="tablewrap"><table>
+          <tr><th><input type="checkbox" id="cf-todos-sem" checked></th><th>Data</th><th>Pedido</th><th>Cliente</th>
+              <th class="num">Valor da venda</th><th>Forma</th><th class="num">Entrada automática</th>
+              <th>Recebimentos registrados</th><th class="num">Total hoje no caixa</th></tr>
+          ${a.semRegistro.map(linhaCaso).join('')}
+        </table></div>
+      </div>` : ''}
+
+      ${a.espelhos.length ? `
+      <div class="section-title">3. REGISTROS ESPELHO EM CONTAS A RECEBER</div>
+      <div class="card">
+        <p class="small">Linhas de Contas a receber marcadas como pagas que <b>repetem</b> dinheiro já registrado
+        no recebimento da venda ou da OS. Não são dinheiro — mas é por causa delas que a tela do título
+        mostra “recebido” maior que o total e <b>saldo negativo a devolver ao cliente</b>.</p>
+        <div class="tablewrap"><table>
+          <tr><th><input type="checkbox" id="cf-todos-esp" checked></th><th>Origem</th><th>Cliente</th>
+              <th>Descrição</th><th class="num">Valor</th><th>Por quê</th></tr>
+          ${a.espelhos.map(x => `<tr>
+            <td><input type="checkbox" class="cf-item" data-grupo="espelho" data-id="${x.recebivelId}" checked></td>
+            <td>${App.esc(x.rotulo)}</td><td>${App.esc(x.cliente)}</td>
+            <td><span class="small">${App.esc(x.descricao)}</span></td>
+            <td class="num">R$ ${App.money(x.valor)}</td>
+            <td><span class="small muted">${App.esc(x.motivo)}</span></td></tr>`).join('')}
+        </table></div>
+      </div>` : ''}
+
+      ${a.osConferir.length ? `
+      <div class="section-title muted">4. SERVIÇOS PARA VOCÊ CONFERIR — O SISTEMA NÃO MEXE</div>
+      <div class="card">
+        <p class="small">Nestas OS a soma das entradas no caixa passou do valor do serviço. A entrada “à vista”
+        da OS foi pedida por quem marcou a caixinha, então o sistema <b>não decide nada aqui</b> —
+        confira e, se for o caso, estorne o recebimento pela própria OS.</p>
+        ${App.table(a.osConferir, [
+          { h: 'OS', cell: o => `<b>nº ${o.numero}</b>` },
+          { h: 'Cliente', cell: o => App.esc(o.cliente) },
+          { h: 'Valor da OS', class: 'num', cell: o => 'R$ ' + App.money(o.valorOS) },
+          { h: 'Soma no caixa', class: 'num', cell: o => 'R$ ' + App.money(o.somaNoCaixa) },
+          { h: 'Excedente', class: 'num', cell: o => `<b class="neg">R$ ${App.money(o.excedente)}</b>` },
+          { h: 'Entradas', cell: o => o.entradas.map(e =>
+              `<span class="small">${App.date(e.data)} — R$ ${App.money(e.valor)} — ${App.esc(e.descricao)}</span>`).join('<br>') }
+        ])}
+      </div>` : ''}
+
+      ${!nada ? `
+      <div class="card">
+        <div class="toolbar" style="border:none">
+          <span class="small muted" id="cf-resumo"></span>
+          <div class="spacer"></div>
+          <button class="btn" onclick="Conf.recarregar()">↻ Conferir de novo</button>
+          <button class="btn primary" onclick="Conf.corrigir()">✓ Corrigir o que está marcado</button>
+        </div>
+        <p class="small muted">Uma cópia do banco é gravada antes de qualquer alteração. Venda, cliente e
+        recebimento real nunca são apagados.</p>
+      </div>` : ''}`;
+
+    const marcarTodos = (idTodos, grupo) => {
+      const t = document.getElementById(idTodos);
+      if (!t) return;
+      t.addEventListener('change', () => {
+        el.querySelectorAll(`.cf-item[data-grupo="${grupo}"]`).forEach(c => { c.checked = t.checked; });
+        resumo();
+      });
+    };
+    const selecionados = (grupo) => [...el.querySelectorAll(`.cf-item[data-grupo="${grupo}"]`)]
+      .filter(c => c.checked).map(c => Number(c.dataset.id));
+    const resumo = () => {
+      const r = document.getElementById('cf-resumo');
+      if (!r) return;
+      const dup = selecionados('duplicada'), sem = selecionados('semRegistro'), esp = selecionados('espelho');
+      const soma = a.duplicadas.filter(x => dup.includes(x.cashflowId)).reduce((s, x) => s + x.valor, 0);
+      r.innerHTML = `Marcados: <b>${dup.length}</b> entrada(s) para sair do caixa (R$ ${App.money(soma)}) · ` +
+        `<b>${sem.length}</b> para regularizar · <b>${esp.length}</b> espelho(s) para remover`;
+    };
+    marcarTodos('cf-todos-dup', 'duplicada');
+    marcarTodos('cf-todos-sem', 'semRegistro');
+    marcarTodos('cf-todos-esp', 'espelho');
+    el.querySelectorAll('.cf-item').forEach(c => c.addEventListener('change', resumo));
+    resumo();
+
+    window.Conf.recarregar = () => renderConferencia(el);
+    window.Conf.corrigir = async () => {
+      const corpo = {
+        remover: selecionados('duplicada'),
+        converter: selecionados('semRegistro'),
+        espelhos: selecionados('espelho')
+      };
+      if (!corpo.remover.length && !corpo.converter.length && !corpo.espelhos.length) {
+        return App.toast('Marque ao menos um item para corrigir.', 'err');
+      }
+      const soma = a.duplicadas.filter(x => corpo.remover.includes(x.cashflowId)).reduce((s, x) => s + x.valor, 0);
+      if (!await App.confirm(
+        'Confirma a correção?<br><br>' +
+        `• <b>${corpo.remover.length}</b> entrada(s) automática(s) sairão do Fluxo de caixa — <b>R$ ${App.money(soma)}</b> a menos;<br>` +
+        `• <b>${corpo.converter.length}</b> entrada(s) continuam no caixa e passam a ser recebimento registrado;<br>` +
+        `• <b>${corpo.espelhos.length}</b> registro(s) espelho sairão de Contas a receber.<br><br>` +
+        '<span class="small">Uma cópia do banco é gravada antes. Nenhuma venda, cliente ou recebimento real é apagado.</span>',
+        { html: true })) return;
+      try {
+        const out = await App.api('POST', '/auditoria/vendas-duplicadas/corrigir', corpo, { 'X-Confirmar': 'sim' });
+        App.toast(`Corrigido — ${out.removidas.length} entrada(s) retirada(s), ` +
+          `${out.convertidas.length} regularizada(s), ${out.espelhosRemovidos.length} espelho(s) removido(s)`, 'ok');
+        renderConferencia(el);
+      } catch (e) { App.toast(e.message, 'err'); }
+    };
   }
 });

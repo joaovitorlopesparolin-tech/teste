@@ -121,6 +121,15 @@ com o sistema parado.
   caixa nunca é apagado por trás — fica registrado.
 - **Estoque ≠ bens de clientes** · **Receita ≠ recebimento** · **Despesa ≠ pagamento** —
   o caixa registra o dinheiro efetivo; contas a pagar/receber registram compromissos.
+- **Venda não é recebimento**: cadastrar uma venda registra só o que o cliente
+  **deve** pagar, em Contas a receber — nenhuma forma de pagamento, nem “à vista”,
+  lança dinheiro no Fluxo de caixa. O caixa recebe o valor quando alguém usa
+  **Registrar recebimento** no pedido (total ou parcial), e o saldo da venda
+  considera tudo que já entrou — recebimentos lançados no pedido e parcelas
+  baixadas em Contas a receber — para o mesmo dinheiro nunca contar duas vezes.
+  Repetir o mesmo valor na mesma data pede confirmação.
+  *Administração → 🔎 Conferência do caixa* audita as entradas automáticas que a
+  versão antiga gravava e corrige só o que for confirmado, com cópia do banco antes.
 - **Rastreabilidade**: cada cabeçote tem linha do tempo completa
   (entrada → orçamento → aprovação → OS → produção → pagamento → NF → envio) e
   auditoria de alterações por usuário.

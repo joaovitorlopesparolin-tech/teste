@@ -289,6 +289,15 @@ const App = {
     return dt.toLocaleDateString('pt-BR') + ' ' + dt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
   },
   today() { return new Date().toISOString().slice(0, 10); },
+  MESES: ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho',
+    'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'],
+  /** 'YYYY-MM' → 'Setembro/2026'. O ISO é o que se compara; isto é para ler. */
+  mesRotulo(m) {
+    if (!m) return '—';
+    const [ano, mes] = String(m).split('-');
+    const nome = this.MESES[Number(mes) - 1] || mes;
+    return nome.charAt(0).toUpperCase() + nome.slice(1) + '/' + ano;
+  },
   /** 'YYYY-MM-DD' + n dias. Meio-dia para o horário de verão não virar o dia. */
   addDays(s, n) {
     if (!s) return '';

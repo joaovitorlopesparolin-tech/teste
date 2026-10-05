@@ -892,7 +892,12 @@ App.registerView('receivables', async (view) => {
         String(a.vencimento || '').localeCompare(String(b.vencimento || '')) || a.id - b.id);
       const vivos = grupo.filter(x => x.status !== 'cancelada');
       const total = vivos.reduce((s, x) => s + x.valor, 0);
-      const recebidoParcelas = vivos.reduce((s, x) => s + recebidoDe(x), 0);
+      /* Registros "espelho" não entram na conta do recebido: a linha de
+         saldo e a baixa automática repetem dinheiro que já está nos
+         recebimentos da venda/OS. Somar os dois fazia o painel mostrar
+         recebido maior que o total e saldo negativo "a devolver". */
+      const espelho = (x) => x.origem === 'saldo' || x.auto === true;
+      const recebidoParcelas = vivos.filter(x => !espelho(x)).reduce((s, x) => s + recebidoDe(x), 0);
 
       // Recebimentos parciais ficam guardados na venda / na OS.
       const fonte = r.refType === 'sales' ? sales.find(x => x.id === r.refId)
@@ -929,7 +934,9 @@ App.registerView('receivables', async (view) => {
           { h: 'Descrição', cell: x => `<span class="small">${App.esc(x.descricao)}</span>` },
           { h: 'Vencimento', cell: x => App.date(x.vencimento) },
           { h: 'Valor', class: 'num', cell: x => App.moneyHtml(x.valor) },
-          { h: 'Recebido', class: 'num', cell: x => recebidoDe(x) ? 'R$ ' + App.money(recebidoDe(x)) : '—' },
+          { h: 'Recebido', class: 'num', cell: x => espelho(x)
+            ? `<span class="small muted" title="O valor está registrado no recebimento da venda/OS">—</span>`
+            : (recebidoDe(x) ? 'R$ ' + App.money(recebidoDe(x)) : '—') },
           { h: 'A receber', class: 'num', cell: x => saldoDe(x) ? 'R$ ' + App.money(saldoDe(x)) : '—' },
           { h: 'Recebida em', cell: x => x.dataRecebimento ? App.date(x.dataRecebimento) : '—' },
           { h: 'Situação', cell: situacao }
