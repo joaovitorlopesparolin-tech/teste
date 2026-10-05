@@ -67,7 +67,7 @@ com o sistema parado.
 | **Aprovação → OS** | Um clique converte o orçamento em OS aproveitando todos os dados, sem recadastro |
 | **Ordens de serviço** | Status (Em análise, Em andamento, Aguardando peça, Finalizado, Aguardando pagamento, Cancelado) + envio/entrega, responsável, pagamento (à vista ou parcelado com boletos automáticos), NF de retorno, histórico |
 | **Vendas** | 6 configurações (Unilateral/Crossflow × Stage 1–3); **valida comandos por Stage** (S1: 288 · S2: 290x300, 290x290 · S3: 300x308, 300x318, 316x320, 316x316, 308x320) e **tuchos** (S1/S2: 35 mm · S3: 37 mm, com exceção 300x308 = 35 ou 37); cartão/link com taxa da operadora, valor líquido e data prevista de recebimento; custos adicionais por venda; resultado e margem |
-| **Produção** | Ordem de produção por cabeçote vendido com checklist automático (separações, montagem, controle, embalagem, expedição) incluindo operações extras: retrabalho dos dutos de escape (Stage 3) e abertura do alojamento para tucho 37 mm; baixa automática de componentes ao concluir |
+| **Produção** | Ordem de produção por cabeçote vendido com checklist automático (separações, montagem, controle, embalagem, expedição) incluindo operações extras: retrabalho dos dutos de escape (Stage 3) e abertura do alojamento para tucho 37 mm; baixa automática de componentes ao concluir. Filtro **“Todos em aberto”** com tudo que ainda pede trabalho — derivado do checklist, não de uma lista fixa de status: item sem marcar significa ordem aberta, e um status novo que represente trabalho pendente entra sozinho. Imprime a lista de trabalho da equipe (cliente, cabeçote/peça, o que fazer, qtd, previsão, etapa/status), **sem nenhum valor** |
 | **Estoque próprio** | Cascos usinados (unilateral/crossflow), válvulas, molas, pratos, travas, tuchos 35/37, comandos; mínimos com alerta de compra; movimentações rastreadas. Lista única em **ordem alfabética**, com **busca** por nome, código ou categoria, filtros de categoria e de situação (ativos / abaixo do mínimo / inativos) e colunas ordenáveis (nome, quantidade, custo, valor em estoque) |
 | **Compras** | Com ou sem NF (NF, recibo, comprovante, sem documento); **leitura automática de NF-e (XML)** com conferência antes de confirmar; vínculo a cliente/OS/pedido/produção/uso interno; gera contas a pagar (parceladas) automaticamente. **Busca** por fornecedor, item, categoria, data, valor, forma de pagamento ou nº da nota, filtro por período e colunas ordenáveis (data, fornecedor, itens, valor, categoria, documento, pagamento) |
 | **Fornecedores** | Fechamento mensal (Jaú Auto Peças, Retifos, Ferragens Brasil, Mangopar…): gastos registrados no dia, acumulado em aberto e **conferência da fatura com alerta de divergência** antes do pagamento |
@@ -126,6 +126,10 @@ com o sistema parado.
   auditoria de alterações por usuário.
 - **Permissões**: perfil Produção não vê salários, custos, margens nem financeiro
   sensível — controlado pela permissão “Dados financeiros sensíveis”.
+- **O filtro escolhido não se perde**: a tela se atualiza sozinha a cada
+  gravação (inclusive de outra pessoa). O filtro, o tipo e as etapas abertas
+  ficam guardados por tela, então concluir uma etapa não joga ninguém de
+  volta para o filtro padrão.
 - **Busca e ordenação iguais em todas as abas**: a mesma barra de pesquisa
   (sem acento, palavras em qualquer ordem), os mesmos cabeçalhos clicáveis
   com seta (⇅ ▲ ▼) e o mesmo botão de limpar filtros. Filtrar e ordenar é

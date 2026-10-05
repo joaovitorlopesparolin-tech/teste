@@ -758,32 +758,69 @@ App.registerView('production', async (view) => {
   const ST = ['nao_produzido', 'preparacao', 'usinagem', 'montagem', 'pronto'];
   const users = App.meta.users.filter(u => u.active);
 
-  let filtroStatus = '', filtroTipo = '', filtroEtapa = '';
+  /* Os filtros (e as etapas que a pessoa abriu) vivem fora da view: a
+     atualização ao vivo refaz a tela a cada gravação, e sem isto concluir
+     uma etapa jogaria a pessoa de volta para o filtro padrão. */
+  const ui = App.telaEstado('production', { status: '', tipo: '', etapa: '', abertas: new Set() });
 
-  const pendentes = pos.filter(p => p.status !== 'pronto' && p.status !== 'cancelado');
-  const deVenda = pos.filter(p => p.origem !== 'servico' && p.status !== 'cancelado');
-  const deServico = pos.filter(p => p.origem === 'servico' && p.status !== 'cancelado');
+  /* ------------------------------------------------------------------
+     "Em aberto" NÃO é uma lista de status. É a resposta para uma
+     pergunta: ainda falta a produção fazer algo nesta ordem?
+
+     E essa resposta vem do checklist, que é onde o trabalho acontece de
+     verdade — o status da ordem é derivado dele, não digitado. Por isso
+     qualquer etapa ou status que venha a existir no futuro e represente
+     trabalho pendente já entra aqui sozinho: basta ter item sem marcar.
+
+     Encerrado é só o que não pede mais nada da produção:
+       - cancelado (decisão de gente, nunca do checklist);
+       - checklist inteiro concluído.
+     Na dúvida, fica em aberto — é o lado seguro para uma lista de
+     trabalho: pior do que uma linha sobrando é uma linha faltando.     */
+  const ENCERRADAS = ['cancelado'];
+  /* Pedido ou OS cancelado não é trabalho pendente, mesmo que a ordem de
+     produção tenha ficado para trás sem ser cancelada junto. */
+  const origemCancelada = (p) => {
+    const st = p.origem === 'servico' ? p.osStatus : p.vendaStatus;
+    return st === 'cancelado' || st === 'cancelada';
+  };
+  const faltaFazer = (p) => {
+    if (ENCERRADAS.includes(p.status) || origemCancelada(p)) return false;
+    // Ordem sem checklist ainda não foi desdobrada em etapas: está aberta.
+    if (!p.totalItens) return true;
+    return (p.feitos || 0) < p.totalItens;
+  };
+
+  const emAberto = pos.filter(faltaFazer);
+  const deVenda = emAberto.filter(p => p.origem !== 'servico');
+  const deServico = emAberto.filter(p => p.origem === 'servico');
 
   view.innerHTML = `
     <div class="grid cols-4">
-      <div class="card kpi"><div class="label">Em produção</div><div class="value">${pendentes.length}</div></div>
-      <div class="card kpi"><div class="label">Cabeçotes vendidos</div><div class="value">${deVenda.filter(p => p.status !== 'pronto').length}</div></div>
-      <div class="card kpi"><div class="label">Serviços de clientes</div><div class="value">${deServico.filter(p => p.status !== 'pronto').length}</div></div>
+      <div class="card kpi ${emAberto.length ? 'k-warn' : 'k-ok'}"><div class="label">Todos em aberto</div><div class="value">${emAberto.length}</div>
+        <div class="hint">tudo que ainda pede trabalho</div></div>
+      <div class="card kpi"><div class="label">Cabeçotes vendidos</div><div class="value">${deVenda.length}</div>
+        <div class="hint">em aberto</div></div>
+      <div class="card kpi"><div class="label">Serviços de clientes</div><div class="value">${deServico.length}</div>
+        <div class="hint">em aberto</div></div>
       <div class="card kpi k-ok"><div class="label">Prontos p/ envio</div><div class="value">${pos.filter(p => p.status === 'pronto').length}</div></div>
     </div>
     <div class="toolbar" style="margin-top:14px">
       <select id="pf-tipo" style="max-width:210px">
-        <option value="">Vendas e serviços</option>
-        <option value="venda">Só cabeçotes vendidos</option>
-        <option value="servico">Só serviços de clientes</option>
+        ${[['', 'Vendas e serviços'], ['venda', 'Só cabeçotes vendidos'], ['servico', 'Só serviços de clientes']]
+          .map(([v, l]) => `<option value="${v}" ${ui.tipo === v ? 'selected' : ''}>${l}</option>`).join('')}
       </select>
-      <select id="pf" style="max-width:200px"><option value="">Todos os status</option>
-        ${ST.map(s => `<option value="${s}">${(App.STATUS[s] || [s])[0]}</option>`).join('')}</select>
-      <select id="pf-etapa" style="max-width:210px"><option value="">Todas as etapas</option>
-        ${ETAPAS.map(e => `<option value="${e.chave}">${App.esc(e.nome)}</option>`).join('')}</select>
+      <select id="pf" style="max-width:230px" title="“Todos em aberto” reúne tudo que ainda falta produzir ou finalizar">
+        <option value="aberto" ${ui.status === 'aberto' ? 'selected' : ''}>⏳ Todos em aberto — tudo que falta</option>
+        <option value="" ${ui.status === '' ? 'selected' : ''}>Todos os status</option>
+        ${ST.map(s => `<option value="${s}" ${ui.status === s ? 'selected' : ''}>${(App.STATUS[s] || [s])[0]}</option>`).join('')}</select>
+      <select id="pf-etapa" style="max-width:210px">
+        <option value="" ${ui.etapa === '' ? 'selected' : ''}>Todas as etapas</option>
+        ${ETAPAS.map(e => `<option value="${e.chave}" ${ui.etapa === e.chave ? 'selected' : ''}>${App.esc(e.nome)}</option>`).join('')}</select>
       <div class="spacer"></div>
       <span class="muted small" id="pf-contagem"></span>
-      <button class="btn" onclick="PO.print()">🖨️ Imprimir ordens</button>
+      <button class="btn" onclick="PO.print()"
+        title="Imprime exatamente o que está filtrado na tela — sem valores, para entregar à equipe">🖨️ Imprimir lista</button>
     </div>
     <div id="po-list"></div>`;
 
@@ -824,16 +861,33 @@ App.registerView('production', async (view) => {
     ${p.observacoes ? `<div class="small" style="margin-top:4px"><b>Obs.:</b> ${App.esc(p.observacoes)}</div>` : ''}`;
 
   /* A etapa atual já vem aberta; as que o usuário abrir à mão continuam
-     abertas quando a tela se redesenha. */
-  const abertas = new Set();
+     abertas quando a tela se redesenha (inclusive no redesenho automático). */
+  const abertas = ui.abertas;
+
+  /* Um lugar só decide o que está na tela — e é o mesmo que a impressão
+     usa, para o papel nunca sair diferente do que a pessoa está vendo. */
+  const selecionadas = () => pos.filter(p =>
+    (ui.status === 'aberto'
+      ? faltaFazer(p)
+      : p.status !== 'cancelado' && (!ui.status || p.status === ui.status)) &&
+    (!ui.tipo || (ui.tipo === 'servico' ? p.origem === 'servico' : p.origem !== 'servico')) &&
+    (!ui.etapa || p.etapaAtual === ui.etapa));
+
+  const rotuloFiltro = () => ui.status === 'aberto' ? 'Todos em aberto'
+    : ui.status ? (App.STATUS[ui.status] || [ui.status])[0] : '';
+
+  /* Nome da etapa em que a ordem está agora — é o que a bancada quer ler
+     no papel, mais do que o status. */
+  const etapaNome = (p) => {
+    if (!p.etapaAtual || p.etapaAtual === 'concluido') return '';
+    const e = (p.etapas || []).find(x => x.chave === p.etapaAtual);
+    return e ? e.nome : '';
+  };
 
   const render = () => {
-    const list = pos.filter(p =>
-      p.status !== 'cancelado' &&
-      (!filtroStatus || p.status === filtroStatus) &&
-      (!filtroTipo || (filtroTipo === 'servico' ? p.origem === 'servico' : p.origem !== 'servico')) &&
-      (!filtroEtapa || p.etapaAtual === filtroEtapa));
-    document.getElementById('pf-contagem').textContent = `${list.length} ordem(ns)`;
+    const list = selecionadas();
+    document.getElementById('pf-contagem').textContent =
+      `${list.length} ordem(ns)` + (ui.status === 'aberto' ? ' em aberto' : '');
     document.getElementById('po-list').innerHTML = list.length ? list.map(p => `
       <div class="card" style="margin-bottom:12px">
         <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;align-items:flex-start">
@@ -871,7 +925,10 @@ App.registerView('production', async (view) => {
             </ul>
           </details>`).join('')}
       </div>`).join('')
-      : `<div class="card"><div class="empty">Nenhuma ordem de produção nesta situação.
+      : ui.status === 'aberto' && !ui.tipo && !ui.etapa && pos.length
+        ? `<div class="card"><div class="empty">Nada em aberto — a produção está em dia. 🎉<br>
+           <span class="small">Para rever o que já ficou pronto, troque o filtro para “Todos os status”.</span></div></div>`
+        : `<div class="card"><div class="empty">Nenhuma ordem de produção nesta situação.
          ${pos.length ? 'Experimente limpar os filtros acima.' :
            'Vendas de cabeçote e orçamentos aprovados entram aqui automaticamente. Se faltar algo antigo, use <b>Reconciliar</b> em Administração.'}</div></div>`;
   };
@@ -882,9 +939,9 @@ App.registerView('production', async (view) => {
     const chave = d.dataset.op + ':' + d.dataset.etapa;
     if (d.open) abertas.add(chave); else abertas.delete(chave);
   }, true);
-  document.getElementById('pf').addEventListener('change', e => { filtroStatus = e.target.value; render(); });
-  document.getElementById('pf-tipo').addEventListener('change', e => { filtroTipo = e.target.value; render(); });
-  document.getElementById('pf-etapa').addEventListener('change', e => { filtroEtapa = e.target.value; render(); });
+  document.getElementById('pf').addEventListener('change', e => { ui.status = e.target.value; render(); });
+  document.getElementById('pf-tipo').addEventListener('change', e => { ui.tipo = e.target.value; render(); });
+  document.getElementById('pf-etapa').addEventListener('change', e => { ui.etapa = e.target.value; render(); });
 
   /* Atualiza a ordem na tela com o que o servidor devolveu (etapas e status
      vêm calculados de lá, então a tela nunca inventa andamento). */
@@ -901,9 +958,10 @@ App.registerView('production', async (view) => {
         const novo = await App.post(`/productionOrders/${id}/check`, { index: i, done });
         aplicar(novo);
         if (novo.status === 'pronto' && antes !== 'pronto') {
-          App.toast(novo.origem === 'servico'
+          App.toast((novo.origem === 'servico'
             ? 'Serviço concluído — pronto para devolver ao cliente'
-            : 'Produção concluída — componentes baixados do estoque próprio', 'ok');
+            : 'Produção concluída — componentes baixados do estoque próprio')
+            + (ui.status === 'aberto' ? ' · saiu de “Todos em aberto”' : ''), 'ok');
         }
       } catch (e) { App.toast(e.message, 'err'); }
     },
@@ -913,9 +971,14 @@ App.registerView('production', async (view) => {
         const novo = await App.post(`/productionOrders/${id}/etapa`, { etapa, done });
         aplicar(novo);
         if (novo.status === 'pronto' && antes !== 'pronto') {
-          App.toast(novo.origem === 'servico'
+          App.toast((novo.origem === 'servico'
             ? 'Serviço concluído — pronto para devolver ao cliente'
-            : 'Produção concluída — componentes baixados do estoque próprio', 'ok');
+            : 'Produção concluída — componentes baixados do estoque próprio')
+            + (ui.status === 'aberto' ? ' · saiu de “Todos em aberto”' : ''), 'ok');
+        }
+        // Reabrir uma etapa devolve a ordem para "Todos em aberto" na hora.
+        if (!done && ui.status === 'aberto' && antes === 'pronto') {
+          App.toast('Etapa reaberta — a ordem voltou para “Todos em aberto”', 'ok');
         }
       } catch (e) { App.toast(e.message, 'err'); }
     },
@@ -960,20 +1023,18 @@ App.registerView('production', async (view) => {
        etapa fica só na tela — no papel ele ocupava páginas e atrapalhava.
        Nada de dinheiro aqui: a produção não vê preço, custo nem pagamento. */
     print() {
-      const list = pos.filter(p =>
-        p.status !== 'cancelado' &&
-        (!filtroStatus || p.status === filtroStatus) &&
-        (!filtroTipo || (filtroTipo === 'servico' ? p.origem === 'servico' : p.origem !== 'servico')) &&
-        (!filtroEtapa || p.etapaAtual === filtroEtapa));
+      const list = selecionadas();
 
       /* Cada cabeçote vendido gera uma ordem por unidade. Juntar as
          idênticas é o que faz a coluna "Qtd" dizer alguma coisa: em vez de
-         três linhas iguais de 1, uma linha de 3. */
+         três linhas iguais de 1, uma linha de 3. Etapa e progresso entram
+         na chave: duas unidades em pontos diferentes não são a mesma linha. */
       const grupos = [];
       const porChave = new Map();
       for (const p of list) {
         const chave = [p.origem, p.pedidoNumero, p.osNumero, p.produto, p.tipo, p.stage,
-          p.comando, p.tucho, p.identificacao, p.status, p.previsaoEntrega,
+          p.comando, p.tucho, p.identificacao, p.status, p.etapaAtual,
+          p.feitos + '/' + p.totalItens, p.previsaoEntrega,
           (p.operacoes || []).map(o => o.qtd + '×' + o.nome).join('|')].join('§');
         const achado = porChave.get(chave);
         if (achado) { achado.qtd++; achado.ids.push(p.id); }
@@ -1011,21 +1072,28 @@ App.registerView('production', async (view) => {
           <td>${fazer}</td>
           <td class="num">${g.qtd}</td>
           <td>${App.date(p.previsaoEntrega)}</td>
-          <td>${(App.STATUS[p.status] || [p.status])[0]}</td>
+          <td>${(App.STATUS[p.status] || [p.status])[0]}
+            ${etapaNome(p) ? `<div class="sub">etapa: ${App.esc(etapaNome(p))}</div>` : ''}
+            ${p.totalItens ? `<div class="sub">${p.feitos}/${p.totalItens} itens</div>` : ''}</td>
         </tr>`;
       };
 
       const totalCabecotes = grupos.reduce((s, g) => s + g.qtd, 0);
-      App.print('Produção — lista de trabalho' + (filtroStatus ? ' — ' + (App.STATUS[filtroStatus] || [filtroStatus])[0] : ''),
+      const TIPO_ROTULO = { venda: 'só cabeçotes vendidos', servico: 'só serviços de clientes' };
+      const recorte = [rotuloFiltro(), TIPO_ROTULO[ui.tipo],
+        ui.etapa ? 'etapa: ' + ((ETAPAS.find(e => e.chave === ui.etapa) || {}).nome || ui.etapa) : '']
+        .filter(Boolean).join(' · ');
+      App.print('Produção — lista de trabalho' + (recorte ? ' — ' + recorte : ''),
         (grupos.length
           ? `<table>
-              <tr><th>Origem</th><th>Cliente</th><th>Cabeçote</th><th>O que fazer</th>
-                  <th class="num">Qtd</th><th>Previsão</th><th>Status</th></tr>
+              <tr><th>Origem</th><th>Cliente</th><th>Cabeçote / peça</th><th>O que fazer</th>
+                  <th class="num">Qtd</th><th>Previsão</th><th>Etapa / status</th></tr>
               ${grupos.map(linha).join('')}
              </table>`
           : '<p>Nenhuma ordem de produção nesta situação.</p>') +
         '<div class="sig"><div>Executado por</div><div>Conferido por</div></div>',
-        `${totalCabecotes} cabeçote(s) em ${grupos.length} linha(s)`);
+        `${totalCabecotes} cabeçote(s) em ${grupos.length} linha(s)` +
+        (ui.status === 'aberto' ? ' — tudo que ainda falta produzir ou finalizar' : ''));
     }
   };
 });

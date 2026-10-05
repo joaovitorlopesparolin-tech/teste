@@ -1103,6 +1103,25 @@ const App = {
     document.addEventListener('visibilitychange', () => { if (!document.hidden) aplicar(); });
   },
 
+  /**
+   * Estado de tela que precisa sobreviver ao redesenho automático.
+   *
+   * A atualização ao vivo chama App.route() a cada mudança no servidor —
+   * inclusive nas gravações que a própria pessoa acabou de fazer. Isso
+   * refaz a view inteira, e tudo que morava numa variável local da view
+   * (o filtro escolhido, o mês, a ordem da tabela) voltava ao padrão: a
+   * pessoa escolhia "Todos em aberto", concluía uma etapa e era jogada de
+   * volta para "Todos os status".
+   *
+   * Guardar aqui, por rota, resolve: o redesenho reaproveita a escolha.
+   * É só estado de visualização — nada daqui vai para o banco.
+   */
+  telaEstado(rota, inicial) {
+    this._telaEstado = this._telaEstado || {};
+    if (!this._telaEstado[rota]) this._telaEstado[rota] = Object.assign({}, inicial);
+    return this._telaEstado[rota];
+  },
+
   setTitle(t, sub) {
     document.getElementById('page-title').textContent = t;
     document.getElementById('page-sub').textContent = sub || '';
