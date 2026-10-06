@@ -1,0 +1,31 @@
+# Gestão de Pedidos e Compras — blocos para acrescentar ao Caddyfile do VPS.
+#
+# São DOIS sites, não um: a casca (login e sincronização) e o app de pedidos
+# que vive dentro dela num iframe. Migrar só a casca deixa ela apontando para
+# o Surge.
+#
+# Depois de colar, recarregar sem derrubar nada:
+#     sudo caddy validate --config /etc/caddy/Caddyfile
+#     sudo systemctl reload caddy
+#
+# O HTTPS nasce sozinho (Let's Encrypt) assim que o DNS estiver apontando.
+
+compras.martinsnotari.com.br {
+    root * /opt/compras
+    file_server
+    encode gzip
+
+    # O app se auto-atualiza lendo versao.txt. Se o navegador guardar esse
+    # arquivo em cache, a atualização nunca chega.
+    @semcache path /versao.txt /sw.js /manifest.webmanifest
+    header @semcache Cache-Control "no-store"
+}
+
+pedidos-ppc.martinsnotari.com.br {
+    root * /opt/pedidos-ppc
+    file_server
+    encode gzip
+
+    @semcache path /versao.txt /sw.js /manifest.webmanifest
+    header @semcache Cache-Control "no-store"
+}
