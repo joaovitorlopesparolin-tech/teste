@@ -215,6 +215,51 @@ function emAtraso(r) { return r.status === 'vencida' || (r.status === 'parcial' 
 /** Continua sendo cobrança — conta no "a receber" pelo saldo. */
 function aReceber(r) { return r.status === 'aberto' || r.status === 'vencida' || r.status === 'parcial'; }
 
+/* ---------------------------------------------------------------------
+   Forma de pagamento de um lançamento de caixa.
+
+   NÃO é conta bancária. O dinheiro continua saindo e entrando da mesma
+   conta da empresa — isto diz COMO o pagamento foi feito, para conferir a
+   fatura do cartão, separar o que foi no dinheiro, etc.                  */
+const FORMAS_PAGAMENTO = [
+  ['pix', 'Pix'],
+  ['dinheiro', 'Dinheiro'],
+  ['cartao_credito', 'Cartão de crédito'],
+  ['cartao_debito', 'Cartão de débito'],
+  ['boleto', 'Boleto'],
+  ['transferencia', 'Transferência'],
+  ['cheque', 'Cheque'],
+  ['outro', 'Outra']
+];
+const FORMAS_VALIDAS = FORMAS_PAGAMENTO.map(f => f[0]);
+
+/* Os módulos antigos gravavam a forma com outros nomes ('cartao', 'link',
+   'ted'). Traduzir na leitura evita ter que reescrever o histórico. */
+const FORMA_LEGADO = {
+  cartao: 'cartao_credito', credito: 'cartao_credito', 'cartao de credito': 'cartao_credito',
+  debito: 'cartao_debito', 'cartao de debito': 'cartao_debito',
+  link: 'cartao_credito', ted: 'transferencia', doc: 'transferencia',
+  transferencia_bancaria: 'transferencia', especie: 'dinheiro'
+};
+
+function normalizaForma(v) {
+  if (!v) return '';
+  const chave = String(v).normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase().trim().replace(/[\s-]+/g, '_');
+  if (FORMAS_VALIDAS.includes(chave)) return chave;
+  return FORMA_LEGADO[chave] || FORMA_LEGADO[chave.replace(/_/g, ' ')] || '';
+}
+
+/** Preenche a forma de pagamento na leitura, sem reescrever o histórico.
+    Lançamentos antigos da planilha marcavam o cartão na conta. */
+function comFormaPagamento(list) {
+  return list.map(c => {
+    if (c.formaPagamento) return c;
+    const daConta = normalizaForma(c.conta);
+    return daConta ? Object.assign({}, c, { formaPagamento: daConta }) : c;
+  });
+}
+
 /** Marca como vencidas as parcelas/contas em aberto com vencimento passado (derivado na leitura). */
 function withOverdue(list) {
   const t = domain.today();
@@ -389,15 +434,78 @@ function vinculosDe(colecao, id) {
 }
 
 /** Movimenta estoque com registro da movimentação. */
-function moveStock(itemId, tipo, qtd, refType, refId, obs, user) {
+function moveStock(itemId, tipo, qtd, refType, refId, obs, user, extra) {
   const item = db.get('stockItems', itemId);
   if (!item) return null;
   const delta = tipo === 'entrada' ? qtd : -qtd;
   item.qtd = (item.qtd || 0) + delta;
   db.update('stockItems', item.id, { qtd: item.qtd });
-  db.insert('stockMoves', { itemId, itemNome: item.nome, tipo, qtd, data: domain.today(), refType, refId, obs: obs || '' });
+  /* `extra` guarda a procedência da movimentação (compra, fornecedor, NF,
+     custo unitário e total). É o que faz o histórico do estoque responder
+     "de onde veio esta peça" sem ninguém redigitar nada. */
+  db.insert('stockMoves', Object.assign({
+    itemId, itemNome: item.nome, tipo, qtd, data: domain.today(), refType, refId, obs: obs || ''
+  }, extra || {}));
   if (user) audit(user, 'estoque', 'stockItems', itemId, `${tipo} de ${qtd} × ${item.nome}`);
   return item;
+}
+
+/* ---------------------------------------------------------------------
+   COMPRA → ESTOQUE PRÓPRIO.
+
+   Cada item da compra pode apontar para um produto do estoque
+   (`stockItemId`). Os que apontam entram no estoque sozinhos; os que não
+   apontam — serviço de terceiro, manutenção, material consumido na hora —
+   não geram nada.
+
+   A função trabalha por DIFERENÇA, comparando o que a compra pede com o
+   que ela já movimentou. Isso dá três garantias de uma vez:
+     - chamar duas vezes não cria entrada dupla (nada a fazer na segunda);
+     - mudar a quantidade de 8 para 10 movimenta só as 2 que faltam;
+     - tirar o item da compra devolve a quantidade, sem apagar histórico.  */
+function sincronizarEstoqueDaCompra(compra, user) {
+  const movs = db.all('stockMoves').filter(m =>
+    m.refType === 'purchases' && m.refId === compra.id && !m.estornada);
+  const jaMovimentado = {};
+  for (const m of movs) {
+    const d = m.tipo === 'entrada' ? (Number(m.qtd) || 0) : -(Number(m.qtd) || 0);
+    jaMovimentado[m.itemId] = (jaMovimentado[m.itemId] || 0) + d;
+  }
+
+  const alvo = {}, custo = {};
+  for (const it of compra.itens || []) {
+    const id = Number(it.stockItemId) || 0;
+    if (!id) continue;
+    const q = Number(it.qtd) || 0;
+    if (q <= 0) continue;
+    alvo[id] = (alvo[id] || 0) + q;
+    custo[id] = Number(it.valorUnit) || custo[id] || 0;
+  }
+
+  const ids = [...new Set([...Object.keys(alvo), ...Object.keys(jaMovimentado)].map(Number))];
+  const efeitos = [];
+  for (const id of ids) {
+    const diferenca = Math.round(((alvo[id] || 0) - (jaMovimentado[id] || 0)) * 1000) / 1000;
+    if (!diferenca) continue;
+    const item = db.get('stockItems', id);
+    if (!item) continue;
+    const unit = custo[id] || 0;
+    moveStock(id, diferenca > 0 ? 'entrada' : 'saida', Math.abs(diferenca),
+      'purchases', compra.id,
+      (diferenca > 0 ? 'Entrada por compra' : 'Ajuste de compra') +
+        (compra.fornecedorNome ? ' — ' + compra.fornecedorNome : '') +
+        (compra.documentoNumero ? ' — NF ' + compra.documentoNumero : ''),
+      user,
+      {
+        compraId: compra.id, fornecedorId: compra.fornecedorId || null,
+        fornecedorNome: compra.fornecedorNome || '',
+        documento: compra.documentoNumero || '', documentoTipo: compra.documentoTipo || '',
+        data: compra.data || domain.today(),
+        custoUnit: unit, custoTotal: Math.round(unit * Math.abs(diferenca) * 100) / 100
+      });
+    efeitos.push(`${item.nome}: ${diferenca > 0 ? '+' : ''}${diferenca}`);
+  }
+  return efeitos;
 }
 
 /* ===================================================================== */
@@ -864,7 +972,8 @@ route('POST', '/api/cashflow/import-confirm', 'cashflow', async (req, res, user)
     if (key && existentes.has(key)) { pulados++; continue; }
     db.insert('cashflow', {
       tipo: x.tipo, valor: Math.round(valor * 100) / 100, data: x.data,
-      conta: x.cartao ? 'cartão de crédito' : 'principal',
+      conta: 'principal',
+      formaPagamento: x.cartao ? 'cartao_credito' : '',
       categoria: String(x.categoria || (x.tipo === 'saida' ? 'materiais' : 'servico')).slice(0, 40),
       origem: String(x.origem || 'Importado').slice(0, 160),
       documento: x.nota ? 'com NF' : '',
@@ -2321,6 +2430,7 @@ function receberDaOS(os, user, b) {
   db.update('serviceOrders', os.id, { recebimentos: lista });
   db.insert('cashflow', {
     tipo: 'entrada', valor, data, conta: b.conta || 'principal',
+    formaPagamento: normalizaForma(rec.forma) || 'outro',
     categoria: 'servico', origem: `OS nº ${os.numero}${cliente ? ' — ' + cliente.nome : ''} — recebimento`,
     documento: b.documento || '', refType: 'serviceOrders', refId: os.id,
     descricao: `Recebimento de serviço (${rec.forma})`
@@ -2827,6 +2937,7 @@ function gerarFinanceiroDaVenda(sale, cliente, user) {
     if (pagamento.taxa > 0) {
       db.insert('cashflow', {
         tipo: 'saida', valor: pagamento.taxa, data: sale.dataPedido, conta: 'operadora',
+        formaPagamento: 'cartao_credito',
         categoria: 'taxa_cartao', origem: `Pedido nº ${numero}`, documento: '',
         refType: 'sales', refId: sale.id, descricao: 'Taxa da operadora (cartão/link)'
       });
@@ -3195,6 +3306,7 @@ route('POST', '/api/sales/:id/receive', 'receivables', async (req, res, user, pa
   db.update('sales', sale.id, { recebimentos: lista });
   db.insert('cashflow', {
     tipo: 'entrada', valor, data, conta: b.conta || 'principal',
+    formaPagamento: normalizaForma(rec.forma) || 'outro',
     categoria: 'venda_cabecote', origem: `Pedido nº ${sale.numero} — recebimento parcial`,
     documento: '', refType: 'sales', refId: sale.id, descricao: `Recebimento (${rec.forma})`
   });
@@ -3453,12 +3565,62 @@ function gerarContasPagarDaCompra(rec, { intervaloDias } = {}) {
       descricao: `Compra ${rec.fornecedorNome || ''} ${rec.documentoNumero ? 'NF ' + rec.documentoNumero : ''}`.trim()
         + (p.parcelas > 1 ? ` — parcela ${p.parcela}/${p.parcelas}` : ''),
       categoria: rec.categoria, fornecedorId: rec.fornecedorId,
+      formaPagamento: normalizaForma(rec.formaPagamento) || '',
       valor: p.valor, vencimento: p.vencimento,
       tipoPagamento: tipo,
       dataProgramada: prog.dataProgramada,
       status: 'aberto', refType: 'purchases', refId: rec.id, documento: rec.documentoNumero
     });
   }
+}
+
+/* ---------------------------------------------------------------------
+   Compra no CARTÃO DE CRÉDITO.
+
+   A despesa é da data da COMPRA, não da fatura. Então a compra no cartão
+   lança a saída no caixa na hora, com forma "cartão de crédito", e NÃO
+   gera conta a pagar — quem se paga depois é a fatura, não cada compra.
+
+   É isso que evita a duplicidade: as compras do mês já estão no caixa;
+   pagar a fatura apenas quita o cartão, sem lançar a despesa outra vez
+   (ver a trava de "fatura de cartão" em contas a pagar).
+
+   A função é idempotente: mantém no máximo UMA saída por compra e a
+   atualiza quando valor, data ou forma mudam. Chamada na criação e na
+   edição, nunca duplica.                                                 */
+function noCartao(compra) {
+  return normalizaForma(compra && compra.formaPagamento) === 'cartao_credito';
+}
+
+function sincronizarCaixaDaCompra(compra, user) {
+  const atuais = db.all('cashflow').filter(c =>
+    c.refType === 'purchases' && c.refId === compra.id && c.tipo === 'saida');
+  if (!noCartao(compra)) {
+    for (const c of atuais) db.remove('cashflow', c.id);
+    return { removidas: atuais.length };
+  }
+  const dados = {
+    tipo: 'saida', valor: Math.round((Number(compra.valor) || 0) * 100) / 100,
+    data: compra.data, conta: 'principal', formaPagamento: 'cartao_credito',
+    categoria: compra.categoria || 'componentes',
+    origem: `Compra ${compra.fornecedorNome || ''}`.trim() +
+      (compra.documentoNumero ? ` — NF ${compra.documentoNumero}` : ''),
+    documento: compra.documentoNumero || '',
+    refType: 'purchases', refId: compra.id,
+    descricao: 'Compra no cartão de crédito'
+  };
+  if (atuais.length) {
+    db.update('cashflow', atuais[0].id, dados);
+    for (const extra of atuais.slice(1)) db.remove('cashflow', extra.id);
+    return { atualizada: atuais[0].id };
+  }
+  const nova = db.insert('cashflow', dados);
+  if (user) {
+    audit(user, 'lançou', 'cashflow', nova.id,
+      `Compra no cartão de ${brl(dados.valor)} em ${dataBR(dados.data)} — despesa na data da compra; ` +
+      'a fatura, ao ser paga, não lança de novo');
+  }
+  return { criada: nova.id };
 }
 
 route('POST', '/api/purchases', 'purchases', async (req, res, user) => {
@@ -3485,7 +3647,11 @@ route('POST', '/api/purchases', 'purchases', async (req, res, user) => {
       vinculo: b.vinculo || { tipo: 'sem_vinculo', refId: null },
       status: 'registrada'
     });
-    if (b.gerarContasPagar !== false && valor > 0) {
+    /* No cartão, a despesa entra direto no caixa e não vira conta a pagar:
+       o que se paga depois é a fatura. */
+    if (noCartao(rec)) {
+      sincronizarCaixaDaCompra(rec, user);
+    } else if (b.gerarContasPagar !== false && valor > 0) {
       gerarContasPagarDaCompra(rec, { intervaloDias: b.intervaloDias });
     }
   } catch (e) {
@@ -3493,15 +3659,14 @@ route('POST', '/api/purchases', 'purchases', async (req, res, user) => {
     return bad(res, e.message);
   }
 
-  // Entrada opcional no estoque próprio.
-  if (Array.isArray(b.entradasEstoque)) {
-    for (const e of b.entradasEstoque) {
-      if (e.itemId && e.qtd > 0) moveStock(Number(e.itemId), 'entrada', Number(e.qtd), 'purchases', rec.id, 'Compra', user);
-    }
-  }
+  // Itens vinculados a um produto do estoque próprio entram sozinhos.
+  const estoque = sincronizarEstoqueDaCompra(rec, user);
 
-  audit(user, 'criou', 'purchases', rec.id, `Compra ${rec.fornecedorNome} — R$ ${valor.toFixed(2)} (${rec.documentoTipo})`);
-  ok(res, rec);
+  audit(user, 'criou', 'purchases', rec.id,
+    `Compra ${rec.fornecedorNome} — R$ ${valor.toFixed(2)} (${rec.documentoTipo})` +
+    (noCartao(rec) ? ' — no cartão de crédito: despesa lançada na data da compra, sem conta a pagar' : '') +
+    (estoque.length ? `; estoque: ${estoque.join('; ')}` : ''));
+  ok(res, Object.assign({}, rec, { estoque }));
 });
 
 /** Leitura automática de NF-e (XML) — sempre com conferência antes de confirmar. */
@@ -3671,9 +3836,15 @@ route('PUT', '/api/purchases/:id', 'purchases', async (req, res, user, params) =
     return bad(res, e.message);
   }
 
+  /* Estoque e caixa acompanham a edição pela diferença — nunca recriando,
+     para a compra editada não virar entrada dupla. */
+  const estoque = sincronizarEstoqueDaCompra(rec, user);
+  sincronizarCaixaDaCompra(rec, user);
+
   audit(user, 'alterou', 'purchases', rec.id,
-    `Compra editada${mudancas.length ? ' — ' + mudancas.join('; ') : ''}`);
-  ok(res, rec);
+    `Compra editada${mudancas.length ? ' — ' + mudancas.join('; ') : ''}` +
+    (estoque.length ? `; estoque ajustado: ${estoque.join('; ')}` : ''));
+  ok(res, Object.assign({}, rec, { estoque }));
 });
 
 /**
@@ -3865,7 +4036,8 @@ route('DELETE', '/api/purchases/:id', 'purchases', async (req, res, user, params
   const pagas = contas.filter(p => p.status === 'pago');
   const movs = db.all('stockMoves').filter(m => m.refType === 'purchases' && m.refId === compra.id && !m.estornada);
   const caixa = db.all('cashflow').filter(c =>
-    c.refType === 'payables' && contas.some(p => p.id === c.refId));
+    (c.refType === 'payables' && contas.some(p => p.id === c.refId)) ||
+    (c.refType === 'purchases' && c.refId === compra.id));
 
   if ((contas.length || movs.length) && !confirmado) {
     const partes = [];
@@ -4631,6 +4803,7 @@ route('POST', '/api/freights', ['freights', 'payables'], async (req, res, user) 
     db.update('freights', rec.id, { status: 'pago', dataPagamento: data });
     db.insert('cashflow', {
       tipo: 'saida', valor, data, conta: b.conta || 'principal',
+      formaPagamento: normalizaForma(b.formaPagamento || rec.formaPagamento) || 'outro',
       categoria: 'frete_venda',
       origem: `Frete — ${rec.transportadora || 'envio'}${sale ? ` (Pedido nº ${sale.numero})` : ''}`,
       documento: rec.conhecimento, refType: 'freights', refId: rec.id,
@@ -4652,6 +4825,7 @@ route('POST', '/api/freights/:id/pay', ['freights', 'payables'], async (req, res
   db.update('freights', f.id, { status: 'pago', dataPagamento: data });
   db.insert('cashflow', {
     tipo: 'saida', valor: f.valor, data, conta: b.conta || 'principal',
+    formaPagamento: normalizaForma(b.forma || f.formaPagamento) || 'outro',
     categoria: 'frete_venda',
     origem: `Frete — ${f.transportadora || 'envio'}${sale ? ` (Pedido nº ${sale.numero})` : ''}`,
     documento: f.conhecimento, refType: 'freights', refId: f.id,
@@ -4744,6 +4918,10 @@ route('POST', '/api/payables', 'payables', async (req, res, user) => {
   const rec = db.insert('payables', {
     descricao: b.descricao, categoria: b.categoria || 'despesa_operacional',
     fornecedorId: b.fornecedorId || null,
+    formaPagamento: normalizaForma(b.formaPagamento) || '',
+    /* Fatura do cartão: as compras do mês já lançaram a despesa na data em
+       que foram feitas. Pagar a fatura quita o cartão — não lança de novo. */
+    faturaCartao: !!b.faturaCartao,
     valor: Number(b.valor), vencimento: b.vencimento,
     tipoPagamento: imediato ? 'imediato' : 'programado',
     dataProgramada: imediato ? (b.data || domain.today()) : domain.previousFriday(b.vencimento),
@@ -4757,6 +4935,7 @@ route('POST', '/api/payables', 'payables', async (req, res, user) => {
     db.update('payables', rec.id, { status: 'pago', dataPagamento: rec.dataProgramada });
     db.insert('cashflow', {
       tipo: 'saida', valor: rec.valor, data: rec.dataProgramada, conta: b.conta || 'principal',
+      formaPagamento: normalizaForma(b.formaPagamento) || 'transferencia',
       categoria: rec.categoria, origem: rec.descricao, documento: rec.documento,
       refType: 'payables', refId: rec.id, descricao: 'Pagamento imediato'
     });
@@ -4794,6 +4973,9 @@ route('PUT', '/api/payables/:id', 'payables_edit', async (req, res, user, params
     descricao: b.descricao,
     categoria: b.categoria || antes.categoria,
     fornecedorId: b.fornecedorId ? Number(b.fornecedorId) : null,
+    formaPagamento: b.formaPagamento !== undefined
+      ? (normalizaForma(b.formaPagamento) || '') : (antes.formaPagamento || ''),
+    faturaCartao: b.faturaCartao !== undefined ? !!b.faturaCartao : !!antes.faturaCartao,
     valor, vencimento: b.vencimento,
     tipoPagamento: imediato ? 'imediato' : 'programado',
     dataProgramada,
@@ -4895,7 +5077,7 @@ route('POST', '/api/payables/:id/unpay', 'payables', async (req, res, user, para
   if (p.status !== 'pago') return bad(res, 'Esta conta não está paga.');
   const caixa = db.all('cashflow').filter(c => c.refType === 'payables' && c.refId === p.id);
   for (const c of caixa) db.remove('cashflow', c.id);
-  db.update('payables', p.id, { status: 'aberto', dataPagamento: null });
+  db.update('payables', p.id, { status: 'aberto', dataPagamento: null, semCaixa: false, motivoSemCaixa: '' });
   audit(user, 'estornou', 'payables', p.id,
     `Pagamento de ${p.descricao} (${brl(p.valor)}) desfeito; ` +
     `${caixa.length} saída(s) retirada(s) do caixa`);
@@ -4908,13 +5090,31 @@ route('POST', '/api/payables/:id/pay', 'payables', async (req, res, user, params
   if (!p) return notFound(res);
   if (p.status === 'pago') return bad(res, 'Conta já paga');
   const data = b.data || domain.today();
-  db.update('payables', p.id, { status: 'pago', dataPagamento: data });
+  const forma = normalizaForma(b.forma || b.formaPagamento || p.formaPagamento) || 'transferencia';
+
+  /* FATURA DO CARTÃO: as compras que a compõem já lançaram a despesa no
+     caixa, cada uma na sua data. Lançar a fatura de novo contaria o mesmo
+     dinheiro duas vezes — então a conta é quitada SEM saída no caixa. */
+  if (p.faturaCartao) {
+    db.update('payables', p.id, {
+      status: 'pago', dataPagamento: data, formaPagamento: forma, semCaixa: true,
+      motivoSemCaixa: 'Fatura de cartão — as compras do período já lançaram a despesa na data em que foram feitas'
+    });
+    audit(user, 'pagou', 'payables', p.id,
+      `${p.descricao} — ${brl(p.valor)} em ${dataBR(data)} (fatura de cartão: quitada sem nova saída no caixa, ` +
+      'porque as compras do período já estão lançadas)');
+    return ok(res, { ok: true, semCaixa: true,
+      aviso: 'Fatura quitada sem lançar saída no caixa — as compras do cartão já estão lançadas nas datas em que foram feitas.' });
+  }
+
+  db.update('payables', p.id, { status: 'pago', dataPagamento: data, formaPagamento: forma });
   db.insert('cashflow', {
     tipo: 'saida', valor: p.valor, data, conta: b.conta || 'principal',
+    formaPagamento: forma,
     categoria: p.categoria, origem: p.descricao, documento: p.documento || '',
     refType: 'payables', refId: p.id, descricao: 'Pagamento de conta'
   });
-  audit(user, 'pagou', 'payables', p.id, `${p.descricao} — R$ ${p.valor.toFixed(2)} em ${data}`);
+  audit(user, 'pagou', 'payables', p.id, `${p.descricao} — R$ ${p.valor.toFixed(2)} em ${data} (${forma})`);
   ok(res, { ok: true });
 });
 
@@ -5163,6 +5363,7 @@ route('POST', '/api/receivables/:id/receive', 'receivables', async (req, res, us
   const categoria = r.origem === 'servico' ? 'servico' : 'venda_cabecote';
   db.insert('cashflow', {
     tipo: 'entrada', valor, data, conta: b.conta || 'principal',
+    formaPagamento: normalizaForma(forma) || 'outro',
     categoria, origem: r.descricao, documento: '',
     refType: 'receivables', refId: r.id,
     descricao: quitada ? 'Recebimento' : 'Recebimento parcial'
@@ -5537,6 +5738,7 @@ route('POST', '/api/hrPayments/:id/pay', 'hr', async (req, res, user, params) =>
   db.update('hrPayments', h.id, { status: 'pago', dataPagamento: data });
   db.insert('cashflow', {
     tipo: 'saida', valor: h.valor, data, conta: b.conta || 'principal',
+    formaPagamento: normalizaForma(b.forma) || 'transferencia',
     categoria: cat, origem: `RH — ${h.descricao || h.tipo}`, documento: '',
     refType: 'hrPayments', refId: h.id, descricao: 'Pagamento de RH'
   });
@@ -5590,6 +5792,7 @@ async function handleRest(req, res, user, collection, id) {
   if (method === 'GET' && !id) {
     let list = db.all(collection);
     if (collection === 'receivables' || collection === 'payables') list = withOverdue(list);
+    if (collection === 'cashflow') list = comFormaPagamento(list);
     return ok(res, list.map(r => sanitize(user, collection, r)));
   }
   if (method === 'GET') {

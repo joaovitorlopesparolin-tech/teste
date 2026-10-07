@@ -39,6 +39,43 @@ App.registerView('payables', async (view) => {
      ao mesmo tempo: ordenar só um deles confundiria mais que ajudaria. */
   let ordemAgenda = { chave: 'Vencimento', desc: false };
   let ordemPagas = { chave: 'Pago em', desc: true };
+  /* Busca e filtros vivem fora do render: a tela se redesenha a cada
+     gravação (atualização ao vivo) e sem isto o texto digitado se perdia. */
+  const ui = App.telaEstado('payables', { busca: '', forma: '', situacao: '' });
+
+  const nomeForn = (p) => {
+    const f = p.fornecedorId ? suppliers.find(x => x.id === p.fornecedorId) : null;
+    return f ? f.nome : '';
+  };
+  const nomeCat = (p) => (CATS_PAG.find(c => c[0] === p.categoria) || [null, p.categoria || ''])[1];
+  /* Tudo que descreve a conta vira texto pesquisável: fornecedor,
+     descrição, categoria, documento/NF, nº da compra, forma, datas, valor
+     e situação. Sem acento e em qualquer ordem, como nas outras abas. */
+  const CAMPOS_PAG = ['descricao', 'documento', 'observacoes', 'vencimento', 'dataPagamento', 'dataProgramada',
+    p => nomeForn(p),
+    p => nomeCat(p),
+    p => App.formaNome(p.formaPagamento),
+    p => App.date(p.vencimento) + ' ' + App.date(p.dataProgramada) + ' ' + App.date(p.dataPagamento),
+    p => App.money(p.valor) + ' ' + p.valor,
+    p => (App.STATUS[p.status] || [p.status || ''])[0],
+    p => p.refType === 'purchases' ? `compra ${p.refId} #${p.refId}` : '',
+    p => p.faturaCartao ? 'fatura cartao de credito' : '',
+    p => p.tipoPagamento === 'imediato' ? 'imediato' : 'programado'
+  ];
+
+  const filtra = (lista) => {
+    let out = lista;
+    if (ui.forma) {
+      out = ui.forma === '__sem'
+        ? out.filter(p => !App.formaChave(p.formaPagamento))
+        : out.filter(p => App.formaChave(p.formaPagamento) === ui.forma);
+    }
+    if (ui.situacao === 'aberto') out = out.filter(p => p.status !== 'pago');
+    if (ui.situacao === 'vencida') out = out.filter(p => p.status === 'vencida');
+    if (ui.situacao === 'pago') out = out.filter(p => p.status === 'pago');
+    return App.filtraPor(out, ui.busca, CAMPOS_PAG);
+  };
+  const filtrando = () => !!(ui.busca || ui.forma || ui.situacao);
 
   const colsAgenda = () => [
     { h: 'Conta', sort: p => p.descricao || '', sortDesc: false,
@@ -46,8 +83,12 @@ App.registerView('payables', async (view) => {
     { h: 'Categoria', cell: p => `<span class="small muted">${(CATS_PAG.find(c => c[0] === p.categoria) || [null, p.categoria])[1]}</span>` },
     { h: 'Vencimento', sort: p => p.vencimento || '', sortDesc: false, cell: p => App.date(p.vencimento) },
     { h: 'Documento', cell: p => App.esc(p.documento || '—') },
+    { h: 'Forma', sort: p => App.formaNome(p.formaPagamento) || 'zzz', sortDesc: false,
+      cell: p => App.formaChave(p.formaPagamento)
+        ? `<span class="small">${App.esc(App.formaNome(p.formaPagamento))}</span>`
+        : '<span class="muted small">—</span>' },
     { h: 'Valor', class: 'num', sort: p => Number(p.valor) || 0, cell: p => App.moneyHtml(p.valor) },
-    { h: 'Status', cell: p => App.badge(p.status) },
+    { h: 'Status', cell: p => App.badge(p.status) + (p.faturaCartao ? '<div class="small muted">fatura de cartão</div>' : '') },
     { h: '', class: 'num', cell: p => `<button class="btn sm primary" onclick="Pay.pay(${p.id})">✓ Pagar</button>
       ${podeEditar ? `
         <button class="btn sm ghost" onclick="Pay.edit(${p.id})" title="Editar esta conta">✏️ Editar</button>
@@ -66,6 +107,12 @@ App.registerView('payables', async (view) => {
   ];
 
   const renderPay = () => {
+    /* Filtrando, a agenda por dia dá lugar a UMA lista do resultado: é o que
+       responde "onde está aquele lançamento". Sem filtro, a agenda de
+       sexta-feira continua exatamente como era. */
+    const achadas = filtra(payables);
+    const somaAchadas = achadas.filter(p => p.status !== 'pago').reduce((s, p) => s + (Number(p.valor) || 0), 0);
+
     view.innerHTML = `
     <div class="toolbar">
       <button class="btn primary" onclick="Pay.create()">+ Nova conta</button>
@@ -73,9 +120,37 @@ App.registerView('payables', async (view) => {
       <div class="spacer"></div>
       <span class="badge ${overdue.length ? 'danger' : 'ok'}">${overdue.length} vencida(s)</span>
       <span class="badge">Total em aberto: R$ ${App.money(openTotal)}</span>
-      <button class="btn" onclick="Pay.print()">🖨️ Imprimir agenda</button>
+      <button class="btn" onclick="Pay.print()">🖨️ Imprimir</button>
     </div>
 
+    <div class="toolbar">
+      <input class="search" id="pg-busca" style="max-width:340px" value="${App.esc(ui.busca)}"
+        placeholder="🔎 Buscar por fornecedor, descrição, NF, nº da compra, categoria, valor…">
+      <select id="pg-forma" style="max-width:210px" title="Forma de pagamento">
+        <option value="">Todas as formas</option>
+        ${App.FORMAS.map(([v, l]) => `<option value="${v}" ${ui.forma === v ? 'selected' : ''}>${l}</option>`).join('')}
+        <option value="__sem" ${ui.forma === '__sem' ? 'selected' : ''}>— sem forma informada —</option>
+      </select>
+      <select id="pg-situacao" style="max-width:180px" title="Situação">
+        ${[['', 'Todas as situações'], ['aberto', 'Em aberto'], ['vencida', 'Vencidas'], ['pago', 'Pagas']]
+          .map(([v, l]) => `<option value="${v}" ${ui.situacao === v ? 'selected' : ''}>${l}</option>`).join('')}
+      </select>
+      <button class="btn sm ghost" id="pg-limpar" title="Limpar a busca e os filtros">Limpar filtros</button>
+      <div class="spacer"></div>
+      <span class="muted small" id="pg-contagem">${filtrando()
+        ? `${achadas.length} conta(s) · R$ ${App.money(somaAchadas)} em aberto`
+        : 'clique no cabeçalho da coluna para ordenar'}</span>
+    </div>
+
+    ${filtrando() ? `
+      <div class="section-title">RESULTADO DA BUSCA
+        <span class="small muted">— a agenda por sexta-feira volta ao limpar os filtros</span></div>
+      ${App.table(achadas, colsAgenda(), {
+        emptyMsg: 'Nenhuma conta encontrada com esses filtros',
+        sortState: ordemAgenda,
+        onSort: (o) => { ordemAgenda = o; renderPay(); }
+      })}`
+    : `
     <div class="section-title">AGENDA DE PAGAMENTOS (agrupada por data programada)
       <span class="small muted">— clique no cabeçalho para ordenar</span></div>
     ${agenda.length ? agenda.map(g => `
@@ -97,7 +172,27 @@ App.registerView('payables', async (view) => {
       emptyMsg: 'Nenhum pagamento ainda',
       sortState: ordemPagas,
       onSort: (o) => { ordemPagas = o; renderPay(); }
-    })}`;
+    })}`}`;
+
+    const busca = document.getElementById('pg-busca');
+    /* Redesenhar a tela a cada tecla recriaria o campo e tiraria o foco —
+       então a lista é refeita sem mexer na barra de busca. */
+    let t = null;
+    busca.addEventListener('input', () => {
+      ui.busca = busca.value;
+      clearTimeout(t);
+      t = setTimeout(() => {
+        const pos = busca.selectionStart;
+        renderPay();
+        const novo = document.getElementById('pg-busca');
+        if (novo) { novo.focus(); try { novo.setSelectionRange(pos, pos); } catch (e) { /* ok */ } }
+      }, 120);
+    });
+    document.getElementById('pg-forma').addEventListener('change', e => { ui.forma = e.target.value; renderPay(); });
+    document.getElementById('pg-situacao').addEventListener('change', e => { ui.situacao = e.target.value; renderPay(); });
+    document.getElementById('pg-limpar').onclick = () => {
+      ui.busca = ''; ui.forma = ''; ui.situacao = ''; renderPay();
+    };
   };
   renderPay();
 
@@ -114,6 +209,9 @@ App.registerView('payables', async (view) => {
           options: [{ value: '', label: '—' }].concat(App.ativos(suppliers, p.fornecedorId).map(s => ({ value: s.id, label: s.nome + (s.ativo === false ? ' (inativo)' : '') }))) },
         { name: 'valor', label: 'Valor (R$)', type: 'number', step: '0.01', required: true },
         { name: 'vencimento', label: 'Vencimento', type: 'date', required: true },
+        { name: 'formaPagamento', label: 'Forma de pagamento', type: 'select', value: p.formaPagamento || 'transferencia',
+          options: App.FORMAS.map(([v, l]) => ({ value: v, label: l })) },
+        { name: 'faturaCartao', label: 'É a fatura do cartão de crédito', type: 'checkbox', value: false, full: true },
         { name: 'tipoPagamento', label: 'Tipo de pagamento', type: 'select', value: 'programado', options: [
           { value: 'programado', label: 'Programado — sexta-feira anterior ao vencimento' },
           { value: 'imediato', label: 'Imediato — não espera sexta-feira' }], full: true },
@@ -151,7 +249,11 @@ App.registerView('payables', async (view) => {
             { value: 'programado', label: 'Programado — sexta-feira anterior ao vencimento' },
             { value: 'imediato', label: 'Imediato — não espera sexta-feira' }] },
         { name: 'dataProgramada', label: 'Agendamento (em branco = recalcula pela regra da sexta)', type: 'date', value: '' },
-        { name: 'forma', label: 'Forma de pagamento', value: p.forma || '' },
+        { name: 'formaPagamento', label: 'Forma de pagamento', type: 'select',
+          value: App.formaChave(p.formaPagamento) || 'transferencia',
+          options: App.FORMAS.map(([v, l]) => ({ value: v, label: l })) },
+        { name: 'faturaCartao', label: 'É a fatura do cartão de crédito (pagar não lança saída de novo)',
+          type: 'checkbox', value: !!p.faturaCartao, full: true },
         { name: 'recurringId', label: 'Conta recorrente', type: 'select', value: p.recurringId || '',
           options: [{ value: '', label: '— não é recorrente —' }].concat(
             recurring.filter(r => r.ativo).map(r => ({ value: r.id, label: r.nome }))) },
@@ -188,13 +290,27 @@ App.registerView('payables', async (view) => {
     },
     pay(id) {
       const p = payables.find(x => x.id === id);
-      App.form(`Pagar: ${p.descricao} — R$ ${App.money(p.valor)}`, [
+      const m = App.form(`Pagar: ${p.descricao} — R$ ${App.money(p.valor)}`, [
         { name: 'data', label: 'Data do pagamento', type: 'date', value: App.today(), required: true },
+        { name: 'forma', label: 'Forma de pagamento', type: 'select',
+          value: App.formaChave(p.formaPagamento) || 'transferencia',
+          options: App.FORMAS.map(([v, l]) => ({ value: v, label: l })) },
         { name: 'conta', label: 'Conta bancária', value: 'principal' }
       ], async d => {
-        await App.post(`/payables/${id}/pay`, d);
-        App.closeModal(); App.toast('Pagamento lançado no fluxo de caixa', 'ok'); App.route();
+        const r = await App.post(`/payables/${id}/pay`, d);
+        App.closeModal();
+        App.toast(r.semCaixa
+          ? 'Fatura quitada — sem nova saída no caixa, as compras do cartão já estão lançadas'
+          : 'Pagamento lançado no fluxo de caixa', 'ok');
+        App.route();
       });
+      if (p.faturaCartao) {
+        m.querySelector('.actions').insertAdjacentHTML('afterbegin',
+          `<p class="small" style="margin-right:auto;color:var(--warn,#d29922)">⚠ Esta conta está marcada como
+           <b>fatura de cartão</b>: ela será quitada <b>sem lançar saída no caixa</b>, porque cada compra no cartão
+           já lançou a despesa na data em que foi feita.<br>
+           <span class="muted">Confira os valores em Fluxo de caixa → forma “Cartão de crédito”.</span></p>`);
+      }
     },
     recurringList() {
       App.modal(`
@@ -242,12 +358,31 @@ App.registerView('payables', async (view) => {
       sessionStorage.removeItem('jm_pay_prefill');
       try { Pay.create(JSON.parse(raw)); } catch (e) {}
     },
+    /* Com filtro, imprime o resultado da busca; sem filtro, a agenda de
+       sexta-feira — o papel sai igual ao que está na tela. */
     print() {
+      if (filtrando()) {
+        const lista = App.ordenaComo(filtra(payables), colsAgenda(), ordemAgenda);
+        const soma = lista.filter(p => p.status !== 'pago').reduce((s, p) => s + (Number(p.valor) || 0), 0);
+        const recorte = [ui.busca ? `busca: “${ui.busca}”` : '',
+          ui.forma ? 'forma: ' + (ui.forma === '__sem' ? 'não informada' : App.formaNome(ui.forma)) : '',
+          ui.situacao ? 'situação: ' + ui.situacao : ''].filter(Boolean).join(' · ');
+        return App.print('Contas a pagar' + (recorte ? ' — ' + recorte : ''),
+          `<table><tr><th>Conta</th><th>Fornecedor</th><th>Categoria</th><th>Vencimento</th>
+             <th>Documento</th><th>Forma</th><th class="num">Valor</th><th>Status</th></tr>
+          ${lista.map(p => `<tr><td>${App.esc(p.descricao)}</td><td>${App.esc(nomeForn(p))}</td>
+            <td>${App.esc(nomeCat(p))}</td><td>${App.date(p.vencimento)}</td>
+            <td>${App.esc(p.documento || '—')}</td><td>${App.esc(App.formaNome(p.formaPagamento) || '—')}</td>
+            <td class="num">R$ ${App.money(p.valor)}</td>
+            <td>${(App.STATUS[p.status] || [p.status])[0]}</td></tr>`).join('')}</table>`,
+          `${lista.length} conta(s) — R$ ${App.money(soma)} em aberto`);
+      }
       App.print('Agenda de pagamentos',
         agenda.map(g => `<h3>${App.date(g.data)} (${dow(g.data)}) — total R$ ${App.money(g.total)}</h3>
-          <table><tr><th>Conta</th><th>Vencimento</th><th>Documento</th><th class="num">Valor</th></tr>
+          <table><tr><th>Conta</th><th>Vencimento</th><th>Documento</th><th>Forma</th><th class="num">Valor</th></tr>
           ${g.contas.map(p => `<tr><td>${App.esc(p.descricao)}</td><td>${App.date(p.vencimento)}</td>
-          <td>${App.esc(p.documento || '')}</td><td class="num">R$ ${App.money(p.valor)}</td></tr>`).join('')}</table>`).join(''),
+          <td>${App.esc(p.documento || '')}</td><td>${App.esc(App.formaNome(p.formaPagamento) || '—')}</td>
+          <td class="num">R$ ${App.money(p.valor)}</td></tr>`).join('')}</table>`).join(''),
         'Total em aberto: R$ ' + App.money(openTotal));
     }
   };
@@ -1064,12 +1199,19 @@ App.registerView('cashflow', async (view) => {
       <label class="btn" style="cursor:pointer">📥 Importar planilha de gastos (Excel)
         <input type="file" id="cf-import" accept=".xlsx" hidden></label>
       <span id="cf-import-prog" class="small muted"></span>
-      <input class="search" id="cf-busca" placeholder="🔎 Buscar por origem, descrição, categoria, conta ou documento…" style="max-width:340px">
-      <span class="small muted">clique num lançamento para ver de onde veio</span>
+      <select id="cf-forma" style="max-width:220px" title="Como o pagamento foi feito — não é conta bancária">
+        <option value="">Todas as formas de pagamento</option>
+        ${App.FORMAS.map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}
+        <option value="__sem">— sem forma informada —</option>
+      </select>
+      <input class="search" id="cf-busca" placeholder="🔎 Buscar por origem, descrição, categoria, forma ou documento…" style="max-width:320px">
+      <button class="btn sm ghost" id="cf-limpar" title="Limpar busca e filtro de forma">Limpar filtros</button>
       <div class="spacer"></div>
       <span class="muted small" id="cf-contagem"></span>
       <button class="btn" onclick="CF.exportCsv()">⬇ Exportar CSV/Excel</button>
     </div>
+    <div id="cf-forma-resumo"></div>
+    <div class="small muted" style="margin:0 0 8px">Clique num lançamento para ver de onde veio.</div>
     <div id="cf-tabela"></div>`;
 
   /* O seletor lista os meses que têm lançamento, mais o mês corrente e o
@@ -1117,12 +1259,94 @@ App.registerView('cashflow', async (view) => {
 
   /* Busca sem acento e por pedaço em todos os campos que descrevem o
      lançamento — é como se acha "aquela saída da Sanepar de agosto". */
+  /* ------------------------------------------------------------------
+     Resumo da forma escolhida — e, no cartão de crédito, o relatório que
+     serve para conferir a fatura: quantos lançamentos, quanto foi gasto no
+     período e quanto falta para bater com o valor que a operadora cobrou.
+
+     A conta é só dos lançamentos JÁ registrados como compra no cartão. Se
+     a fatura vier maior, a diferença é compra que ainda não foi lançada —
+     e é isso que evita pagar duas vezes a mesma coisa.                   */
+  let faturaConferida = '';
+  const renderResumoForma = (list) => {
+    const alvo = document.getElementById('cf-forma-resumo');
+    const f = document.getElementById('cf-forma').value;
+    if (!f || f === '__sem') { alvo.innerHTML = ''; return; }
+
+    const saidas = list.filter(x => x.tipo === 'saida');
+    const entradas = list.filter(x => x.tipo === 'entrada');
+    const somaS = saidas.reduce((s, x) => s + (Number(x.valor) || 0), 0);
+    const somaE = entradas.reduce((s, x) => s + (Number(x.valor) || 0), 0);
+    const nome = App.formaNome(f);
+    const quando = periodo ? rotuloMes(periodo) : 'todo o período';
+    const cartao = f === 'cartao_credito';
+
+    const fatura = Number(String(faturaConferida).replace(',', '.')) || 0;
+    const diferenca = Math.round((fatura - somaS) * 100) / 100;
+
+    alvo.innerHTML = `
+      <div class="card" style="margin-bottom:12px">
+        <h3>${App.esc(nome.toUpperCase())} — ${App.esc(quando.toUpperCase())}</h3>
+        <div class="grid cols-3" style="margin-top:10px">
+          <div class="card kpi ${cartao ? 'k-danger' : 'k-warn'}">
+            <div class="label">${cartao ? 'Total de gastos no cartão' : 'Total de saídas'}</div>
+            <div class="value money">${App.money(somaS)}</div>
+            <div class="hint">${saidas.length} lançamento(s)</div></div>
+          <div class="card kpi ${somaE ? 'k-ok' : ''}"><div class="label">Entradas por esta forma</div>
+            <div class="value money">${App.money(somaE)}</div>
+            <div class="hint">${entradas.length} lançamento(s)</div></div>
+          <div class="card kpi"><div class="label">Lançamentos na seleção</div>
+            <div class="value">${list.length}</div>
+            <div class="hint">${periodo ? 'no mês escolhido' : 'em todo o histórico'}</div></div>
+        </div>
+        ${cartao ? `
+        <hr class="sep">
+        <div class="toolbar" style="border:none;padding:0">
+          <label class="small muted">Valor da fatura que chegou (R$)
+            <input type="number" step="0.01" id="cf-fatura" value="${faturaConferida}"
+              placeholder="10000,00" style="max-width:160px"></label>
+          <div class="spacer"></div>
+          ${fatura > 0 ? `<span class="${Math.abs(diferenca) < 0.005 ? 'pos' : 'neg'}" style="font-size:14px">
+            ${Math.abs(diferenca) < 0.005
+              ? '✓ A fatura bate com o que está lançado.'
+              : diferenca > 0
+                ? `Faltam <b>R$ ${App.money(diferenca)}</b> de compras não lançadas no sistema.`
+                : `Há <b>R$ ${App.money(Math.abs(diferenca))}</b> lançados a mais do que a fatura cobrou.`}</span>` : ''}
+        </div>
+        <p class="small muted" style="margin-top:8px">Cada compra no cartão já lançou a despesa <b>na data da compra</b>.
+        Ao pagar a fatura, marque a conta como <b>“Fatura de cartão”</b> em Contas a pagar: ela é quitada
+        <b>sem lançar saída de novo</b>, porque essas compras já estão aqui.</p>` : ''}
+      </div>`;
+
+    const inp = document.getElementById('cf-fatura');
+    if (inp) {
+      inp.addEventListener('input', () => {
+        faturaConferida = inp.value;
+        const pos = inp.selectionStart;
+        renderResumoForma(list);
+        const novo = document.getElementById('cf-fatura');
+        if (novo) { novo.focus(); try { novo.setSelectionRange(pos, pos); } catch (e) { /* number input */ } }
+      });
+    }
+  };
+
+  /* Forma de pagamento escolhida no filtro. '__sem' reúne o que ainda não
+     tem forma informada — lançamentos antigos, principalmente. */
+  const porForma = (lista) => {
+    const f = document.getElementById('cf-forma').value;
+    if (!f) return lista;
+    if (f === '__sem') return lista.filter(x => !App.formaChave(x.formaPagamento));
+    return lista.filter(x => App.formaChave(x.formaPagamento) === f);
+  };
+
   const renderCF = () => {
     montarSeletor();
     renderKpis();
-    const list = App.filtraPor(doMes(periodo), document.getElementById('cf-busca').value,
+    const list = App.filtraPor(porForma(doMes(periodo)), document.getElementById('cf-busca').value,
       ['origem', 'descricao', 'categoria', 'conta', 'documento', 'data',
+        f => App.formaNome(f.formaPagamento),
         f => f.tipo === 'entrada' ? 'entrada' : 'saida']);
+    renderResumoForma(list);
     document.getElementById('cf-contagem').textContent =
       `${list.length} lançamento(s)${list.length > 200 ? ' — mostrando os 200 mais recentes' : ''}`;
     document.getElementById('cf-tabela').innerHTML = App.table(list.slice(0, 200), [
@@ -1133,6 +1357,10 @@ App.registerView('cashflow', async (view) => {
         cell: f => `${App.esc(f.origem || f.descricao || '—')}<div class="small muted">${App.esc(f.descricao !== f.origem ? f.descricao || '' : '')}</div>` },
       { h: 'Categoria', sort: f => f.categoria || '', sortDesc: false,
         cell: f => `<span class="small muted">${App.esc(f.categoria || '—')}</span>` },
+      { h: 'Forma de pagamento', sort: f => App.formaNome(f.formaPagamento) || 'zzz', sortDesc: false,
+        cell: f => App.formaChave(f.formaPagamento)
+          ? `<span class="badge ${App.formaChave(f.formaPagamento).startsWith('cartao') ? 'info' : ''}">${App.esc(App.formaNome(f.formaPagamento))}</span>`
+          : '<span class="muted small">não informada</span>' },
       { h: 'Conta', cell: f => App.esc(f.conta || '—') },
       { h: 'Documento', cell: f => App.esc(f.documento || '—') },
       { h: 'Valor', class: 'num', sort: f => Number(f.valor) || 0,
@@ -1152,6 +1380,12 @@ App.registerView('cashflow', async (view) => {
   };
   renderCF();
   document.getElementById('cf-busca').addEventListener('input', renderCF);
+  document.getElementById('cf-forma').addEventListener('change', renderCF);
+  document.getElementById('cf-limpar').onclick = () => {
+    document.getElementById('cf-busca').value = '';
+    document.getElementById('cf-forma').value = '';
+    renderCF();
+  };
 
   /* Trocar de mês recalcula tudo: entradas, saídas, saldo do mês, acumulado
      e a lista. A busca digitada continua valendo. */
@@ -1237,6 +1471,8 @@ App.registerView('cashflow', async (view) => {
           options: [{ value: 'entrada', label: 'Entrada' }, { value: 'saida', label: 'Saída' }] },
         { name: 'valor', label: 'Valor (R$)', type: 'number', step: '0.01', required: true },
         { name: 'data', label: 'Data efetiva', type: 'date', value: App.today(), required: true },
+        { name: 'formaPagamento', label: 'Forma de pagamento (como o dinheiro se moveu)', type: 'select',
+          value: 'pix', options: App.FORMAS.map(([v, l]) => ({ value: v, label: l })) },
         { name: 'conta', label: 'Conta bancária', value: 'principal' },
         { name: 'categoria', label: 'Categoria', type: 'select', value: 'despesa_operacional', options:
           [['venda_cabecote', 'Venda de cabeçote'], ['venda_peca', 'Venda de peça'], ['servico', 'Serviço']]
@@ -1335,6 +1571,8 @@ App.registerView('cashflow', async (view) => {
           options: [{ value: 'entrada', label: 'Entrada' }, { value: 'saida', label: 'Saída' }] },
         { name: 'valor', label: 'Valor (R$)', type: 'number', step: '0.01', value: f.valor, required: true },
         { name: 'data', label: 'Data efetiva', type: 'date', value: f.data, required: true },
+        { name: 'formaPagamento', label: 'Forma de pagamento (como o dinheiro se moveu)', type: 'select',
+          value: App.formaChave(f.formaPagamento) || 'pix', options: App.FORMAS.map(([v, l]) => ({ value: v, label: l })) },
         { name: 'conta', label: 'Conta bancária', value: f.conta || 'principal' },
         { name: 'categoria', label: 'Categoria', type: 'select', value: f.categoria, options:
           [['venda_cabecote', 'Venda de cabeçote'], ['venda_peca', 'Venda de peça'], ['servico', 'Serviço']]
@@ -1354,12 +1592,20 @@ App.registerView('cashflow', async (view) => {
     },
     /* Exporta o que está na tela: o mês escolhido, não o histórico inteiro —
        senão o arquivo nunca bate com os números que a pessoa está vendo. */
+    /* Exporta o que está na tela: mês, forma de pagamento e busca. */
     exportCsv() {
-      App.exportCsv(`fluxo-de-caixa${periodo ? '-' + periodo : ''}.csv`, doMes(periodo).map(f => ({
-        data: App.date(f.data), tipo: f.tipo, origem: f.origem || '', categoria: f.categoria || '',
-        conta: f.conta || '', documento: f.documento || '',
-        valor: (f.tipo === 'entrada' ? '' : '-') + String(f.valor).replace('.', ',')
-      })));
+      const forma = document.getElementById('cf-forma').value;
+      const lista = App.filtraPor(porForma(doMes(periodo)), document.getElementById('cf-busca').value,
+        ['origem', 'descricao', 'categoria', 'conta', 'documento', 'data',
+          f => App.formaNome(f.formaPagamento),
+          f => f.tipo === 'entrada' ? 'entrada' : 'saida']);
+      App.exportCsv(`fluxo-de-caixa${periodo ? '-' + periodo : ''}${forma ? '-' + forma : ''}.csv`,
+        lista.map(f => ({
+          data: App.date(f.data), tipo: f.tipo, origem: f.origem || '', categoria: f.categoria || '',
+          forma_pagamento: App.formaNome(f.formaPagamento) || '', conta: f.conta || '',
+          documento: f.documento || '',
+          valor: (f.tipo === 'entrada' ? '' : '-') + String(f.valor).replace('.', ',')
+        })));
     }
   };
 });

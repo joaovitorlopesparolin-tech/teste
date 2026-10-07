@@ -4,9 +4,10 @@
 /* ================= COMPRAS ================= */
 App.registerView('purchases', async (view) => {
   App.setTitle('Compras', 'Com ou sem nota fiscal — sempre no controle gerencial');
-  const [purchases, suppliers, clients, serviceOrders, sales] = await Promise.all([
+  const [purchases, suppliers, clients, serviceOrders, sales, stockItems] = await Promise.all([
     App.get('/purchases'), App.get('/suppliers'), App.get('/clients'),
-    App.get('/serviceOrders'), App.get('/sales')]);
+    App.get('/serviceOrders'), App.get('/sales'),
+    App.can('stock') ? App.get('/stockItems') : Promise.resolve([])]);
   /* A referência é sempre a DATA DA COMPRA — não o vencimento nem o pagamento.
      Padrão: mais recente primeiro. A ordem vive fora do render, para
      sobreviver ao redesenho que a busca provoca a cada tecla. */
@@ -202,8 +203,9 @@ App.registerView('purchases', async (view) => {
         { name: 'documentoNumero', label: 'Número do documento', value: pf.documentoNumero || '' },
         { name: 'categoria', label: 'Categoria (para custos e DRE)', type: 'select', value: pf.categoria || 'componentes',
           options: App.CATCOMPRA.map(([v, l]) => ({ value: v, label: l })) },
-        { name: 'formaPagamento', label: 'Forma de pagamento', type: 'select', value: pf.formaPagamento || 'boleto',
-          options: ['boleto', 'pix', 'cartao', 'dinheiro', 'cheque'].map(v => ({ value: v, label: v })) },
+        { name: 'formaPagamento', label: 'Forma de pagamento', type: 'select',
+          value: App.formaChave(pf.formaPagamento) || 'boleto',
+          options: App.FORMAS.map(([v, l]) => ({ value: v, label: l })) },
         { name: 'tipoPagamento', label: 'Agendamento do pagamento', type: 'select', value: pf.tipoPagamento || 'programado',
           options: AGEND.map(([v, l]) => ({ value: v, label: l })) },
         { name: 'vencimento', label: 'Vencimento', type: 'date', value: pf.vencimento || '' },
@@ -222,10 +224,16 @@ App.registerView('purchases', async (view) => {
           value: (pf.itens || []).map(i => `${i.descricao} ; ${i.qtd} ; ${i.valorUnit}`).join('\n'), full: true },
         { name: 'observacoes', label: 'Observações', type: 'textarea', value: pf.observacoes || '', full: true }
       ], async d => {
-        const itens = (d.itensTexto || '').split('\n').map(l => l.trim()).filter(Boolean).map(l => {
+        const itens = (d.itensTexto || '').split('\n').map(l => l.trim()).filter(Boolean).map((l, idx) => {
           const [descricao, qtd, valorUnit] = l.split(';').map(x => x.trim());
           const q = Number(qtd) || 1, v = Number(valorUnit) || 0;
-          return { descricao, qtd: q, valorUnit: v, total: q * v };
+          /* Destino de cada item: o produto do estoque próprio escolhido
+             embaixo do campo de itens. Sem escolha, o item não entra no
+             estoque — serviço de terceiro, manutenção e material consumido
+             na hora continuam sem gerar nada. */
+          const sel = m.querySelector(`[data-destino="${idx}"]`);
+          const stockItemId = sel && sel.value ? Number(sel.value) : null;
+          return { descricao, qtd: q, valorUnit: v, total: q * v, stockItemId };
         });
         // Vínculo: com registro escolhido, guarda o id e o nome do registro.
         const tipoV = d.vinculoTipo;
@@ -280,6 +288,110 @@ App.registerView('purchases', async (view) => {
             lista.map(o => `<option value="${o.value}" ${String(o.value) === String(vinc.refId || '') ? 'selected' : ''}>${App.esc(o.label)}</option>`).join('');
         }
       });
+
+      /* ----------------------------------------------------------------
+         DESTINO DE CADA ITEM NO ESTOQUE PRÓPRIO.
+
+         Uma linha por item digitado acima. Escolhendo o produto do
+         estoque, a compra passa a ser a origem da entrada: ao salvar, a
+         quantidade entra sozinha no estoque, com fornecedor, NF, data e
+         custo no histórico. Sem escolher, o item não mexe no estoque.    */
+      const areaDestino = document.createElement('div');
+      areaDestino.style.margin = '2px 0 10px';
+      const campoItens = m.querySelector('[name="itensTexto"]');
+      campoItens.closest('label').after(areaDestino);
+
+      const lerItens = () => (campoItens.value || '').split('\n')
+        .map(l => l.trim()).filter(Boolean)
+        .map(l => {
+          const [descricao, qtd] = l.split(';').map(x => (x || '').trim());
+          return { descricao: descricao || '(sem descrição)', qtd: Number(qtd) || 1 };
+        });
+
+      /* Sugere o produto do estoque cujo nome mais se parece com a
+         descrição digitada — quem compra "comando 288 x 288" não precisa
+         procurar na lista. A sugestão é só o valor inicial; quem decide é
+         sempre a pessoa. */
+      const sugerir = (descricao) => {
+        const alvo = App.normaliza(descricao);
+        if (!alvo) return '';
+        const exato = stockItems.find(i => App.normaliza(i.nome) === alvo);
+        if (exato) return String(exato.id);
+        const termos = alvo.split(/\s+/).filter(t => t.length > 2);
+        if (!termos.length) return '';
+        let melhor = null, melhorPontos = 0;
+        for (const i of stockItems) {
+          if (i.ativo === false) continue;
+          const nome = App.normaliza(i.nome);
+          const pontos = termos.filter(t => nome.includes(t)).length;
+          if (pontos > melhorPontos) { melhorPontos = pontos; melhor = i; }
+        }
+        // Exige pelo menos metade dos termos para não sugerir qualquer coisa.
+        return melhor && melhorPontos >= Math.max(2, Math.ceil(termos.length / 2)) ? String(melhor.id) : '';
+      };
+
+      const escolhidos = {};   // índice → stockItemId, para não perder ao redigitar
+      (pf.itens || []).forEach((it, i) => { if (it.stockItemId) escolhidos[i] = String(it.stockItemId); });
+
+      const opcoesEstoque = () => App.ativos(stockItems)
+        .slice().sort((a, b) => String(a.nome).localeCompare(String(b.nome), 'pt-BR'))
+        .map(i => `<option value="${i.id}">${App.esc(i.nome)}${i.codigo ? ' — ' + App.esc(i.codigo) : ''} (atual: ${i.qtd})</option>`)
+        .join('');
+
+      const renderDestinos = () => {
+        const itens = lerItens();
+        if (!stockItems.length) {
+          areaDestino.innerHTML = itens.length
+            ? '<p class="small muted">Sem itens de estoque cadastrados — nada entra no Estoque próprio por esta compra.</p>' : '';
+          return;
+        }
+        if (!itens.length) {
+          areaDestino.innerHTML = '<p class="small muted">Digite os itens acima para escolher quais vão para o Estoque próprio.</p>';
+          return;
+        }
+        areaDestino.innerHTML = `
+          <div class="small" style="margin-bottom:4px"><b>Destino de cada item</b>
+            <span class="muted">— só os vinculados a um produto entram no Estoque próprio, com a quantidade da compra</span></div>
+          <div class="tablewrap"><table>
+            <tr><th>Item da compra</th><th class="num">Qtd</th><th>Produto do Estoque próprio</th></tr>
+            ${itens.map((it, i) => `<tr>
+              <td><span class="small">${App.esc(it.descricao)}</span></td>
+              <td class="num">${it.qtd}</td>
+              <td><select data-destino="${i}" style="width:100%">
+                <option value="">— não entra no estoque —</option>
+                ${opcoesEstoque()}
+              </select></td></tr>`).join('')}
+          </table></div>`;
+        itens.forEach((it, i) => {
+          const sel = areaDestino.querySelector(`[data-destino="${i}"]`);
+          if (!sel) return;
+          const valor = escolhidos[i] !== undefined ? escolhidos[i] : sugerir(it.descricao);
+          if (valor && sel.querySelector(`option[value="${valor}"]`)) sel.value = valor;
+          sel.addEventListener('change', () => { escolhidos[i] = sel.value; });
+        });
+      };
+      campoItens.addEventListener('input', renderDestinos);
+      renderDestinos();
+
+      /* No cartão de crédito a compra não gera conta a pagar: a despesa
+         entra no caixa na data da compra e quem se paga depois é a fatura. */
+      const avisoCartao = document.createElement('p');
+      avisoCartao.className = 'small';
+      avisoCartao.style.margin = '2px 0 8px';
+      m.querySelector('[name="formaPagamento"]').closest('label').after(avisoCartao);
+      const atualizaAvisoCartao = () => {
+        const cartao = m.querySelector('[name="formaPagamento"]').value === 'cartao_credito';
+        avisoCartao.innerHTML = cartao
+          ? '<span style="color:var(--warn,#d29922)">⚠ No cartão de crédito a despesa entra no <b>Fluxo de caixa na data da compra</b> ' +
+            'e <b>não</b> gera conta a pagar — quem se paga depois é a fatura. Ao pagar a fatura, marque a conta como ' +
+            '“Fatura de cartão” para ela não lançar a saída outra vez.</span>'
+          : '';
+        mostra('tipoPagamento', !cartao);
+        mostra('vencimento', !cartao && m.querySelector('[name="tipoPagamento"]').value !== 'imediato');
+        mostra('parcelas', !cartao);
+      };
+      m.querySelector('[name="formaPagamento"]').addEventListener('change', atualizaAvisoCartao);
+      atualizaAvisoCartao();
     },
 
     /* Listas pesquisáveis do vínculo: cliente, OS ou pedido de venda. */

@@ -289,6 +289,36 @@ const App = {
     return dt.toLocaleDateString('pt-BR') + ' ' + dt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
   },
   today() { return new Date().toISOString().slice(0, 10); },
+  /* Forma de pagamento — como o dinheiro se moveu. NÃO é conta bancária:
+     tudo continua saindo e entrando da mesma conta da empresa. Serve para
+     conferir a fatura do cartão, separar o que foi no dinheiro, etc. */
+  FORMAS: [
+    ['pix', 'Pix'],
+    ['dinheiro', 'Dinheiro'],
+    ['cartao_credito', 'Cartão de crédito'],
+    ['cartao_debito', 'Cartão de débito'],
+    ['boleto', 'Boleto'],
+    ['transferencia', 'Transferência'],
+    ['cheque', 'Cheque'],
+    ['outro', 'Outra']
+  ],
+  /* Os módulos antigos gravavam 'cartao', 'link', 'ted'… */
+  FORMA_LEGADO: {
+    cartao: 'cartao_credito', credito: 'cartao_credito', debito: 'cartao_debito',
+    link: 'cartao_credito', ted: 'transferencia', doc: 'transferencia', especie: 'dinheiro'
+  },
+  formaChave(v) {
+    if (!v) return '';
+    const k = String(v).normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase().trim().replace(/[\s-]+/g, '_');
+    return this.FORMAS.some(f => f[0] === k) ? k : (this.FORMA_LEGADO[k] || '');
+  },
+  formaNome(v) {
+    const k = this.formaChave(v);
+    const f = this.FORMAS.find(x => x[0] === k);
+    return f ? f[1] : (v ? String(v) : '');
+  },
+
   MESES: ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho',
     'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'],
   /** 'YYYY-MM' → 'Setembro/2026'. O ISO é o que se compara; isto é para ler. */
