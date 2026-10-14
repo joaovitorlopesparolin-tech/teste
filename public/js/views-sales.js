@@ -310,6 +310,13 @@ App.registerView('sales', async (view, args) => {
       /* Parcelas de boleto baixadas em Contas a receber também são dinheiro
          desta venda: entram no "já recebido" e no saldo. */
       const noBoleto = (fin.parcelas || []).filter(x => (Number(x.recebido) || 0) > 0 || x.status === 'paga');
+      /* Cobrança própria (plano de boletos, cartão, link): o registro do
+         dinheiro é a PARCELA, em Contas a receber. Receber por aqui criaria
+         um segundo controle do mesmo valor — o servidor recusa. */
+      const propria = (fin.parcelas || []);
+      const temPropria = propria.length > 0;
+      const emAberto = propria.filter(x => (Number(x.valor) || 0) - (Number(x.recebido) || 0) > 0.005
+        && x.status !== 'cancelada');
       const m = App.modal(`
         <h2>Recebimentos — pedido nº ${s.numero}</h2>
         <table style="font-size:13.5px;margin-bottom:10px">
@@ -318,7 +325,9 @@ App.registerView('sales', async (view, args) => {
           <tr><td><b>Saldo em aberto</b></td><td class="num"><b class="${saldo > 0.005 ? 'neg' : 'pos'}">R$ ${App.money(saldo)}</b></td></tr>
         </table>
         <p class="small muted" style="margin:-4px 0 10px">Cadastrar a venda não lança dinheiro no caixa.
-        O Fluxo de caixa recebe o valor a partir daqui, quando o cliente paga — total ou em parte.</p>
+        O Fluxo de caixa recebe o valor quando o cliente paga — total ou em parte.<br>
+        Esta tela e <b>Contas a receber</b> mostram o mesmo recebimento: o que você registrar aqui
+        aparece lá no mesmo instante, e o contrário também.</p>
         ${noBoleto.length ? `<p class="small">Já baixado em Contas a receber:
           ${noBoleto.map(x => `${App.esc(x.descricao || 'parcela')} — R$ ${App.money((Number(x.recebido) || 0) || x.valor)}`).join(' · ')}</p>` : ''}
         ${lista.length ? App.table(lista.map((r, i) => Object.assign({ _i: i }, r)), [
@@ -327,6 +336,22 @@ App.registerView('sales', async (view, args) => {
           { h: 'Valor', class: 'num', cell: r => 'R$ ' + App.money(r.valor) },
           { h: '', class: 'num', cell: r => `<button class="btn sm ghost" onclick="Sales.desfazerRecebimento(${id}, ${r._i})" title="Estornar">↩</button>` }
         ]) : '<p class="small muted">Nenhum recebimento registrado ainda.</p>'}
+        ${temPropria ? `
+        <hr class="sep">
+        <p class="small">Este pedido tem <b>${propria.length} cobrança(s) própria(s)</b>
+        ${propria.length > 1 ? '(parcelas do plano)' : '(cartão / link)'} em <b>Contas a receber</b>.
+        A baixa é dada lá, parcela por parcela, para o dinheiro ser registrado uma vez só.</p>
+        ${App.table(propria, [
+          { h: 'Cobrança', cell: x => App.esc(x.descricao || 'parcela') },
+          { h: 'Vencimento', cell: x => App.date(x.vencimento) },
+          { h: 'Valor', class: 'num', cell: x => 'R$ ' + App.money(x.valor) },
+          { h: 'Recebido', class: 'num', cell: x => 'R$ ' + App.money(x.recebido || 0) },
+          { h: 'Situação', cell: x => App.badge(x.status) }
+        ])}
+        <div class="actions">
+          <button class="btn" onclick="App.closeModal()">Fechar</button>
+          ${emAberto.length ? `<button class="btn primary" onclick="App.closeModal();location.hash='#/receivables'">Ir para Contas a receber</button>` : ''}
+        </div>` : `
         ${saldo > 0.005 ? `
         <hr class="sep">
         <div class="formgrid">
@@ -341,7 +366,7 @@ App.registerView('sales', async (view, args) => {
         <div class="actions">
           <button class="btn" onclick="App.closeModal()">Fechar</button>
           ${saldo > 0.005 ? '<button class="btn primary" id="rc-ok">Registrar recebimento</button>' : ''}
-        </div>`, { wide: true });
+        </div>`}`, { wide: true });
       const btn = m.querySelector('#rc-ok');
       if (btn) btn.onclick = async () => {
         try {

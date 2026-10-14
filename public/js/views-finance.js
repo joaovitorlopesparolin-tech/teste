@@ -435,6 +435,22 @@ App.registerView('receivables', async (view) => {
   /* Descrição sem o sufixo "— parcela 2/4": é a referência do título. */
   const baseDesc = (r) => String(r.descricao || '').replace(/ — parcela \d+\/\d+$/, '');
 
+  /* A linha de uma venda sem parcelas é o ESPELHO do pedido: ela mostra o
+     valor da venda, quanto já entrou e a situação, mas o dinheiro mora nos
+     recebimentos do pedido. Receber aqui é o mesmo evento de "Registrar
+     recebimento" na venda — uma entrada de caixa só.
+     Cartão/link e parcelas de plano são cobrança própria: a baixa é na
+     própria linha. */
+  const FORMAS_PROPRIAS = ['cartao', 'link'];
+  const espelhoDaVenda = (r) => {
+    if (!r || r.refType !== 'sales') return false;
+    if (r.espelhoVenda === true || r.origem === 'saldo') return true;
+    if ((Number(r.parcelas) || 1) > 1) return false;
+    if (r.cobrancaPropria === true) return false;
+    if (FORMAS_PROPRIAS.includes(String(r.forma || '').toLowerCase())) return false;
+    return r.origem === 'venda';
+  };
+
   /* Vencimento crescente é a ordem que interessa aqui: o que vence antes
      precisa ser cobrado antes. */
   let ordemRecv = { chave: 'Vencimento', desc: false };
@@ -514,17 +530,25 @@ App.registerView('receivables', async (view) => {
 
   /* Os mesmos botões nas duas abas: o que se pode fazer com uma parcela não
      muda conforme a tela em que ela está sendo olhada. */
-  const acoesDa = (r) => `
+  const acoesDa = (r) => {
+    /* No espelho, cancelar e excluir não existem: a linha acompanha o
+       pedido e voltaria na próxima atualização. Quem decide isso é Vendas. */
+    const esp = espelhoDaVenda(r);
+    return `
     <button class="btn sm ghost" onclick="Recv.detalhe(${r.id})" title="Total, parcelas, recebido e saldo">🔍</button>
     ${aberto(r) ? `
       <button class="btn sm primary" onclick="Recv.receive(${r.id})">✓ Receber</button>
       <button class="btn sm ghost wa" onclick="Recv.wa(${r.id})" title="Cobrar no WhatsApp">✆</button>` : ''}
-    ${r.status !== 'cancelada' ? `<button class="btn sm ghost" onclick="Recv.edit(${r.id})" title="Editar parcela">✏️</button>` : ''}
+    ${r.status !== 'cancelada' ? `<button class="btn sm ghost" onclick="Recv.edit(${r.id})" title="${
+      esp ? 'Ajustar vencimento e observações' : 'Editar parcela'}">✏️</button>` : ''}
     ${r.parcelas > 1 && aberto(r) ? `
       <button class="btn sm ghost" onclick="Recv.replan(${r.id})" title="Recalcular as parcelas futuras deste grupo">🔁</button>` : ''}
-    ${aberto(r) ? `<button class="btn sm ghost" onclick="Recv.cancel(${r.id})" title="Cancelar (mantém o histórico)">✕</button>` : ''}
+    ${aberto(r) && !esp ? `<button class="btn sm ghost" onclick="Recv.cancel(${r.id})" title="Cancelar (mantém o histórico)">✕</button>` : ''}
     <button class="btn sm ghost" onclick="Recv.historico(${r.id})" title="Histórico da parcela">🕘</button>
-    <button class="btn sm ghost" onclick="Recv.excluir(${r.id})" title="Excluir lançamento">🗑️</button>`;
+    ${esp
+      ? `<button class="btn sm ghost" onclick="Recv.irAoPedido(${r.id})" title="Esta linha acompanha o pedido — abrir Vendas">🧾</button>`
+      : `<button class="btn sm ghost" onclick="Recv.excluir(${r.id})" title="Excluir lançamento">🗑️</button>`}`;
+  };
 
   render();
   document.getElementById('rf').addEventListener('change', render);
@@ -808,6 +832,24 @@ App.registerView('receivables', async (view) => {
       if (!r) return;
       const recebida = r.status === 'paga';
       const parcial = r.status === 'parcial';
+      const esp = espelhoDaVenda(r);
+      if (esp) {
+        /* Valor, recebido e situação vêm do pedido: editar aqui divergiria
+           do dinheiro registrado. O que faz sentido ajustar é o vencimento
+           (prazo prometido) e a observação. */
+        const mEsp = App.form(`✏️ Pedido nº ${String(r.descricao || '').replace(/\D+/g, '') || '—'} — prazo e observações`, [
+          { name: 'vencimento', label: 'Vencimento (prazo combinado)', type: 'date', value: r.vencimento, required: true },
+          { name: 'observacoes', label: 'Observações', type: 'textarea', value: r.observacoes || '', full: true }
+        ], async d => {
+          await App.put('/receivables/' + id, { vencimento: d.vencimento, observacoes: d.observacoes });
+          App.closeModal(); App.toast('Prazo atualizado', 'ok'); App.route();
+        });
+        mEsp.querySelector('.actions').insertAdjacentHTML('afterbegin',
+          `<p class="small muted" style="margin-right:auto">Valor (R$ ${App.money(r.valor)}),
+           recebido (R$ ${App.money(recebidoDe(r))}) e situação vêm do pedido em <b>Vendas</b> —
+           esta linha acompanha. Para mudar o valor, edite o pedido; para registrar pagamento, use ✓ Receber.</p>`);
+        return;
+      }
       /* Marcar "pago" à mão criaria dinheiro que não passou pelo caixa: a
          baixa é sempre pelo botão ✓ Receber. Aqui só se ativa ou cancela. */
       const podeStatus = App.can('receivables') && !recebida && !parcial;
@@ -929,6 +971,16 @@ App.registerView('receivables', async (view) => {
       App.waShare(`Cobrança — ${(c && c.nome) || 'cliente'}`, App.waPhoneOf(c), App.waMsg.charge(r, c));
     },
 
+    /* A linha-espelho pertence ao pedido: daqui se vai até ele. */
+    irAoPedido(id) {
+      const r = receivables.find(x => x.id === id);
+      const v = r && sales.find(x => x.id === r.refId);
+      App.toast(v
+        ? `Esta linha acompanha o pedido nº ${v.numero} — abrindo Vendas`
+        : 'Pedido não encontrado', v ? 'ok' : 'err');
+      if (v) location.hash = '#/sales';
+    },
+
     generate() {
       const m = App.form('Gerar boletos / parcelas automáticas', [
         { name: 'clienteId', label: 'Cliente', type: 'select', required: true, full: true,
@@ -1003,10 +1055,14 @@ App.registerView('receivables', async (view) => {
       const ajustar = () => { campoValor.style.display = m.querySelector('[name=parcialmente]').checked ? '' : 'none'; };
       m.querySelector('[name=parcialmente]').addEventListener('change', ajustar);
       ajustar();
+      const esp = espelhoDaVenda(r);
       m.querySelector('.actions').insertAdjacentHTML('afterbegin',
-        `<p class="small muted" style="margin-right:auto">Falta receber <b>R$ ${App.money(falta)}</b> desta parcela` +
+        `<p class="small muted" style="margin-right:auto">Falta receber <b>R$ ${App.money(falta)}</b> ${
+          esp ? 'deste pedido' : 'desta parcela'}` +
         (recebidoDe(r) ? ` (R$ ${App.money(recebidoDe(r))} já recebidos).` : '.') +
-        `<br>O valor entra no Fluxo de caixa na hora, sem lançamento duplicado.</p>`);
+        `<br>O valor entra no Fluxo de caixa na hora, sem lançamento duplicado.` +
+        (esp ? '<br>É o mesmo recebimento de <b>Vendas → 💵 Registrar recebimento</b>: fica gravado no pedido e aparece nas duas telas.' : '') +
+        '</p>');
     },
 
     async cancel(id) {
@@ -1031,7 +1087,7 @@ App.registerView('receivables', async (view) => {
          saldo e a baixa automática repetem dinheiro que já está nos
          recebimentos da venda/OS. Somar os dois fazia o painel mostrar
          recebido maior que o total e saldo negativo "a devolver". */
-      const espelho = (x) => x.origem === 'saldo' || x.auto === true;
+      const espelho = (x) => espelhoDaVenda(x) || x.auto === true;
       const recebidoParcelas = vivos.filter(x => !espelho(x)).reduce((s, x) => s + recebidoDe(x), 0);
 
       // Recebimentos parciais ficam guardados na venda / na OS.

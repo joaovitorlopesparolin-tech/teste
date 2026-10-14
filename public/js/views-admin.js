@@ -968,12 +968,197 @@ App.registerView('admin', async (view) => {
      recebimento de verdade via o mesmo dinheiro entrar duas vezes.
      A regra já foi corrigida; esta aba acerta o que ficou gravado antes.
      Primeiro mostra, depois corrige — e só o que for marcado.             */
+  /* ---------- B: vendas que não aparecem em Contas a receber ----------
+     Numa versão anterior, a linha da venda em Contas a receber era um
+     "saldo em aberto" que encolhia a cada recebimento e era APAGADA quando
+     a venda ficava quitada. Resultado: venda recebida em Vendas parecia não
+     existir em Contas a receber, e venda recebida em parte mostrava só o
+     resto, sem o total nem o recebido.
+
+     Religar reconstrói a linha a partir do que JÁ está registrado na venda.
+     Não cria recebimento e não encosta no Fluxo de caixa.                */
+  function renderVinculo(v) {
+    const t = v.totais;
+    const nada = !t.corrigir && !t.conferirManual && !t.orfas && !t.duplicidadesFinanceiras;
+    const linha = (x) => `
+      <tr>
+        <td><input type="checkbox" class="vc-item" data-id="${x.vendaId}" checked></td>
+        <td>nº ${x.pedido}<div class="small muted">${App.date(x.dataVenda)}</div></td>
+        <td>${App.esc(x.cliente)}${x.clienteCodigo ? `<div class="small muted mono">${App.esc(x.clienteCodigo)}</div>` : ''}</td>
+        <td>${App.esc(x.formaPagamento || '—')}${x.condicao ? `<div class="small muted">${App.esc(x.condicao)}</div>` : ''}</td>
+        <td class="num">R$ ${App.money(x.valorVenda)}</td>
+        <td class="num ${x.recebido ? 'pos' : 'muted'}">R$ ${App.money(x.recebido)}
+          ${x.recebimentos.length ? `<div class="small muted">${x.recebimentos.map(r =>
+            `${App.date(r.data)} R$ ${App.money(r.valor)}`).join('<br>')}</div>` : ''}</td>
+        <td class="num ${x.saldo > 0.005 ? 'neg' : 'pos'}">R$ ${App.money(x.saldo)}</td>
+        <td>${App.badge(x.situacaoEsperada)}</td>
+        <td><span class="small">${x.problemas.map(p => App.esc(p)).join('<br>')}</span></td>
+      </tr>`;
+
+    return `
+      <div class="section-title" style="margin-top:22px">B. VENDAS QUE NÃO APARECEM CERTAS EM CONTAS A RECEBER</div>
+      <div class="card">
+        <p class="small muted">Numa versão anterior, a linha da venda em Contas a receber encolhia a cada
+        recebimento e era <b>apagada</b> quando a venda ficava quitada. Por isso venda já recebida em
+        <b>Vendas</b> parecia não existir aqui, e venda recebida em parte mostrava só o resto.<br>
+        <b>A regra já foi corrigida</b>: agora a linha mostra o valor do pedido, o total recebido e a situação.
+        Religar reconstrói as linhas antigas a partir do que já está registrado na venda —
+        <b>sem criar recebimento e sem tocar no Fluxo de caixa</b>.</p>
+        <div class="grid cols-4" style="margin-top:12px">
+          <div class="card kpi"><div class="label">Vendas analisadas</div><div class="value">${v.vendasAnalisadas}</div></div>
+          <div class="card kpi"><div class="label">Recebimentos existentes</div><div class="value">${v.recebimentosExistentes}</div></div>
+          <div class="card kpi ${t.corrigir ? 'k-warn' : 'k-ok'}"><div class="label">Para religar</div>
+            <div class="value">${t.corrigir}</div>
+            <div class="hint">${t.comRecebimentoForaDeContasAReceber} com recebimento já registrado</div></div>
+          <div class="card kpi ${t.conferirManual || t.duplicidadesFinanceiras ? 'k-danger' : 'k-ok'}">
+            <div class="label">Revisão manual</div>
+            <div class="value">${t.conferirManual + t.duplicidadesFinanceiras}</div>
+            <div class="hint">o sistema não decide sozinho</div></div>
+        </div>
+        ${t.valorRecebidoAConciliar ? `<p class="small" style="margin-top:10px">Valor já recebido que passa a
+          aparecer em Contas a receber: <b>R$ ${App.money(t.valorRecebidoAConciliar)}</b> —
+          é conciliação de vínculo, <b>não</b> dinheiro novo.</p>` : ''}
+      </div>
+
+      ${nada ? `<div class="card"><div class="empty">✓ Todas as vendas estão refletidas corretamente em Contas a receber.</div></div>` : ''}
+
+      ${v.corrigir.length ? `
+      <div class="card">
+        <div class="tablewrap"><table>
+          <tr><th><input type="checkbox" id="vc-todos" checked></th><th>Pedido</th><th>Cliente</th><th>Forma</th>
+              <th class="num">Valor da venda</th><th class="num">Já recebido</th><th class="num">Saldo</th>
+              <th>Situação correta</th><th>O que está errado hoje</th></tr>
+          ${v.corrigir.map(linha).join('')}
+        </table></div>
+        <div class="toolbar" style="border:none;margin-top:10px">
+          <span class="small muted" id="vc-resumo"></span>
+          <div class="spacer"></div>
+          <button class="btn primary" onclick="Conf.religar()">✓ Religar o que está marcado</button>
+        </div>
+        <p class="small muted">Preserva valor da venda, valor recebido, data e forma de cada recebimento,
+        nº do pedido, saldo pendente, vencimento e observações. Cópia do banco gravada antes.</p>
+      </div>` : ''}
+
+      ${v.conferir.length ? `
+      <div class="card">
+        <div class="section-title muted" style="margin-top:0">PRECISAM DE REVISÃO MANUAL — O SISTEMA NÃO MEXE</div>
+        ${App.table(v.conferir, [
+          { h: 'Pedido', cell: x => `<b>nº ${x.pedido}</b>` },
+          { h: 'Cliente', cell: x => App.esc(x.cliente) },
+          { h: 'Valor', class: 'num', cell: x => 'R$ ' + App.money(x.valorVenda) },
+          { h: 'Recebido', class: 'num', cell: x => 'R$ ' + App.money(x.recebido) },
+          { h: 'Parcelas', class: 'num', cell: x => x.parcelas },
+          { h: 'Por quê', cell: x => `<span class="small">${App.esc(x.motivo)}</span>` }
+        ])}
+      </div>` : ''}
+
+      ${v.duplicadas.length ? `
+      <div class="card">
+        <div class="section-title" style="margin-top:0;color:var(--danger,#f85149)">DUPLICIDADE FINANCEIRA — CONFIRA ANTES</div>
+        <p class="small">Aqui o Fluxo de caixa tem mais entrada do que a venda registra como recebido.
+        Isto é dinheiro, não vínculo: confira na seção <b>A</b> acima ou estorne o recebimento no pedido.</p>
+        ${App.table(v.duplicadas, [
+          { h: 'Pedido', cell: x => `<b>nº ${x.pedido}</b>` },
+          { h: 'Recebido na venda', class: 'num', cell: x => x.somaRecebida != null ? 'R$ ' + App.money(x.somaRecebida) : '—' },
+          { h: 'Soma no caixa', class: 'num', cell: x => x.somaCaixa != null ? 'R$ ' + App.money(x.somaCaixa) : '—' },
+          { h: 'Excedente', class: 'num', cell: x => x.excedente ? `<b class="neg">R$ ${App.money(x.excedente)}</b>` : '—' },
+          { h: 'Entradas', cell: x => x.entradas.map(e =>
+              `<span class="small">${App.date(e.data)} — R$ ${App.money(e.valor)}</span>`).join('<br>') }
+        ])}
+      </div>` : ''}
+
+      ${v.caixaOrfa.length ? `
+      <div class="card">
+        <div class="section-title muted" style="margin-top:0">ENTRADAS DE CAIXA DE VENDA QUE NÃO EXISTE MAIS</div>
+        <p class="small">Dinheiro lançado no Fluxo de caixa apontando para um pedido apagado.
+        Não é removido por aqui — confira cada um no Fluxo de caixa.</p>
+        ${App.table(v.caixaOrfa, [
+          { h: 'Data', cell: c => App.date(c.data) },
+          { h: 'Descrição', cell: c => `<span class="small">${App.esc(c.descricao)}</span>` },
+          { h: 'Valor', class: 'num', cell: c => 'R$ ' + App.money(c.valor) }
+        ])}
+      </div>` : ''}
+
+      ${v.orfas.length ? `
+      <div class="card">
+        <div class="section-title muted" style="margin-top:0">LINHAS SEM VÍNCULO (A VENDA NÃO EXISTE MAIS)</div>
+        <div class="tablewrap"><table>
+          <tr><th><input type="checkbox" id="vo-todos"></th><th>Descrição</th><th class="num">Valor</th>
+              <th class="num">Recebido</th><th>Situação</th><th>Caixa ligado</th></tr>
+          ${v.orfas.map(o => `<tr>
+            <td><input type="checkbox" class="vo-item" data-id="${o.recebivelId}" ${o.temCaixa ? 'disabled' : ''}></td>
+            <td><span class="small">${App.esc(o.descricao)}</span></td>
+            <td class="num">R$ ${App.money(o.valor)}</td>
+            <td class="num">R$ ${App.money(o.recebido)}</td>
+            <td>${App.badge(o.status)}</td>
+            <td>${o.temCaixa
+              ? '<span class="badge warn">tem entrada de caixa — não dá para remover aqui</span>'
+              : '<span class="muted small">nenhuma</span>'}</td></tr>`).join('')}
+        </table></div>
+        <p class="small muted">Linha com entrada de caixa ligada não é removida por aqui: o dinheiro precisa ser
+        tratado primeiro, na seção A ou no próprio lançamento.</p>
+      </div>` : ''}`;
+  }
+
+  function montarVinculo(v, el) {
+    const marcados = (classe) => [...el.querySelectorAll('.' + classe)]
+      .filter(c => c.checked && !c.disabled).map(c => Number(c.dataset.id));
+    const resumo = () => {
+      const r = document.getElementById('vc-resumo');
+      if (!r) return;
+      const sel = marcados('vc-item');
+      const soma = v.corrigir.filter(x => sel.includes(x.vendaId)).reduce((s, x) => s + x.recebido, 0);
+      r.innerHTML = `Marcadas: <b>${sel.length}</b> venda(s) · R$ ${App.money(soma)} já recebidos passam a aparecer`;
+    };
+    const todos = document.getElementById('vc-todos');
+    if (todos) todos.addEventListener('change', () => {
+      el.querySelectorAll('.vc-item').forEach(c => { c.checked = todos.checked; });
+      resumo();
+    });
+    const todosOrfas = document.getElementById('vo-todos');
+    if (todosOrfas) todosOrfas.addEventListener('change', () => {
+      el.querySelectorAll('.vo-item:not([disabled])').forEach(c => { c.checked = todosOrfas.checked; });
+    });
+    el.querySelectorAll('.vc-item').forEach(c => c.addEventListener('change', resumo));
+    resumo();
+
+    window.Conf.religar = async () => {
+      const corpo = { vendas: marcados('vc-item'), orfas: marcados('vo-item') };
+      if (!corpo.vendas.length && !corpo.orfas.length) {
+        return App.toast('Marque ao menos uma venda para religar.', 'err');
+      }
+      const soma = v.corrigir.filter(x => corpo.vendas.includes(x.vendaId)).reduce((s, x) => s + x.recebido, 0);
+      if (!await App.confirm(
+        'Confirma religar o histórico?<br><br>' +
+        `• <b>${corpo.vendas.length}</b> venda(s) passam a mostrar em Contas a receber o valor do pedido, ` +
+        `o total recebido e a situação (R$ ${App.money(soma)} já recebidos);<br>` +
+        (corpo.orfas.length ? `• <b>${corpo.orfas.length}</b> linha(s) sem vínculo e sem caixa serão removidas;<br>` : '') +
+        '<br><b>Nenhum recebimento é criado e o Fluxo de caixa não é tocado.</b><br>' +
+        '<span class="small">Cópia do banco gravada antes. Valor da venda, valor recebido, datas, formas, ' +
+        'nº do pedido, vencimento e observações são preservados.</span>',
+        { html: true })) return;
+      try {
+        const out = await App.api('POST', '/auditoria/vinculo-vendas/corrigir', corpo, { 'X-Confirmar': 'sim' });
+        App.toast(`Religado — ${out.religadas.length} venda(s)` +
+          ((out.orfasRemovidas || []).length ? `, ${out.orfasRemovidas.length} linha(s) órfã(s) removida(s)` : '') +
+          (out.caixaIntacto ? ' · caixa intacto ✓' : ' · ATENÇÃO: o saldo do caixa mudou'),
+          out.caixaIntacto ? 'ok' : 'err');
+        renderConferencia(el);
+      } catch (e) { App.toast(e.message, 'err'); }
+    };
+  }
+
   async function renderConferencia(el) {
-    el.innerHTML = '<div class="card"><div class="empty">Conferindo o Fluxo de caixa…</div></div>';
-    let a;
-    try { a = await App.get('/auditoria/vendas-duplicadas'); }
+    el.innerHTML = '<div class="card"><div class="empty">Conferindo o financeiro…</div></div>';
+    let a, v;
+    try {
+      [a, v] = await Promise.all([
+        App.get('/auditoria/vendas-duplicadas'),
+        App.get('/auditoria/vinculo-vendas')
+      ]);
+    }
     catch (e) { el.innerHTML = `<div class="card"><div class="empty">Não foi possível conferir: ${App.esc(e.message)}</div></div>`; return; }
-    window.Conf = { dados: a };
+    window.Conf = { dados: a, vinculo: v };
 
     const nada = !a.duplicadas.length && !a.semRegistro.length && !a.espelhos.length && !a.osConferir.length;
     const linhaCaso = (x) => `
@@ -994,7 +1179,7 @@ App.registerView('admin', async (view) => {
 
     el.innerHTML = `
       <div class="card">
-        <h3>CONFERÊNCIA DO FLUXO DE CAIXA — ENTRADAS DE VENDA EM DOBRO</h3>
+        <h3>A. CONFERÊNCIA DO FLUXO DE CAIXA — ENTRADAS DE VENDA EM DOBRO</h3>
         <p class="small muted">Durante um período, cadastrar uma venda em <b>Pix</b> ou <b>dinheiro</b> na condição
         “à vista” lançava sozinha o valor no Fluxo de caixa, com a descrição <b>“Venda à vista”</b>.
         Quem depois fazia o caminho certo — <b>Registrar recebimento → entrada de saldo</b> — via o mesmo
@@ -1106,7 +1291,11 @@ App.registerView('admin', async (view) => {
         </div>
         <p class="small muted">Uma cópia do banco é gravada antes de qualquer alteração. Venda, cliente e
         recebimento real nunca são apagados.</p>
-      </div>` : ''}`;
+      </div>` : ''}
+
+      ${renderVinculo(v)}`;
+
+    montarVinculo(v, el);
 
     const marcarTodos = (idTodos, grupo) => {
       const t = document.getElementById(idTodos);

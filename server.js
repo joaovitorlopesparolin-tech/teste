@@ -2930,6 +2930,9 @@ function gerarFinanceiroDaVenda(sale, cliente, user) {
     db.insert('receivables', {
       clienteId: cliente.id, origem: 'venda', refType: 'sales', refId: sale.id,
       descricao: `Pedido nº ${numero} — ${pagamento.forma} ${pagamento.parcelas || 1}x (líquido de taxa)`,
+      /* Cobrança própria: a baixa é dada nesta linha, pelo líquido que a
+         operadora deposita — não é espelho do valor cheio do pedido. */
+      cobrancaPropria: true,
       forma: pagamento.forma, valor: pagamento.valorLiquido,
       vencimento: pagamento.dataPrevRecebimento || domain.addDays(sale.dataPedido, 30),
       status: 'aberto', parcela: 1, parcelas: 1, taxa: pagamento.taxa
@@ -2943,17 +2946,11 @@ function gerarFinanceiroDaVenda(sale, cliente, user) {
       });
     }
   } else {
-    /* Todo o resto — Pix, dinheiro, boleto/cheque à vista, outro — vira uma
-       cobrança em aberto. À vista só muda o vencimento: é para hoje. */
-    const aVista = pagamento.condicao !== 'parcelado';
-    db.insert('receivables', {
-      clienteId: cliente.id, origem: 'venda', refType: 'sales', refId: sale.id,
-      descricao: `Pedido nº ${numero}` + (aVista ? ` — à vista (${pagamento.forma || 'a combinar'})` : ''),
-      forma: pagamento.forma || 'outro',
-      valor: valorTotal,
-      vencimento: pagamento.vencimento || (aVista ? sale.dataPedido : domain.addDays(sale.dataPedido, 7)),
-      status: 'aberto', parcela: 1, parcelas: 1
-    });
+    /* Todo o resto — Pix, dinheiro, boleto/cheque à vista, outro — vira UMA
+       linha em Contas a receber espelhando a venda: valor devido, quanto já
+       entrou e a situação. Quem mantém essa linha em dia é uma função só,
+       usada também a cada recebimento, edição e cancelamento. */
+    sincronizarReceberDaVenda(sale, { forma: pagamento.forma });
   }
 }
 
@@ -2965,11 +2962,51 @@ function gerarFinanceiroDaVenda(sale, cliente, user) {
      2. baixa de uma parcela em Contas a receber → recebido da parcela
    Os dois são somados aqui, uma vez cada. Nenhum outro lugar cria
    recebimento de venda — é isso que impede o valor de contar em dobro.   */
+/* A linha da venda em Contas a receber é um ESPELHO: ela mostra o valor da
+   venda, quanto já entrou e quanto falta, mas o dinheiro não mora nela —
+   mora em sale.recebimentos. Por isso ela nunca entra na soma do recebido:
+   somar as duas contaria o mesmo dinheiro duas vezes.
+
+   O caso do boleto parcelado é outro: ali cada parcela é um registro
+   financeiro de verdade, com o próprio recebimento, e é ela que soma. */
+/* Cartão e link têm cobrança própria: o valor a receber é o líquido que a
+   operadora deposita, e a baixa é dada naquela linha. */
+const FORMAS_COBRANCA_PROPRIA = ['cartao', 'link'];
+
+/**
+ * A linha da venda em Contas a receber é ESPELHO ou COBRANÇA PRÓPRIA?
+ *
+ *   ESPELHO           projeta a venda: valor do pedido, quanto já entrou e a
+ *                     situação. O dinheiro mora em sale.recebimentos.
+ *   COBRANÇA PRÓPRIA  guarda o próprio recebimento. É o caso das parcelas de
+ *                     um plano de boleto/cheque e da cobrança de cartão/link.
+ *
+ * Linha única e antiga (sem marca) de uma venda conta como espelho: é assim
+ * que o histórico é religado em cima do registro que já existe, mantendo id,
+ * vencimento e observações.
+ */
+function ehEspelhoDaVenda(r) {
+  if (!r || r.refType !== 'sales') return false;
+  if (r.espelhoVenda === true || r.origem === 'saldo') return true;
+  if ((Number(r.parcelas) || 1) > 1) return false;          // parcela de plano
+  if (r.cobrancaPropria === true) return false;             // marcada na origem
+  if (FORMAS_COBRANCA_PROPRIA.includes(String(r.forma || '').toLowerCase())) return false;
+  return r.origem === 'venda';
+}
+
+/** Cobranças próprias de uma venda — onde o dinheiro mora, quando é o caso. */
+function parcelasDaVenda(saleId) {
+  return db.all('receivables').filter(r =>
+    r.refType === 'sales' && r.refId === saleId && !ehEspelhoDaVenda(r));
+}
+/** A venda tem cobrança própria (parcelas ou cartão)? Então não tem espelho. */
+function vendaComPlano(saleId) {
+  return parcelasDaVenda(saleId).length > 0;
+}
+
 function recebidoDaVenda(sale) {
   const naVenda = (sale.recebimentos || []).reduce((s, r) => s + (Number(r.valor) || 0), 0);
-  const nasParcelas = db.all('receivables')
-    .filter(r => r.refType === 'sales' && r.refId === sale.id && r.origem !== 'saldo')
-    .reduce((s, r) => s + recebidoDaParcela(r), 0);
+  const nasParcelas = parcelasDaVenda(sale.id).reduce((s, r) => s + recebidoDaParcela(r), 0);
   return Math.round((naVenda + nasParcelas) * 100) / 100;
 }
 
@@ -3235,30 +3272,71 @@ route('DELETE', '/api/sales/:id', 'sales', async (req, res, user, params) => {
  * "recebido" maior que o total e saldo negativo ("a devolver ao cliente").
  * O que foi recebido continua registrado na venda e no Fluxo de caixa.
  */
-function ajustarSaldoDaVenda(sale, { data, forma, vencimentoSaldo } = {}) {
+/**
+ * Põe a linha da venda em Contas a receber em dia com a venda.
+ *
+ * Esta linha é o ESPELHO da venda: valor da venda, quanto já entrou, quanto
+ * falta e a situação (a vencer / parcialmente pago / pago). Ela não guarda
+ * dinheiro — projeta o que está registrado na venda. Por isso:
+ *   - nunca encolhe: o valor continua sendo o valor da venda;
+ *   - nunca desaparece quando a venda é quitada — fica como "Pago";
+ *   - sincronizar duas vezes não muda nada e não cria lançamento algum.
+ *
+ * Antes daqui a linha era um "saldo em aberto" que encolhia a cada
+ * recebimento e era APAGADA ao quitar. Era por isso que uma venda recebida
+ * em Vendas parecia não existir em Contas a receber, e uma venda recebida
+ * em parte mostrava só o resto, sem o total nem o quanto já tinha entrado.
+ *
+ * Venda com plano de parcelas não tem espelho: lá cada parcela é o registro
+ * financeiro, com o próprio recebimento.
+ */
+function sincronizarReceberDaVenda(sale, { data, forma, vencimentoSaldo } = {}) {
   const atual = db.get('sales', sale.id) || sale;
-  const novoSaldo = resumoFinanceiroVenda(atual).saldo;
-  const saldoRec = db.all('receivables').find(r =>
-    r.refType === 'sales' && r.refId === sale.id && r.origem === 'saldo');
-  if (novoSaldo > 0.005) {
-    const vencimento = vencimentoSaldo || (saldoRec && saldoRec.vencimento)
-      || atual.previsaoEntrega || domain.addDays(data || domain.today(), 30);
-    if (saldoRec) {
-      db.update('receivables', saldoRec.id, {
-        valor: novoSaldo, vencimento, status: 'aberto', dataRecebimento: null, recebido: 0
-      });
-    } else {
-      db.insert('receivables', {
-        clienteId: atual.clienteId, origem: 'saldo', refType: 'sales', refId: atual.id,
-        descricao: `Pedido nº ${atual.numero} — saldo em aberto`,
-        forma: forma || (atual.pagamento || {}).forma || 'pix', valor: novoSaldo,
-        vencimento, status: 'aberto', parcela: 1, parcelas: 1
-      });
-    }
-  } else if (saldoRec) {
-    db.remove('receivables', saldoRec.id);
+  const espelho = db.all('receivables').find(r =>
+    r.refType === 'sales' && r.refId === atual.id && ehEspelhoDaVenda(r));
+
+  // Com plano de parcelas, as parcelas mandam: o espelho sai de cena.
+  if (vendaComPlano(atual.id)) {
+    if (espelho) db.remove('receivables', espelho.id);
+    return resumoFinanceiroVenda(atual).saldo;
   }
-  return novoSaldo;
+
+  const { total, recebido, saldo } = resumoFinanceiroVenda(atual);
+  const cancelada = atual.status === 'cancelado' || atual.status === 'cancelada';
+  const ultimo = (atual.recebimentos || []).slice(-1)[0];
+  const situacao = cancelada ? 'cancelada'
+    : saldo <= 0.005 && total > 0 ? 'paga'
+      : recebido > 0.005 ? 'parcial' : 'aberto';
+
+  const dados = {
+    clienteId: atual.clienteId, origem: 'venda', refType: 'sales', refId: atual.id,
+    espelhoVenda: true,
+    descricao: `Pedido nº ${atual.numero}`,
+    forma: forma || (atual.pagamento || {}).forma || 'pix',
+    valor: total,
+    recebido,
+    status: situacao,
+    dataRecebimento: ultimo ? ultimo.data : null,
+    parcela: 1, parcelas: 1
+  };
+  if (espelho) {
+    // Mantém o vencimento que já estava lá (alguém pode ter ajustado).
+    dados.vencimento = vencimentoSaldo || espelho.vencimento
+      || atual.previsaoEntrega || atual.dataPedido || domain.today();
+    db.update('receivables', espelho.id, dados);
+  } else {
+    dados.vencimento = vencimentoSaldo
+      || (atual.pagamento || {}).vencimento
+      || ((atual.pagamento || {}).condicao !== 'parcelado' ? atual.dataPedido : '')
+      || atual.previsaoEntrega || domain.addDays(data || atual.dataPedido || domain.today(), 7);
+    db.insert('receivables', dados);
+  }
+  return saldo;
+}
+
+/* Nome antigo mantido para as chamadas que já existem. */
+function ajustarSaldoDaVenda(sale, opcoes = {}) {
+  return sincronizarReceberDaVenda(sale, opcoes);
 }
 
 /**
@@ -3267,12 +3345,15 @@ function ajustarSaldoDaVenda(sale, { data, forma, vencimentoSaldo } = {}) {
  * A cobrança cheia em aberto dá lugar ao saldo.
  */
 function reequilibrarReceberDaVenda(sale, opcoes = {}) {
-  for (const r of db.all('receivables').filter(r =>
-    r.refType === 'sales' && r.refId === sale.id && r.origem !== 'saldo' &&
-    r.status !== 'paga' && r.status !== 'parcial')) {
-    db.remove('receivables', r.id);
-  }
-  return ajustarSaldoDaVenda(sale, opcoes);
+  /* Limpa cobrança antiga em aberto que não é parcela nem espelho — resto
+     de versões anteriores. Parcela com dinheiro dentro nunca é tocada. */
+  /* Mais de um espelho para a mesma venda (resto de versões anteriores):
+     fica o mais antigo, que é o que carrega vencimento e observações. */
+  const espelhos = db.all('receivables')
+    .filter(r => r.refType === 'sales' && r.refId === sale.id && ehEspelhoDaVenda(r))
+    .sort((a, b) => a.id - b.id);
+  for (const extra of espelhos.slice(1)) db.remove('receivables', extra.id);
+  return sincronizarReceberDaVenda(sale, opcoes);
 }
 
 route('POST', '/api/sales/:id/receive', 'receivables', async (req, res, user, params) => {
@@ -3284,6 +3365,14 @@ route('POST', '/api/sales/:id/receive', 'receivables', async (req, res, user, pa
   /* O saldo considera TUDO que já entrou desta venda — recebimentos
      lançados aqui e parcelas baixadas em Contas a receber. É esta conta que
      impede receber duas vezes o mesmo valor. */
+  /* Com plano de boleto, o registro financeiro é a PARCELA. Receber aqui
+     criaria um segundo controle do mesmo dinheiro. */
+  if (vendaComPlano(sale.id) && !b.confirmarPlano) {
+    const n = parcelasDaVenda(sale.id).length;
+    return bad(res, `Este pedido tem ${n} cobrança(s) própria(s) em Contas a receber ` +
+      `(${n > 1 ? 'parcelas do plano' : 'cartão/link'}). Dê a baixa lá — em Contas a receber → Boletos a receber — ` +
+      'para o dinheiro ser registrado uma vez só.');
+  }
   const resumo = resumoFinanceiroVenda(sale);
   if (valor > resumo.saldo + 0.005) {
     return bad(res, `Desta venda já entraram ${brl(resumo.recebido)} de ${brl(resumo.total)}. ` +
@@ -3301,14 +3390,20 @@ route('POST', '/api/sales/:id/receive', 'receivables', async (req, res, user, pa
       precisaConfirmar: true
     });
   }
-  const rec = { valor, data, forma: b.forma || 'pix', obs: b.obs || '', por: user.name };
+  /* Cada recebimento ganha um identificador próprio, e a entrada de caixa
+     que ele gera carrega esse identificador. É isso que permite estornar e
+     reconciliar pelo vínculo, em vez de procurar por valor e data — e o que
+     garante que o mesmo recebimento nunca gere duas entradas. */
+  const recId = db.nextNumber('recebimentoVenda', 1);
+  const rec = { recId, valor, data, forma: b.forma || 'pix', obs: b.obs || '', por: user.name };
   const lista = (sale.recebimentos || []).concat([rec]);
   db.update('sales', sale.id, { recebimentos: lista });
   db.insert('cashflow', {
     tipo: 'entrada', valor, data, conta: b.conta || 'principal',
     formaPagamento: normalizaForma(rec.forma) || 'outro',
-    categoria: 'venda_cabecote', origem: `Pedido nº ${sale.numero} — recebimento parcial`,
-    documento: '', refType: 'sales', refId: sale.id, descricao: `Recebimento (${rec.forma})`
+    categoria: 'venda_cabecote', origem: `Pedido nº ${sale.numero} — recebimento`,
+    documento: '', refType: 'sales', refId: sale.id, recebimentoId: recId,
+    descricao: `Recebimento (${rec.forma})`
   });
 
   const novoSaldo = reequilibrarReceberDaVenda(sale,
@@ -3328,9 +3423,14 @@ route('POST', '/api/sales/:id/unreceive', 'receivables', async (req, res, user, 
   if (!lista[idx]) return bad(res, 'Recebimento não encontrado.');
   const [removido] = lista.splice(idx, 1);
   db.update('sales', sale.id, { recebimentos: lista });
-  // Estorna a entrada correspondente no caixa (mesma data e valor).
+  /* Estorna a entrada daquele recebimento pelo identificador. Recebimentos
+     antigos (sem identificador) caem no casamento por valor e data. */
   const cx = db.all('cashflow').find(c => c.refType === 'sales' && c.refId === sale.id &&
-    c.valor === removido.valor && c.data === removido.data && c.tipo === 'entrada');
+    c.tipo === 'entrada' && removido.recId && c.recebimentoId === removido.recId)
+    || db.all('cashflow').find(c => c.refType === 'sales' && c.refId === sale.id &&
+      c.tipo === 'entrada' && !c.recebimentoId &&
+      Math.round((Number(c.valor) || 0) * 100) === Math.round((Number(removido.valor) || 0) * 100) &&
+      c.data === removido.data);
   if (cx) db.remove('cashflow', cx.id);
   // A dívida volta para Contas a receber pelo que passou a faltar.
   const novoSaldo = ajustarSaldoDaVenda(sale, { data: removido.data });
@@ -3342,11 +3442,18 @@ route('POST', '/api/sales/:id/unreceive', 'receivables', async (req, res, user, 
 route('GET', '/api/sales/:id/financeiro', 'receivables', async (req, res, user, params) => {
   const sale = db.get('sales', params.id);
   if (!sale) return notFound(res);
-  const parcelas = withOverdue(db.all('receivables')
+  /* "parcelas" são as cobranças PRÓPRIAS (boleto parcelado, cartão, link):
+     cada uma tem baixa em Contas a receber. A linha espelho da venda não é
+     cobrança — é o reflexo do pedido — e vai à parte para a tela não somar
+     o mesmo dinheiro duas vezes. */
+  const doPedido = withOverdue(db.all('receivables')
     .filter(r => r.refType === 'sales' && r.refId === sale.id))
     .sort((a, b) => String(a.vencimento || '').localeCompare(String(b.vencimento || '')));
+  const parcelas = doPedido.filter(r => !ehEspelhoDaVenda(r));
+  const espelho = doPedido.find(r => ehEspelhoDaVenda(r)) || null;
   ok(res, Object.assign(resumoFinanceiroVenda(sale), {
-    pagamento: sale.pagamento || {}, recebimentos: sale.recebimentos || [], parcelas
+    pagamento: sale.pagamento || {}, recebimentos: sale.recebimentos || [],
+    parcelas, espelho, cobrancaPropria: parcelas.length > 0
   }));
 });
 
@@ -5162,6 +5269,22 @@ route('PUT', '/api/receivables/:id', 'receivables', async (req, res, user, param
   if (!antes) return notFound(res);
   const b = await readBody(req);
 
+  /* No espelho da venda, valor, recebido e situação vêm do pedido: editar
+     aqui seria desfeito na próxima sincronização e, pior, faria a tela
+     divergir do dinheiro registrado. Vencimento e observação, sim — é onde
+     se anota "o cliente prometeu pagar dia 20". */
+  if (ehEspelhoDaVenda(antes)) {
+    const pedido = (db.get('sales', antes.refId) || {}).numero || antes.refId;
+    if (b.valor !== undefined && Math.round(Number(b.valor) * 100) !== Math.round((Number(antes.valor) || 0) * 100)) {
+      return bad(res, `O valor desta linha é o valor do pedido nº ${pedido}. Altere o pedido em Vendas — ` +
+        'Contas a receber acompanha sozinho.');
+    }
+    if (b.status !== undefined && b.status !== antes.status) {
+      return bad(res, 'A situação desta linha vem dos recebimentos do pedido. Use ✓ Receber (aqui ou no pedido) ' +
+        'para registrar o pagamento — ela passa a Pago sozinha.');
+    }
+  }
+
   const patch = {};
   for (const k of ['descricao', 'forma', 'vencimento', 'observacoes']) {
     if (b[k] !== undefined) patch[k] = b[k];
@@ -5193,7 +5316,11 @@ route('PUT', '/api/receivables/:id', 'receivables', async (req, res, user, param
   if (!mudancas.length) return ok(res, antes);
 
   const mexeuDinheiro = patch.valor !== undefined && patch.valor !== antes.valor;
-  const temMovimento = antes.status === 'paga' || antes.status === 'parcial';
+  /* No espelho da venda, valor e situação já são barrados acima: o que
+     sobra (vencimento, observação) não mexe em dinheiro e não precisa de
+     confirmação. */
+  const temMovimento = !ehEspelhoDaVenda(antes) &&
+    (antes.status === 'paga' || antes.status === 'parcial');
   if (temMovimento) {
     if (!b.confirmar) {
       return send(res, 409, {
@@ -5243,6 +5370,11 @@ route('PUT', '/api/receivables/:id', 'receivables', async (req, res, user, param
 route('DELETE', '/api/receivables/:id', 'receivables', async (req, res, user, params) => {
   const r = db.get('receivables', params.id);
   if (!r) return notFound(res);
+  if (ehEspelhoDaVenda(r)) {
+    const pedido = (db.get('sales', r.refId) || {}).numero || r.refId;
+    return bad(res, `Esta linha é o espelho do pedido nº ${pedido} e voltaria na próxima atualização. ` +
+      'Para tirar a cobrança, cancele ou exclua o pedido em Vendas — o recebimento já registrado é preservado.');
+  }
   const caixa = db.all('cashflow').filter(c => c.refType === 'receivables' && c.refId === r.id);
   const recebida = r.status === 'paga' || caixa.length > 0;
 
@@ -5330,8 +5462,66 @@ route('POST', '/api/receivables/:id/receive', 'receivables', async (req, res, us
   const b = await readBody(req);
   const r = db.get('receivables', params.id);
   if (!r) return notFound(res);
-  if (r.status === 'paga') return bad(res, 'Parcela já recebida');
-  if (r.status === 'cancelada') return bad(res, 'Parcela cancelada — não é possível receber.');
+  if (r.status === 'paga') {
+    return bad(res, ehEspelhoDaVenda(r)
+      ? `O pedido nº ${(db.get('sales', r.refId) || {}).numero || r.refId} já está totalmente recebido — não há saldo a receber.`
+      : 'Parcela já recebida');
+  }
+  if (r.status === 'cancelada') {
+    return bad(res, ehEspelhoDaVenda(r)
+      ? 'O pedido desta cobrança está cancelado — não é possível receber.'
+      : 'Parcela cancelada — não é possível receber.');
+  }
+
+  /* A linha da venda em Contas a receber é o espelho da venda. Receber por
+     aqui é o MESMO evento de "Registrar recebimento" no pedido: o dinheiro
+     é gravado na venda, gera uma entrada de caixa só, e o espelho se
+     atualiza. As duas telas trabalham sobre o mesmo registro financeiro. */
+  if (ehEspelhoDaVenda(r)) {
+    const sale = db.get('sales', r.refId);
+    if (!sale) return bad(res, 'O pedido desta cobrança não existe mais.');
+    const resumo = resumoFinanceiroVenda(sale);
+    const informadoEsp = b.valor === undefined || b.valor === null || b.valor === '';
+    const valorEsp = informadoEsp ? resumo.saldo : Math.round(Number(b.valor) * 100) / 100;
+    if (!(valorEsp > 0)) return bad(res, 'Informe um valor de recebimento maior que zero.');
+    if (valorEsp > resumo.saldo + 0.005) {
+      return bad(res, `Deste pedido já entraram ${brl(resumo.recebido)} de ${brl(resumo.total)}. ` +
+        `Falta receber ${brl(resumo.saldo)} — não dá para lançar ${brl(valorEsp)}.`);
+    }
+    const dataEsp = b.data || domain.today();
+    const igual = (sale.recebimentos || []).find(x =>
+      Math.round((Number(x.valor) || 0) * 100) === Math.round(valorEsp * 100) && x.data === dataEsp);
+    if (igual && !b.confirmar) {
+      return send(res, 409, {
+        error: `Já existe um recebimento de ${brl(valorEsp)} em ${dataBR(dataEsp)} neste pedido. ` +
+               'Lançar de novo somaria o mesmo dinheiro duas vezes. O cliente pagou duas vezes esse valor?',
+        precisaConfirmar: true
+      });
+    }
+    const recId = db.nextNumber('recebimentoVenda', 1);
+    const forma = b.forma || r.forma || (sale.pagamento || {}).forma || 'pix';
+    db.update('sales', sale.id, {
+      recebimentos: (sale.recebimentos || []).concat([{
+        recId, valor: valorEsp, data: dataEsp, forma,
+        obs: b.obs || 'Recebido pela tela de Contas a receber', por: user.name
+      }])
+    });
+    db.insert('cashflow', {
+      tipo: 'entrada', valor: valorEsp, data: dataEsp, conta: b.conta || 'principal',
+      formaPagamento: normalizaForma(forma) || 'outro',
+      categoria: 'venda_cabecote', origem: `Pedido nº ${sale.numero} — recebimento`,
+      documento: '', refType: 'sales', refId: sale.id, recebimentoId: recId,
+      descricao: `Recebimento (${forma})`
+    });
+    const saldoEsp = sincronizarReceberDaVenda(db.get('sales', sale.id), { forma });
+    audit(user, 'recebeu', 'sales', sale.id,
+      `Pedido nº ${sale.numero} — recebido ${brl(valorEsp)} em ${dataBR(dataEsp)} (${forma}) ` +
+      `pela tela de Contas a receber; saldo ${brl(saldoEsp)}`);
+    return ok(res, {
+      ok: true, valor: valorEsp, recebido: Math.round((resumo.recebido + valorEsp) * 100) / 100,
+      saldo: saldoEsp, quitada: saldoEsp <= 0.005, pedido: sale.numero
+    });
+  }
 
   const data = b.data || domain.today();
   const total = Math.round((Number(r.valor) || 0) * 100) / 100;
@@ -5377,6 +5567,11 @@ route('POST', '/api/receivables/:id/receive', 'receivables', async (req, res, us
 route('POST', '/api/receivables/:id/cancel', 'receivables', async (req, res, user, params) => {
   const r = db.get('receivables', params.id);
   if (!r) return notFound(res);
+  if (ehEspelhoDaVenda(r)) {
+    return bad(res, `Esta linha é o espelho do pedido nº ${(db.get('sales', r.refId) || {}).numero || r.refId} — ` +
+      'ela acompanha a venda. Para tirá-la da cobrança, cancele o pedido em Vendas: ' +
+      'as parcelas, a produção e o estoque são tratados junto.');
+  }
   db.update('receivables', r.id, { status: 'cancelada' });
   audit(user, 'cancelou', 'receivables', r.id, r.descricao);
   ok(res, { ok: true });
@@ -6200,6 +6395,263 @@ function auditarDuplicidadeVendas() {
     }
   };
 }
+
+/* =====================================================================
+   AUDITORIA: vínculo entre Vendas, Recebimentos e Contas a receber
+   ---------------------------------------------------------------------
+   Contas a receber mostra UMA linha por venda sem plano de parcelas, com o
+   valor do pedido, quanto já entrou e a situação. Numa versão anterior essa
+   linha era um "saldo em aberto" que encolhia a cada recebimento e era
+   APAGADA quando a venda ficava quitada — então venda recebida em Vendas
+   parecia não existir em Contas a receber, e venda recebida em parte
+   mostrava só o resto, sem o total nem o recebido.
+
+   Esta auditoria confere cada venda contra o que Contas a receber mostra e
+   NÃO altera nada. A correção reconstrói a linha a partir do que já está
+   registrado na venda: não cria recebimento, não lança caixa, não encosta
+   em parcela com dinheiro dentro.                                         */
+
+function auditarVinculoVendas() {
+  const vendas = db.all('sales');
+  const corrigir = [], conferir = [], certas = [];
+  let recebimentosExistentes = 0;
+
+  for (const sale of vendas) {
+    const recebimentos = sale.recebimentos || [];
+    recebimentosExistentes += recebimentos.length;
+    const cliente = sale.clienteId ? db.get('clients', sale.clienteId) : null;
+    const { total, recebido, saldo } = resumoFinanceiroVenda(sale);
+    const parcelas = parcelasDaVenda(sale.id);
+    const comPlano = vendaComPlano(sale.id);
+    const espelho = db.all('receivables').find(r =>
+      r.refType === 'sales' && r.refId === sale.id && ehEspelhoDaVenda(r));
+    const espelhos = db.all('receivables').filter(r =>
+      r.refType === 'sales' && r.refId === sale.id && ehEspelhoDaVenda(r));
+    const cancelada = sale.status === 'cancelado' || sale.status === 'cancelada';
+
+    const base = {
+      vendaId: sale.id, pedido: sale.numero, dataVenda: sale.dataPedido,
+      cliente: cliente ? cliente.nome : '(cliente removido)',
+      clienteCodigo: cliente ? (cliente.codigo || '') : '',
+      formaPagamento: (sale.pagamento || {}).forma || '',
+      condicao: (sale.pagamento || {}).condicao || '',
+      valorVenda: total, recebido, saldo,
+      recebimentos: recebimentos.map(r => ({
+        recId: r.recId || null, data: r.data, valor: c2(r.valor), forma: r.forma || ''
+      })),
+      comPlano, parcelas: parcelas.length,
+      situacaoEsperada: cancelada ? 'cancelada'
+        : saldo <= 0.005 && total > 0 ? 'paga' : recebido > 0.005 ? 'parcial' : 'aberto',
+      emContasAReceber: espelho ? {
+        recebivelId: espelho.id, valor: c2(espelho.valor), recebido: c2(espelho.recebido),
+        status: espelho.status, descricao: espelho.descricao || ''
+      } : null
+    };
+
+    /* Caso que pede olho humano: a venda tem plano de parcelas E recebimento
+       lançado direto no pedido. São dois controles do mesmo dinheiro e o
+       sistema não tem como saber qual parcela aquele dinheiro quitou. */
+    if (comPlano && recebimentos.length) {
+      conferir.push(Object.assign({}, base, {
+        motivo: 'A venda tem plano de parcelas E recebimento lançado direto no pedido. ' +
+          'Dá para somar o total, mas não dá para saber qual parcela cada recebimento quitou — ' +
+          'confira e, se for o caso, estorne o recebimento do pedido e dê a baixa na parcela.'
+      }));
+      continue;
+    }
+    if (comPlano) { certas.push(base); continue; }
+
+    const problemas = [];
+    if (espelhos.length > 1) problemas.push(`${espelhos.length} linhas para o mesmo pedido em Contas a receber`);
+    if (!espelho) {
+      problemas.push(recebimentos.length
+        ? 'a venda tem recebimento registrado mas não aparece em Contas a receber'
+        : 'a venda não tem linha em Contas a receber');
+    } else {
+      if (Math.abs(c2(espelho.valor) - total) > 0.005) {
+        problemas.push(`valor mostrado ${brl(espelho.valor)} ≠ valor do pedido ${brl(total)}`);
+      }
+      if (Math.abs(c2(espelho.recebido) - recebido) > 0.005) {
+        problemas.push(`recebido mostrado ${brl(espelho.recebido || 0)} ≠ recebido real ${brl(recebido)}`);
+      }
+      const st = espelho.status === 'vencida' ? 'aberto' : espelho.status;
+      if (st !== base.situacaoEsperada) {
+        problemas.push(`situação "${st}" deveria ser "${base.situacaoEsperada}"`);
+      }
+    }
+    if (problemas.length) corrigir.push(Object.assign({}, base, { problemas }));
+    else certas.push(base);
+  }
+
+  /* Linhas de Contas a receber apontando para venda que não existe mais. */
+  const orfas = db.all('receivables')
+    .filter(r => r.refType === 'sales' && r.refId && !db.get('sales', r.refId))
+    .map(r => ({
+      recebivelId: r.id, descricao: r.descricao || '', valor: c2(r.valor),
+      recebido: recebidoDaParcela(r), status: r.status,
+      temCaixa: db.all('cashflow').some(c => c.refType === 'receivables' && c.refId === r.id)
+    }));
+
+  /* Entradas de caixa de recebimento de venda sem o pedido correspondente. */
+  const caixaOrfa = db.all('cashflow')
+    .filter(c => c.tipo === 'entrada' && c.refType === 'sales' && c.refId && !db.get('sales', c.refId))
+    .map(c => ({ cashflowId: c.id, data: c.data, valor: c2(c.valor), descricao: c.descricao || '' }));
+
+  /* Recebimento de venda com mais de uma entrada de caixa ligada ao mesmo
+     identificador — duplicidade financeira de verdade, tratada à parte. */
+  const duplicadas = [];
+  for (const sale of vendas) {
+    const porRec = {};
+    for (const c of db.all('cashflow').filter(c =>
+      c.tipo === 'entrada' && c.refType === 'sales' && c.refId === sale.id && c.recebimentoId)) {
+      (porRec[c.recebimentoId] = porRec[c.recebimentoId] || []).push(c);
+    }
+    for (const [rid, lista] of Object.entries(porRec)) {
+      if (lista.length > 1) {
+        duplicadas.push({
+          vendaId: sale.id, pedido: sale.numero, recebimentoId: Number(rid),
+          entradas: lista.map(c => ({ id: c.id, data: c.data, valor: c2(c.valor) }))
+        });
+      }
+    }
+    // O caixa da venda não pode passar do que está registrado como recebido.
+    const somaCaixa = c2(db.all('cashflow').filter(c =>
+      c.tipo === 'entrada' && c.refType === 'sales' && c.refId === sale.id)
+      .reduce((s, c) => s + (Number(c.valor) || 0), 0));
+    const somaRecebida = c2((sale.recebimentos || []).reduce((s, r) => s + (Number(r.valor) || 0), 0));
+    if (somaCaixa - somaRecebida > 0.005) {
+      duplicadas.push({
+        vendaId: sale.id, pedido: sale.numero, recebimentoId: null,
+        excedente: c2(somaCaixa - somaRecebida), somaCaixa, somaRecebida,
+        entradas: db.all('cashflow').filter(c =>
+          c.tipo === 'entrada' && c.refType === 'sales' && c.refId === sale.id)
+          .map(c => ({ id: c.id, data: c.data, valor: c2(c.valor), descricao: c.descricao || '' }))
+      });
+    }
+  }
+
+  const soma = (lista, campo) => c2(lista.reduce((s, x) => s + (Number(x[campo]) || 0), 0));
+  return {
+    geradoEm: new Date().toISOString(),
+    vendasAnalisadas: vendas.length,
+    recebimentosExistentes,
+    totais: {
+      corrigir: corrigir.length,
+      comRecebimentoForaDeContasAReceber: corrigir.filter(x => x.recebido > 0.005).length,
+      valorRecebidoAConciliar: soma(corrigir.filter(x => x.recebido > 0.005), 'recebido'),
+      valorAConciliar: soma(corrigir, 'valorVenda'),
+      conferirManual: conferir.length,
+      certas: certas.length,
+      orfas: orfas.length,
+      caixaOrfa: caixaOrfa.length,
+      duplicidadesFinanceiras: duplicadas.length
+    },
+    corrigir, conferir, orfas, caixaOrfa, duplicadas
+  };
+}
+
+route('GET', '/api/auditoria/vinculo-vendas', ['cashflow_edit', 'admin'], async (req, res) => {
+  ok(res, auditarVinculoVendas());
+});
+
+/**
+ * Religa o histórico: reconstrói a linha de Contas a receber de cada venda
+ * escolhida a partir do que já está registrado nela.
+ *
+ * Não cria recebimento. Não lança nada no Fluxo de caixa. Não encosta em
+ * parcela com dinheiro dentro. Só põe a linha da venda em dia com os
+ * recebimentos que já existem — que é o que estava faltando.
+ */
+route('POST', '/api/auditoria/vinculo-vendas/corrigir', ['cashflow_edit', 'admin'], async (req, res, user) => {
+  const b = await readBody(req);
+  const vendas = (Array.isArray(b.vendas) ? b.vendas : []).map(Number).filter(Boolean);
+  const orfas = (Array.isArray(b.orfas) ? b.orfas : []).map(Number).filter(Boolean);
+  if (!vendas.length && !orfas.length) return bad(res, 'Nenhuma venda selecionada para religar.');
+  if (String(req.headers['x-confirmar'] || '').toLowerCase() !== 'sim') {
+    return send(res, 409, {
+      error: `Confirma religar ${vendas.length} venda(s)` +
+             (orfas.length ? ` e remover ${orfas.length} linha(s) órfã(s)` : '') +
+             '? Contas a receber passa a mostrar o valor do pedido, ' +
+             'o que já foi recebido e a situação. Nenhum recebimento é criado e o Fluxo de caixa não é tocado.',
+      precisaConfirmar: true
+    });
+  }
+
+  let copia = '';
+  try {
+    db.persistNow();
+    const dir = path.join(db.DATA_DIR, 'backups');
+    fs.mkdirSync(dir, { recursive: true });
+    copia = path.join(dir, `antes-religar-vendas-${new Date().toISOString().replace(/[:.]/g, '-')}.json`);
+    fs.copyFileSync(db.DB_FILE, copia);
+  } catch (e) { return bad(res, 'Não foi possível gravar a cópia de segurança: ' + e.message); }
+
+  const caixaAntes = c2(db.all('cashflow').reduce((s, c) =>
+    s + (c.tipo === 'entrada' ? (Number(c.valor) || 0) : -(Number(c.valor) || 0)), 0));
+  const feito = { religadas: [], ignoradas: [] };
+
+  for (const id of vendas) {
+    const sale = db.get('sales', id);
+    if (!sale) { feito.ignoradas.push({ vendaId: id, motivo: 'a venda não existe mais' }); continue; }
+    if (vendaComPlano(sale.id) && (sale.recebimentos || []).length) {
+      feito.ignoradas.push({ vendaId: id, pedido: sale.numero,
+        motivo: 'tem plano de parcelas e recebimento no pedido — precisa de revisão manual' });
+      continue;
+    }
+    /* Tira a cobrança antiga em aberto que sobrou de versões anteriores e
+       põe a linha da venda em dia. Parcela com recebimento não é tocada. */
+    const saldo = reequilibrarReceberDaVenda(sale, {});
+    const resumo = resumoFinanceiroVenda(sale);
+    const linha = db.all('receivables').find(r =>
+      r.refType === 'sales' && r.refId === sale.id && ehEspelhoDaVenda(r));
+    feito.religadas.push({
+      vendaId: sale.id, pedido: sale.numero,
+      valorVenda: resumo.total, recebido: resumo.recebido, saldo,
+      situacao: linha ? linha.status : (vendaComPlano(sale.id) ? 'parcelas' : '—'),
+      recebivelId: linha ? linha.id : null
+    });
+    audit(user, 'religou', 'receivables', linha ? linha.id : 0,
+      `Pedido nº ${sale.numero} religado em Contas a receber — valor ${brl(resumo.total)}, ` +
+      `recebido ${brl(resumo.recebido)}, saldo ${brl(saldo)}` +
+      `${linha ? ` (situação: ${linha.status})` : ''}; nenhum recebimento criado, caixa intacto`);
+  }
+
+  /* Linhas apontando para venda que não existe mais. Só sai a que não tem
+     entrada de caixa ligada — com dinheiro dentro, fica para revisão. */
+  feito.orfasRemovidas = []; feito.orfasMantidas = [];
+  for (const id of orfas) {
+    const r = db.get('receivables', id);
+    if (!r || r.refType !== 'sales' || db.get('sales', r.refId)) {
+      feito.ignoradas.push({ recebivelId: id, motivo: 'não é uma linha órfã' });
+      continue;
+    }
+    const caixa = db.all('cashflow').filter(c => c.refType === 'receivables' && c.refId === r.id);
+    if (caixa.length) {
+      feito.orfasMantidas.push({ recebivelId: id, descricao: r.descricao || '', entradas: caixa.length });
+      continue;
+    }
+    db.remove('receivables', r.id);
+    feito.orfasRemovidas.push({ recebivelId: id, descricao: r.descricao || '', valor: c2(r.valor) });
+    audit(user, 'corrigiu', 'receivables', id,
+      `Linha órfã removida de Contas a receber: "${r.descricao || ''}" (${brl(r.valor)}) — ` +
+      'a venda não existe mais e não havia entrada de caixa ligada');
+  }
+
+  const caixaDepois = c2(db.all('cashflow').reduce((s, c) =>
+    s + (c.tipo === 'entrada' ? (Number(c.valor) || 0) : -(Number(c.valor) || 0)), 0));
+  db.persistNow();
+  audit(user, 'auditoria', 'receivables', 0,
+    `Religação de Contas a receber: ${feito.religadas.length} venda(s) religada(s), ` +
+    `${feito.orfasRemovidas.length} órfã(s) removida(s), ${feito.ignoradas.length} ignorada(s). ` +
+    `Saldo do caixa antes ${brl(caixaAntes)} / depois ${brl(caixaDepois)}. ` +
+    `Cópia: ${copia}`);
+
+  ok(res, Object.assign(feito, {
+    copiaDeSeguranca: copia,
+    caixaAntes, caixaDepois, caixaIntacto: Math.abs(caixaAntes - caixaDepois) < 0.005,
+    auditoria: auditarVinculoVendas()
+  }));
+});
 
 /* Só leitura: é o relatório para conferir ANTES de corrigir nada. */
 route('GET', '/api/auditoria/vendas-duplicadas', ['cashflow_edit', 'admin'], async (req, res) => {
