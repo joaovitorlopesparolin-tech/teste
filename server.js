@@ -147,6 +147,7 @@ function sanitize(user, collection, record) {
   // Custos, margens e salários: só para 'dados financeiros sensíveis'
   if (collection === 'products') { delete r.custoBase; }
   if (collection === 'sales') { delete r.custoBaseTotal; delete r.custosAdicionais; delete r.resultado; }
+  if (collection === 'saleQuotes') { delete r.custoBaseTotal; }
   if (collection === 'employees') { delete r.salario; delete r.beneficios; }
   if (collection === 'stockItems') { delete r.custoUnit; }
 
@@ -158,8 +159,10 @@ function sanitize(user, collection, record) {
       delete x.valorUnit; delete x.total; delete x.preco;
       return x;
     });
-    if (collection === 'sales' || collection === 'serviceOrders' || collection === 'quotes') {
+    if (collection === 'sales' || collection === 'serviceOrders' || collection === 'quotes'
+      || collection === 'saleQuotes') {
       delete r.valorTotal; delete r.total; delete r.pagamento; delete r.custosAdicionais;
+      delete r.valorBruto; delete r.desconto; delete r.descontoValor; delete r.valorAprovado;
       if (r.itens) r.itens = limpaItens(r.itens);
     }
     if (collection === 'products') { delete r.preco; }
@@ -189,6 +192,7 @@ const REST = {
   hrPayments: { perm: 'hr', label: 'Pagamento de RH' },
   assets: { perm: 'assets', label: 'Bem de cliente' },
   quotes: { perm: 'quotes', label: 'Orçamento' },
+  saleQuotes: { perm: 'sales', label: 'Orçamento de venda' },
   headEntries: { perm: 'entries', label: 'Entrada de cabeçote' },
   serviceOrders: { perm: 'os', label: 'Ordem de serviço' },
   productionOrders: { perm: 'production', label: 'Ordem de produção' },
@@ -403,7 +407,8 @@ function completeRecurringTask(recurringId, vencimento) {
  */
 const VINCULOS = {
   clients: [
-    ['sales', 'clienteId', 'venda(s)'], ['quotes', 'clienteId', 'orçamento(s)'],
+    ['sales', 'clienteId', 'venda(s)'], ['quotes', 'clienteId', 'orçamento(s) de serviço'],
+    ['saleQuotes', 'clienteId', 'orçamento(s) de venda'],
     ['serviceOrders', 'clienteId', 'ordem(ns) de serviço'], ['headEntries', 'clienteId', 'entrada(s) de cabeçote'],
     ['assets', 'clienteId', 'bem(ns) guardado(s)'], ['receivables', 'clienteId', 'conta(s) a receber'],
     ['freights', 'clienteId', 'frete(s)'], ['supplierExpenses', 'clienteId', 'gasto(s) de fornecedor'],
@@ -414,11 +419,13 @@ const VINCULOS = {
     ['supplierExpenses', 'fornecedorId', 'gasto(s) do mês'], ['supplierInvoices', 'fornecedorId', 'fatura(s) mensal(is)']
   ],
   products: [
-    ['sales', 'itens.productId', 'venda(s)'], ['productionOrders', 'productId', 'ordem(ns) de produção'],
+    ['sales', 'itens.productId', 'venda(s)'], ['saleQuotes', 'itens.productId', 'orçamento(s) de venda'],
+    ['productionOrders', 'productId', 'ordem(ns) de produção'],
     ['models3d', 'produtoId', 'modelo(s) 3D']
   ],
   stockItems: [
-    ['stockMoves', 'itemId', 'movimentação(ões) de estoque'], ['sales', 'itens.stockItemId', 'venda(s)']
+    ['stockMoves', 'itemId', 'movimentação(ões) de estoque'], ['sales', 'itens.stockItemId', 'venda(s)'],
+    ['saleQuotes', 'itens.stockItemId', 'orçamento(s) de venda']
   ],
   employees: [['hrPayments', 'employeeId', 'lançamento(s) de RH']],
   serviceCatalog: [['quotes', 'itens.catalogId', 'orçamento(s)'], ['serviceOrders', 'itens.catalogId', 'ordem(ns) de serviço']],
@@ -2751,6 +2758,22 @@ route('GET', '/api/os/:id/financeiro', 'receivables', async (req, res, user, par
      kind 'peca'     — item do estoque próprio revendido; baixa na hora.
    A distinção importa para o estoque não ser baixado duas vezes. */
 
+/**
+ * Desconto comercial do orçamento/pedido: em reais ou em percentual.
+ * Devolve sempre o valor em reais, nunca maior que o próprio bruto — e é
+ * esta função, só ela, que decide quanto o desconto vale, para orçamento e
+ * venda nunca chegarem a contas diferentes.
+ */
+function calcularDesconto(valorBruto, desconto) {
+  const bruto = Math.round((Number(valorBruto) || 0) * 100) / 100;
+  if (!desconto) return { tipo: '', valor: 0, descontoValor: 0, valorTotal: bruto };
+  const tipo = desconto.tipo === 'percentual' ? 'percentual' : 'valor';
+  const v = Math.max(0, Number(desconto.valor) || 0);
+  let em = tipo === 'percentual' ? bruto * Math.min(v, 100) / 100 : v;
+  em = Math.min(Math.round(em * 100) / 100, bruto);
+  return { tipo, valor: v, descontoValor: em, valorTotal: Math.round((bruto - em) * 100) / 100 };
+}
+
 /** Monta e valida os itens da venda. Devolve { itens, valorTotal, custoBaseTotal } ou { erro }. */
 function montarItensVenda(lista) {
   let valorTotal = 0, custoBaseTotal = 0;
@@ -3497,46 +3520,69 @@ function resumoFinanceiroVenda(sale) {
   return { total, recebido, saldo: Math.round((total - recebido) * 100) / 100 };
 }
 
-route('POST', '/api/sales', 'sales', async (req, res, user) => {
-  const b = await readBody(req);
+/**
+ * Cria a venda OFICIAL e dispara tudo que uma venda dispara: peça de
+ * revenda sai do estoque, cabeçote entra na produção, o valor vira cobrança
+ * em Contas a receber. É o único lugar que faz isso — pedido digitado na mão
+ * e pedido nascido de um orçamento aprovado passam exatamente por aqui, para
+ * não existirem dois caminhos que possam divergir.
+ *
+ * Devolve { erro } ou { sale }.
+ */
+function criarVendaOficial(b, user, extra) {
   const cliente = db.get('clients', b.clienteId);
-  if (!cliente) return bad(res, 'Cliente é obrigatório');
-  if (!Array.isArray(b.itens) || !b.itens.length) return bad(res, 'A venda precisa de ao menos um item');
+  if (!cliente) return { erro: 'Cliente é obrigatório' };
+  if (!Array.isArray(b.itens) || !b.itens.length) return { erro: 'A venda precisa de ao menos um item' };
 
   const montado = montarItensVenda(b.itens);
-  if (montado.erro) return bad(res, montado.erro);
-  const { itens, valorTotal, custoBaseTotal } = montado;
+  if (montado.erro) return { erro: montado.erro };
+  const { itens, custoBaseTotal } = montado;
+  const valorBruto = montado.valorTotal;
+  const desc = calcularDesconto(valorBruto, b.desconto);
+  const valorTotal = desc.valorTotal;
 
   const pagamento = b.pagamento || {};
   pagamento.taxa = Number(pagamento.taxa) || 0;
   pagamento.valorLiquido = valorTotal - pagamento.taxa;
 
   const numero = db.nextNumber('pedido', 1);
-  const sale = db.insert('sales', {
+  const sale = db.insert('sales', Object.assign({
     numero, clienteId: cliente.id,
     cidade: b.cidade || cliente.cidade || '', estado: b.estado || cliente.estado || '',
     dataPedido: b.dataPedido || domain.today(),
     previsaoEntrega: b.previsaoEntrega || '', dataEnvio: null,
-    itens, valorTotal,
+    itens, valorBruto, valorTotal,
+    desconto: { tipo: desc.tipo, valor: desc.valor },
+    descontoValor: desc.descontoValor,
     custoBaseTotal,
     custosAdicionais: b.custosAdicionais || [], // [{desc, valor}] — frete grátis, brindes extras...
     pagamento,
     recebimentos: [],          // pagamentos parciais: [{valor, data, forma, obs}]
     observacoes: b.observacoes || '',
     status: 'nao_produzido' // nao_produzido → preparacao → usinagem → montagem → pronto → enviado → entregue
-  });
+  }, extra || {}));
 
   // Peças do estoque saem na hora da venda (cabeçotes saem na produção).
   estoquePecasDaVenda(sale, user);
   gerarProducaoDaVenda(sale, cliente, user);
   gerarFinanceiroDaVenda(sale, cliente, user);
 
-  audit(user, 'criou', 'sales', sale.id, `Pedido nº ${numero} — ${cliente.nome} — R$ ${valorTotal.toFixed(2)}`);
+  const deOrcamento = sale.orcamentoNumero ? ` (orçamento nº ${sale.orcamentoNumero})` : '';
+  audit(user, 'criou', 'sales', sale.id,
+    `Pedido nº ${numero}${deOrcamento} — ${cliente.nome} — R$ ${valorTotal.toFixed(2)}` +
+    (desc.descontoValor ? ` (desconto de R$ ${desc.descontoValor.toFixed(2)})` : ''));
   db.insert('audit', {
     at: new Date().toISOString(), userId: user.id, userName: user.name, action: 'timeline',
     entity: 'sales', entityId: sale.id, clientId: cliente.id,
-    details: `Pedido nº ${numero} registrado (R$ ${valorTotal.toFixed(2)})`
+    details: `Pedido nº ${numero} registrado${deOrcamento} (R$ ${valorTotal.toFixed(2)})`
   });
+  return { sale };
+}
+
+route('POST', '/api/sales', 'sales', async (req, res, user) => {
+  const b = await readBody(req);
+  const { erro, sale } = criarVendaOficial(b, user);
+  if (erro) return bad(res, erro);
   ok(res, sale);
 });
 
@@ -3579,6 +3625,20 @@ function cancelarVendaEDependentes(sale, user, motivo) {
   }
 
   db.update('sales', sale.id, { status: 'cancelado', canceladaEm: domain.today(), motivoCancelamento: motivo || '' });
+
+  /* Veio de orçamento aprovado: o orçamento registra que o pedido caiu, e
+     volta a poder ser reaberto para negociação. O número e a aprovação
+     continuam gravados — é o histórico do que aconteceu. */
+  if (sale.orcamentoId) {
+    const orc = db.get('saleQuotes', sale.orcamentoId);
+    if (orc) {
+      db.update('saleQuotes', orc.id, {
+        historico: historicoOrcamento(orc, user,
+          `Pedido nº ${sale.numero} cancelado${motivo ? ' — ' + motivo : ''}`)
+      });
+      efeitos.push(`orçamento nº ${orc.numero} registrou o cancelamento e pode ser reaberto`);
+    }
+  }
   audit(user, 'cancelou', 'sales', sale.id,
     `Pedido nº ${sale.numero} cancelado${motivo ? ' — ' + motivo : ''}` +
     (efeitos.length ? `; ${efeitos.join('; ')}` : ''));
@@ -3589,6 +3649,420 @@ function cancelarVendaEDependentes(sale, user, motivo) {
   });
   return efeitos;
 }
+
+/* =====================================================================
+   ORÇAMENTO DE VENDA  →  VENDA OFICIAL
+
+   Passar um preço para o cliente não é vender. Antes, para orçar um
+   cabeçote era preciso cadastrar a venda e depois excluí-la se o cliente
+   desistisse — e cadastrar a venda já dava baixa em peça de revenda,
+   criava ordem de produção e lançava a cobrança em Contas a receber.
+
+   Agora são duas etapas: o orçamento é só uma proposta comercial, que não
+   movimenta nada; a venda oficial nasce quando o orçamento é aprovado, por
+   criarVendaOficial — o mesmo caminho de um pedido digitado na mão.
+   ===================================================================== */
+
+/* Situações do orçamento. "Expirado" NÃO é gravado: é a validade vencida de
+   um orçamento que ainda está em negociação — assim ninguém precisa entrar
+   todo dia para expirar orçamento na mão. */
+const ORC_VENDA_STATUS = ['elaboracao', 'enviado', 'aguardando', 'aprovado', 'recusado', 'cancelado'];
+const ORC_VENDA_EM_NEGOCIACAO = ['elaboracao', 'enviado', 'aguardando'];
+
+function vencimentoDoOrcamento(o) {
+  const dias = Number(o.validadeDias);
+  if (!o.dataOrcamento || !dias) return '';
+  return domain.addDays(o.dataOrcamento, dias);
+}
+
+/** Orçamento com o que é derivado: vencimento, expirado e a situação final. */
+function comSituacaoOrcamento(o) {
+  const vencimento = vencimentoDoOrcamento(o);
+  const expirado = ORC_VENDA_EM_NEGOCIACAO.includes(o.status)
+    && !!vencimento && vencimento < domain.today();
+  return Object.assign({}, o, {
+    vencimento, expirado,
+    situacao: expirado ? 'expirado' : o.status,
+    emNegociacao: ORC_VENDA_EM_NEGOCIACAO.includes(o.status) && !expirado
+  });
+}
+
+/** Registra no histórico do orçamento, guardando o valor daquele momento. */
+function historicoOrcamento(o, user, evento) {
+  const hist = (o.historico || []).concat([{
+    at: new Date().toISOString(), por: user ? user.name : 'sistema',
+    evento, valorTotal: o.valorTotal, versao: o.versao || 1
+  }]);
+  return hist.slice(-200);
+}
+
+/** Monta os dados de um orçamento a partir do corpo da requisição. */
+function montarOrcamentoVenda(b, atual) {
+  const cliente = db.get('clients', b.clienteId !== undefined ? b.clienteId : (atual || {}).clienteId);
+  if (!cliente) return { erro: 'Cliente é obrigatório' };
+  const lista = b.itens !== undefined ? b.itens : (atual || {}).itens;
+  if (!Array.isArray(lista) || !lista.length) return { erro: 'O orçamento precisa de ao menos um item' };
+  const m = montarItensVenda(lista.map(i => i.kind === 'peca'
+    ? { kind: 'peca', stockItemId: i.stockItemId, qtd: i.qtd, valorUnit: i.valorUnit }
+    : { productId: i.productId, comando: i.comando, tucho: i.tucho, qtd: i.qtd, valorUnit: i.valorUnit }));
+  if (m.erro) return { erro: m.erro };
+
+  const desc = calcularDesconto(m.valorTotal,
+    b.desconto !== undefined ? b.desconto : (atual || {}).desconto);
+  const pagamento = Object.assign({}, b.pagamento !== undefined ? b.pagamento : (atual || {}).pagamento || {});
+  pagamento.taxa = Number(pagamento.taxa) || 0;
+  pagamento.valorLiquido = Math.round((desc.valorTotal - pagamento.taxa) * 100) / 100;
+
+  return {
+    dados: {
+      clienteId: cliente.id,
+      cidade: b.cidade !== undefined ? b.cidade : (atual ? atual.cidade : cliente.cidade || ''),
+      estado: b.estado !== undefined ? b.estado : (atual ? atual.estado : cliente.estado || ''),
+      dataOrcamento: b.dataOrcamento || (atual ? atual.dataOrcamento : domain.today()),
+      validadeDias: b.validadeDias !== undefined
+        ? Math.max(0, Number(b.validadeDias) || 0)
+        : (atual ? atual.validadeDias : (db.settings.quoteValidityDays || 15)),
+      previsaoEntrega: b.previsaoEntrega !== undefined ? b.previsaoEntrega : (atual ? atual.previsaoEntrega : ''),
+      itens: m.itens,
+      valorBruto: m.valorTotal,
+      desconto: { tipo: desc.tipo, valor: desc.valor },
+      descontoValor: desc.descontoValor,
+      valorTotal: desc.valorTotal,
+      custoBaseTotal: m.custoBaseTotal,
+      custosAdicionais: b.custosAdicionais !== undefined ? b.custosAdicionais : (atual ? atual.custosAdicionais || [] : []),
+      pagamento,
+      observacoes: b.observacoes !== undefined ? b.observacoes : (atual ? atual.observacoes : '')
+    },
+    cliente
+  };
+}
+
+/* ---- listagem ---- */
+route('GET', '/api/saleQuotes', 'sales', async (req, res, user) => {
+  ok(res, db.all('saleQuotes')
+    .map(o => sanitize(user, 'saleQuotes', comSituacaoOrcamento(o)))
+    .sort((a, b) => b.id - a.id));
+});
+
+route('GET', '/api/saleQuotes/:id', 'sales', async (req, res, user, params) => {
+  const o = db.get('saleQuotes', params.id);
+  if (!o) return notFound(res);
+  ok(res, sanitize(user, 'saleQuotes', comSituacaoOrcamento(o)));
+});
+
+/* ---- criar ---- */
+route('POST', '/api/saleQuotes', 'sales', async (req, res, user) => {
+  const b = await readBody(req);
+  const { dados, cliente, erro } = montarOrcamentoVenda(b, null);
+  if (erro) return bad(res, erro);
+  const numero = db.nextNumber('orcamentoVenda', 1);
+  const o = db.insert('saleQuotes', Object.assign({
+    numero,
+    status: ORC_VENDA_STATUS.includes(b.status) && b.status !== 'aprovado' ? b.status : 'elaboracao',
+    versao: 1,
+    saleId: null, pedidoNumero: null,
+    dataAprovacao: null, aprovadoPor: null, aprovadoPorId: null,
+    motivo: '',
+    historico: []
+  }, dados));
+  db.update('saleQuotes', o.id, {
+    historico: historicoOrcamento(o, user, `Orçamento nº ${numero} criado`)
+  });
+  audit(user, 'criou', 'saleQuotes', o.id,
+    `Orçamento de venda nº ${numero} — ${cliente.nome} — R$ ${dados.valorTotal.toFixed(2)}`);
+  db.insert('audit', {
+    at: new Date().toISOString(), userId: user.id, userName: user.name, action: 'timeline',
+    entity: 'saleQuotes', entityId: o.id, clientId: cliente.id,
+    details: `Orçamento de venda nº ${numero} criado (R$ ${dados.valorTotal.toFixed(2)}) — proposta, sem movimentar estoque ou financeiro`
+  });
+  ok(res, comSituacaoOrcamento(db.get('saleQuotes', o.id)));
+});
+
+/* ---- editar (só enquanto não virou venda) ---- */
+route('PUT', '/api/saleQuotes/:id', 'sales', async (req, res, user, params) => {
+  const antes = db.get('saleQuotes', params.id);
+  if (!antes) return notFound(res);
+  if (antes.saleId) {
+    const v = db.get('sales', antes.saleId);
+    return bad(res, `Este orçamento já virou o pedido nº ${antes.pedidoNumero}. ` +
+      `Alterações agora são no pedido${v ? '' : ' (que não foi encontrado)'} — ` +
+      'o orçamento fica como foi aprovado, para o histórico não mudar depois do fato.');
+  }
+  if (antes.status === 'cancelado') return bad(res, 'Este orçamento está cancelado. Reabra antes de editar.');
+  const b = await readBody(req);
+  const { dados, erro } = montarOrcamentoVenda(b, antes);
+  if (erro) return bad(res, erro);
+
+  /* Cada edição é uma versão: o histórico guarda o valor de cada rodada da
+     negociação, sem criar outro orçamento e sem perder o número. */
+  const mudou = [];
+  if (Math.abs((antes.valorTotal || 0) - dados.valorTotal) > 0.005) {
+    mudou.push(`valor R$ ${(antes.valorTotal || 0).toFixed(2)} → R$ ${dados.valorTotal.toFixed(2)}`);
+  }
+  if ((antes.descontoValor || 0) !== dados.descontoValor) {
+    mudou.push(`desconto R$ ${(antes.descontoValor || 0).toFixed(2)} → R$ ${dados.descontoValor.toFixed(2)}`);
+  }
+  if (JSON.stringify(antes.itens) !== JSON.stringify(dados.itens)) {
+    mudou.push(`itens ${(antes.itens || []).length} → ${dados.itens.length}`);
+  }
+  const antesForma = (antes.pagamento || {}).forma, depoisForma = dados.pagamento.forma;
+  if (antesForma !== depoisForma) mudou.push(`pagamento ${antesForma || '—'} → ${depoisForma || '—'}`);
+  if (antes.clienteId !== dados.clienteId) mudou.push('cliente alterado');
+
+  const versao = mudou.length ? (Number(antes.versao) || 1) + 1 : (Number(antes.versao) || 1);
+  const patch = Object.assign({}, dados, { versao });
+  if (b.status !== undefined && ORC_VENDA_STATUS.includes(b.status) && b.status !== 'aprovado') {
+    patch.status = b.status;
+  }
+  const o = db.update('saleQuotes', antes.id, patch);
+  db.update('saleQuotes', o.id, {
+    historico: historicoOrcamento(Object.assign({}, antes, { valorTotal: o.valorTotal, versao }), user,
+      mudou.length ? `Versão ${versao}: ${mudou.join('; ')}` : 'Dados cadastrais ajustados')
+  });
+  audit(user, 'alterou', 'saleQuotes', o.id,
+    `Orçamento de venda nº ${o.numero} editado${mudou.length ? ' — ' + mudou.join('; ') : ''}`);
+  ok(res, comSituacaoOrcamento(db.get('saleQuotes', o.id)));
+});
+
+/* ---- andamento da negociação ---- */
+route('POST', '/api/saleQuotes/:id/status', 'sales', async (req, res, user, params) => {
+  const o = db.get('saleQuotes', params.id);
+  if (!o) return notFound(res);
+  const b = await readBody(req);
+  const novo = String(b.status || '');
+  if (!ORC_VENDA_STATUS.includes(novo)) {
+    return bad(res, 'Situação inválida. Use: ' + ORC_VENDA_STATUS.join(', ') + '.');
+  }
+  if (novo === 'aprovado') {
+    return bad(res, 'Aprovar é a ação "Aprovar e gerar venda" — é ela que cria o pedido oficial.');
+  }
+  if (o.status === 'aprovado' || o.saleId) {
+    return bad(res, `Este orçamento já foi aprovado e virou o pedido nº ${o.pedidoNumero}. ` +
+      'Para desfazer, cancele o pedido — o orçamento acompanha.');
+  }
+  if (novo === o.status) return bad(res, 'O orçamento já está nesta situação.');
+  const rotulos = { elaboracao: 'Em elaboração', enviado: 'Enviado ao cliente',
+    aguardando: 'Aguardando retorno', recusado: 'Recusado', cancelado: 'Cancelado' };
+  const motivo = String(b.motivo || '').slice(0, 300);
+  db.update('saleQuotes', o.id, {
+    status: novo,
+    motivo: (novo === 'recusado' || novo === 'cancelado') ? motivo : '',
+    dataEnvioCliente: novo === 'enviado' ? (b.data || domain.today()) : o.dataEnvioCliente || null,
+    historico: historicoOrcamento(o, user,
+      `Situação: ${rotulos[novo] || novo}${motivo ? ' — ' + motivo : ''}`)
+  });
+  audit(user, 'alterou', 'saleQuotes', o.id,
+    `Orçamento de venda nº ${o.numero}: ${rotulos[novo] || novo}${motivo ? ' — ' + motivo : ''}`);
+  ok(res, comSituacaoOrcamento(db.get('saleQuotes', o.id)));
+});
+
+/* ---- aprovar e gerar a venda oficial ---- */
+route('POST', '/api/saleQuotes/:id/aprovar', 'sales', async (req, res, user, params) => {
+  const o = db.get('saleQuotes', params.id);
+  if (!o) return notFound(res);
+  const b = await readBody(req);
+
+  /* Clicar duas vezes em aprovar não pode gerar dois pedidos. Cada orçamento
+     gera no máximo UMA venda; uma segunda só com pedido explícito de quem
+     está operando, e aí o vínculo registra as duas. */
+  if (o.saleId) {
+    const existente = db.get('sales', o.saleId);
+    if (existente && existente.status !== 'cancelado' && !b.gerarOutraVenda) {
+      return send(res, 409, {
+        error: `Este orçamento já gerou o pedido nº ${o.pedidoNumero}. ` +
+          'Para gerar um segundo pedido com os mesmos dados, confirme que é isso que você quer.',
+        jaAprovado: true, saleId: o.saleId, pedidoNumero: o.pedidoNumero,
+        precisaConfirmar: true
+      });
+    }
+  }
+  if (o.status === 'cancelado' && !b.gerarOutraVenda) {
+    return bad(res, 'Este orçamento está cancelado. Reabra para "Aguardando retorno" antes de aprovar.');
+  }
+
+  const vencimento = vencimentoDoOrcamento(o);
+  if (vencimento && vencimento < domain.today() && !b.confirmarExpirado) {
+    return send(res, 409, {
+      error: `A validade deste orçamento venceu em ${dataBR(vencimento)}. ` +
+        'Confirme se os valores continuam valendo, ou edite o orçamento antes de aprovar.',
+      expirado: true, precisaConfirmar: true
+    });
+  }
+
+  /* A venda nasce com os dados do orçamento — ninguém redigita nada.
+     Pagamento e previsão podem ser ajustados no momento da aprovação. */
+  const corpo = {
+    clienteId: o.clienteId,
+    cidade: o.cidade, estado: o.estado,
+    dataPedido: b.dataPedido || domain.today(),
+    previsaoEntrega: b.previsaoEntrega !== undefined ? b.previsaoEntrega : o.previsaoEntrega,
+    itens: (o.itens || []).map(i => i.kind === 'peca'
+      ? { kind: 'peca', stockItemId: i.stockItemId, qtd: i.qtd, valorUnit: i.valorUnit }
+      : { productId: i.productId, comando: i.comando, tucho: i.tucho, qtd: i.qtd, valorUnit: i.valorUnit }),
+    desconto: o.desconto,
+    custosAdicionais: o.custosAdicionais || [],
+    pagamento: b.pagamento !== undefined ? b.pagamento : Object.assign({}, o.pagamento),
+    observacoes: o.observacoes || ''
+  };
+  const anteriores = (o.vendasGeradas || []).slice();
+  const { erro, sale } = criarVendaOficial(corpo, user, {
+    orcamentoId: o.id, orcamentoNumero: o.numero,
+    dataOrcamento: o.dataOrcamento,
+    valorOrcado: o.valorTotal
+  });
+  if (erro) return bad(res, erro);
+
+  if (o.saleId) anteriores.push({ saleId: o.saleId, pedidoNumero: o.pedidoNumero });
+  db.update('saleQuotes', o.id, {
+    status: 'aprovado',
+    saleId: sale.id, pedidoNumero: sale.numero,
+    vendasGeradas: anteriores,
+    dataAprovacao: domain.today(),
+    aprovadoPor: user.name, aprovadoPorId: user.id,
+    valorAprovado: sale.valorTotal,
+    historico: historicoOrcamento(o, user,
+      `Aprovado e convertido no pedido nº ${sale.numero}` +
+      (anteriores.length ? ` (segundo pedido deste orçamento)` : ''))
+  });
+  audit(user, 'aprovou', 'saleQuotes', o.id,
+    `Orçamento de venda nº ${o.numero} aprovado — pedido nº ${sale.numero} gerado`);
+  db.insert('audit', {
+    at: new Date().toISOString(), userId: user.id, userName: user.name, action: 'timeline',
+    entity: 'saleQuotes', entityId: o.id, clientId: o.clienteId,
+    details: `Orçamento de venda nº ${o.numero} aprovado por ${user.name} — virou o pedido nº ${sale.numero}`
+  });
+  ok(res, { ok: true, orcamento: comSituacaoOrcamento(db.get('saleQuotes', o.id)), venda: sale });
+});
+
+/* ---- reabrir: volta para a negociação ---- */
+route('POST', '/api/saleQuotes/:id/reabrir', 'sales', async (req, res, user, params) => {
+  const o = db.get('saleQuotes', params.id);
+  if (!o) return notFound(res);
+  if (o.saleId) {
+    const v = db.get('sales', o.saleId);
+    if (v && v.status !== 'cancelado') {
+      return bad(res, `Este orçamento virou o pedido nº ${o.pedidoNumero}, que está ativo. ` +
+        'Cancele o pedido antes de reabrir a negociação.');
+    }
+  }
+  db.update('saleQuotes', o.id, {
+    status: 'aguardando', motivo: '',
+    historico: historicoOrcamento(o, user, 'Negociação reaberta')
+  });
+  audit(user, 'alterou', 'saleQuotes', o.id, `Orçamento de venda nº ${o.numero} reaberto`);
+  ok(res, comSituacaoOrcamento(db.get('saleQuotes', o.id)));
+});
+
+/* ---- duplicar: nova proposta a partir de uma antiga ---- */
+route('POST', '/api/saleQuotes/:id/duplicate', 'sales', async (req, res, user, params) => {
+  const origem = db.get('saleQuotes', params.id);
+  if (!origem) return notFound(res);
+  const b = await readBody(req);
+  const { dados, cliente, erro } = montarOrcamentoVenda({
+    clienteId: b.clienteId || origem.clienteId,
+    itens: origem.itens, desconto: origem.desconto,
+    custosAdicionais: origem.custosAdicionais, pagamento: origem.pagamento,
+    previsaoEntrega: origem.previsaoEntrega, observacoes: origem.observacoes,
+    validadeDias: origem.validadeDias, dataOrcamento: b.dataOrcamento || domain.today()
+  }, null);
+  if (erro) return bad(res, erro);
+  const numero = db.nextNumber('orcamentoVenda', 1);
+  const novo = db.insert('saleQuotes', Object.assign({
+    numero, status: 'elaboracao', versao: 1,
+    saleId: null, pedidoNumero: null, dataAprovacao: null, aprovadoPor: null,
+    motivo: '', historico: [], duplicadoDe: origem.numero
+  }, dados));
+  db.update('saleQuotes', novo.id, {
+    historico: historicoOrcamento(novo, user, `Criado como cópia do orçamento nº ${origem.numero}`)
+  });
+  audit(user, 'criou', 'saleQuotes', novo.id,
+    `Orçamento de venda nº ${numero} duplicado do nº ${origem.numero} — ${cliente.nome}`);
+  ok(res, comSituacaoOrcamento(db.get('saleQuotes', novo.id)));
+});
+
+/* ---- excluir: só o que nunca virou venda ---- */
+route('DELETE', '/api/saleQuotes/:id', 'sales', async (req, res, user, params) => {
+  const o = db.get('saleQuotes', params.id);
+  if (!o) return notFound(res);
+  if (o.saleId) {
+    return bad(res, `Este orçamento virou o pedido nº ${o.pedidoNumero} e não pode ser excluído — ` +
+      'é o histórico da venda. Se o negócio não aconteceu, cancele o pedido.');
+  }
+  if (req.headers['x-confirmar'] !== 'sim') {
+    return send(res, 409, {
+      error: `Excluir apaga o orçamento nº ${o.numero} do histórico. ` +
+        'Normalmente o certo é marcá-lo como Recusado ou Cancelado, que mantém o registro. Confirma excluir?',
+      precisaConfirmar: true
+    });
+  }
+  db.remove('saleQuotes', o.id);
+  audit(user, 'excluiu', 'saleQuotes', o.id, `Orçamento de venda nº ${o.numero} excluído`);
+  ok(res, { ok: true });
+});
+
+/* ---- relatório de conversão ---- */
+route('GET', '/api/relatorios/orcamentos-venda', ['sales', 'reports'], async (req, res, user, params, query) => {
+  const de = query.de || '', ate = query.ate || '';
+  const dentro = (d) => (!de || (d || '') >= de) && (!ate || (d || '') <= ate);
+  const lista = db.all('saleQuotes').map(comSituacaoOrcamento)
+    .filter(o => dentro(o.dataOrcamento));
+
+  const soma = (l) => Math.round(l.reduce((s, o) => s + (Number(o.valorTotal) || 0), 0) * 100) / 100;
+  const por = (sit) => lista.filter(o => o.situacao === sit);
+  const aprovados = por('aprovado');
+  /* O valor convertido é o do PEDIDO gerado, não o do orçamento: entre
+     aprovar e faturar o valor pode ter sido ajustado no pedido. */
+  const convertido = Math.round(aprovados.reduce((s, o) => {
+    const v = o.saleId ? db.get('sales', o.saleId) : null;
+    return s + (v && v.status !== 'cancelado' ? (Number(v.valorTotal) || 0) : 0);
+  }, 0) * 100) / 100;
+  const enviados = lista.filter(o => o.dataEnvioCliente || ['enviado', 'aguardando', 'aprovado', 'recusado'].includes(o.status));
+  const emNegociacao = lista.filter(o => o.emNegociacao);
+
+  const mes = {};
+  for (const o of lista) {
+    const k = String(o.dataOrcamento || '').slice(0, 7);
+    if (!k) continue;
+    const m = mes[k] = mes[k] || { mes: k, qtd: 0, valor: 0, aprovados: 0, valorAprovado: 0, recusados: 0 };
+    m.qtd++; m.valor = Math.round((m.valor + (Number(o.valorTotal) || 0)) * 100) / 100;
+    if (o.situacao === 'aprovado') {
+      m.aprovados++;
+      m.valorAprovado = Math.round((m.valorAprovado + (Number(o.valorAprovado) || Number(o.valorTotal) || 0)) * 100) / 100;
+    }
+    if (o.situacao === 'recusado') m.recusados++;
+  }
+
+  const taxa = (a, b) => b ? Math.round(a / b * 1000) / 10 : 0;
+  ok(res, {
+    periodo: { de, ate },
+    totais: {
+      criados: lista.length,
+      enviados: enviados.length,
+      emNegociacao: emNegociacao.length,
+      aprovados: aprovados.length,
+      recusados: por('recusado').length,
+      cancelados: por('cancelado').length,
+      expirados: por('expirado').length,
+      valorOrcado: soma(lista),
+      valorEmNegociacao: soma(emNegociacao),
+      valorAprovado: soma(aprovados),
+      valorConvertido: convertido,
+      valorRecusado: soma(por('recusado')),
+      taxaConversao: taxa(aprovados.length, lista.length),
+      taxaConversaoEnviados: taxa(aprovados.length, enviados.length)
+    },
+    meses: Object.values(mes).sort((a, b) => a.mes.localeCompare(b.mes)),
+    orcamentos: lista.map(o => ({
+      id: o.id, numero: o.numero, data: o.dataOrcamento,
+      cliente: (db.get('clients', o.clienteId) || {}).nome || '(cliente removido)',
+      itens: (o.itens || []).length,
+      valorTotal: o.valorTotal, descontoValor: o.descontoValor || 0,
+      situacao: o.situacao, vencimento: o.vencimento,
+      pedidoNumero: o.pedidoNumero || null, dataAprovacao: o.dataAprovacao || null,
+      aprovadoPor: o.aprovadoPor || ''
+    })).sort((a, b) => String(b.data).localeCompare(String(a.data)))
+  });
+});
 
 route('POST', '/api/sales/:id/cancel', 'sales', async (req, res, user, params) => {
   const b = await readBody(req);
@@ -3637,14 +4111,19 @@ route('PUT', '/api/sales/:id', 'sales', async (req, res, user, params) => {
   if (!antes) return notFound(res);
   const b = await readBody(req);
 
-  const mexeEstruturaOuDinheiro = b.itens !== undefined || b.pagamento !== undefined;
-  let itens = antes.itens, valorTotal = antes.valorTotal, custoBaseTotal = antes.custoBaseTotal;
+  const mexeEstruturaOuDinheiro = b.itens !== undefined || b.pagamento !== undefined || b.desconto !== undefined;
+  let itens = antes.itens, custoBaseTotal = antes.custoBaseTotal;
+  let valorBruto = antes.valorBruto != null ? antes.valorBruto : antes.valorTotal;
   if (b.itens !== undefined) {
     if (!Array.isArray(b.itens) || !b.itens.length) return bad(res, 'A venda precisa de ao menos um item');
     const m = montarItensVenda(b.itens);
     if (m.erro) return bad(res, m.erro);
-    ({ itens, valorTotal, custoBaseTotal } = m);
+    ({ itens, custoBaseTotal } = m);
+    valorBruto = m.valorTotal;
   }
+  const desc = calcularDesconto(valorBruto,
+    b.desconto !== undefined ? b.desconto : antes.desconto);
+  const valorTotal = desc.valorTotal;
 
   if (mexeEstruturaOuDinheiro) {
     const travas = reverterVenda(antes, user);
@@ -3666,7 +4145,8 @@ route('PUT', '/api/sales/:id', 'sales', async (req, res, user, params) => {
     estado: b.estado !== undefined ? b.estado : antes.estado,
     dataPedido: b.dataPedido || antes.dataPedido,
     previsaoEntrega: b.previsaoEntrega !== undefined ? b.previsaoEntrega : antes.previsaoEntrega,
-    itens, valorTotal, custoBaseTotal, pagamento,
+    itens, valorBruto, valorTotal, custoBaseTotal, pagamento,
+    desconto: { tipo: desc.tipo, valor: desc.valor }, descontoValor: desc.descontoValor,
     custosAdicionais: b.custosAdicionais !== undefined ? b.custosAdicionais : antes.custosAdicionais,
     observacoes: b.observacoes !== undefined ? b.observacoes : antes.observacoes
   };

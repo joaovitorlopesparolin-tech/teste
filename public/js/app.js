@@ -768,6 +768,27 @@ const App = {
       return L.join('\n');
     },
 
+    /* Proposta de venda de cabeçote (não é o orçamento de serviço). */
+    saleQuote(o, c, cfg) {
+      const L = [this.head(`Orçamento nº ${o.numero}`), ''];
+      L.push(`${this.hi(c)} Segue a proposta dos cabeçotes:`, '');
+      for (const i of (o.itens || [])) {
+        const detalhe = i.kind === 'peca' ? '' : ` (comando ${i.comando || '—'}, tucho ${i.tucho || '—'} mm)`;
+        L.push(`▪ ${i.qtd !== 1 ? i.qtd + '× ' : ''}${i.produto}${detalhe} — R$ ${App.money(i.qtd * i.valorUnit)}`);
+      }
+      if (o.descontoValor) L.push('', `Desconto: − R$ ${App.money(o.descontoValor)}`);
+      L.push('', `*TOTAL: R$ ${App.money(o.valorTotal)}*`, '');
+      const pg = o.pagamento || {};
+      if (pg.forma) {
+        L.push(`Pagamento: ${pg.forma}${pg.condicao === 'parcelado' && pg.parcelas > 1 ? ` em ${pg.parcelas}x` : ' à vista'}`);
+      }
+      if (o.vencimento) L.push(`Validade da proposta: até ${this.dataBR(o.vencimento)}`);
+      if (o.previsaoEntrega) L.push(`Previsão de entrega: ${this.dataBR(o.previsaoEntrega)}`);
+      L.push('', 'Para fechar, é só responder esta mensagem. Qualquer dúvida, estamos à disposição! 🤝');
+      return L.join('\n');
+    },
+    dataBR(d) { return App.date(d); },
+
     os(o, c) {
       const modelo = o.modelo ? ' *' + o.modelo + '*' : '';
       let corpo;

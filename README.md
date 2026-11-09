@@ -63,9 +63,12 @@ com o sistema parado.
 | **Clientes** | Cadastro completo (cidade e estado separados para relatórios por região) + perfil consolidado: compras, serviços, orçamentos, financeiro e linha do tempo; **código interno automático** (`CLI-000001`) gerado no cadastro, único e imutável — acompanha o cliente mesmo se o nome mudar e aparece nas listas, nos seletores de cliente de vendas/serviços/orçamentos/financeiro e na busca, para que dois cadastros de nome parecido nunca se confundam (o CPF/CNPJ continua sendo do cliente, não da numeração da empresa) |
 | **Entrada de cabeçotes** | Fluxo padrão *Entrada → Orçamento → Aprovação → OS → Produção → Finalização → Pagamento → NF de retorno → Envio*; entrada direta só como exceção marcada |
 | **Bens de clientes** | Estoque de terceiros **totalmente separado** do estoque próprio; aceita entrada sem NF de remessa (marcada como “sem documento fiscal”); devolução dá saída do estoque de terceiros, nunca do estoque próprio |
-| **Orçamentos** | Catálogo de serviços com preços-base do modelo atual (editáveis), valor personalizado por orçamento sem alterar o catálogo, cálculo automático de totais, validade padrão de 30 dias (configurável) |
+| **Orçamentos (serviço)** | Catálogo de serviços com preços-base do modelo atual (editáveis), valor personalizado por orçamento sem alterar o catálogo, cálculo automático de totais, validade padrão de 30 dias (configurável) |
 | **Aprovação → OS** | Um clique converte o orçamento em OS aproveitando todos os dados, sem recadastro |
 | **Ordens de serviço** | Status (Em análise, Em andamento, Aguardando peça, Finalizado, Aguardando pagamento, Cancelado) + envio/entrega, responsável, pagamento (à vista ou parcelado com boletos automáticos), NF de retorno, histórico |
+| **Orçamento de venda** | Dentro de *Vendas e Pedidos*: **Criar orçamento** com cliente, cabeçotes, configuração, comando, quantidades, valores, **desconto** (em R$ ou %), forma e condição de pagamento pretendidas, previsão de entrega, validade e observações. Numeração própria e situações **Em elaboração / Enviado ao cliente / Aguardando retorno / Aprovado / Recusado / Cancelado / Expirado** (expirado é derivado da validade, ninguém expira na mão). **Enquanto não for aprovado não movimenta nada**: nenhuma baixa de estoque, nenhuma ordem de produção, nenhuma conta a receber, nenhum lançamento no fluxo de caixa. Editável durante a negociação, com **versões no histórico** (cada rodada guarda o valor apresentado). Recusado, cancelado e expirado **ficam no histórico** — não é preciso excluir nada. Imprime a proposta e envia pelo WhatsApp |
+| **Aprovar → venda oficial** | Um clique em **Aprovar e gerar venda** converte o orçamento no pedido oficial aproveitando todos os dados, e aí sim roda o fluxo inteiro: ordens de produção, baixa das peças de revenda, cobrança em Contas a receber (o fluxo de caixa só se mexe com recebimento efetivo). O orçamento guarda número, data, valores apresentados, desconto, data da aprovação, quem aprovou e o nº do pedido gerado; o pedido aponta de volta para o orçamento. **Cada orçamento gera no máximo uma venda** — clicar de novo é recusado, e um segundo pedido só com confirmação explícita |
+| **Conversão de orçamentos** | Relatório por período: criados, enviados, aprovados, recusados, cancelados, expirados, ainda em negociação, **taxa de conversão**, valor total orçado e **valor efetivamente convertido em pedidos** (pedido cancelado não conta), com quebra mês a mês |
 | **Vendas** | 8 configurações (Unilateral/Fluxo Cruzado × Stage 1, 2, 3 e **3 Plus**); comandos e tuchos **saem do cadastro** em *Produtos e custos* e são validados na venda (S1: 288 e **280x280** · S2: 290x300, 290x290 · S3 e S3 Plus: 300x308, 300x318, 316x320, 316x316, 308x320 — **Stage 3 = tucho 35 mm, Stage 3 Plus = 37 mm**); cartão/link com taxa da operadora, valor líquido e data prevista de recebimento; custos adicionais por venda; resultado e margem. O detalhe do pedido mostra a **composição e as baixas de estoque** de cada cabeçote, com a situação de cada peça e o histórico da movimentação |
 | **Produção** | Ordem de produção por cabeçote vendido com checklist automático (separações, montagem, controle, embalagem, expedição) incluindo operações extras: retrabalho dos dutos de escape (Stage 3) e abertura do alojamento para tucho 37 mm; baixa automática de componentes ao concluir. Filtro **“Todos em aberto”** com tudo que ainda pede trabalho — derivado do checklist, não de uma lista fixa de status: item sem marcar significa ordem aberta, e um status novo que represente trabalho pendente entra sozinho. Imprime a lista de trabalho da equipe (cliente, cabeçote/peça, o que fazer, qtd, previsão, etapa/status), **sem nenhum valor** |
 | **Estoque próprio** | Cascos usinados (unilateral/crossflow), válvulas, molas, pratos, travas, tuchos 35/37, comandos; mínimos com alerta de compra; movimentações rastreadas. Lista única em **ordem alfabética**, com **busca** por nome, código ou categoria, filtros de categoria e de situação (ativos / abaixo do mínimo / inativos) e colunas ordenáveis (nome, quantidade, custo, valor em estoque) |
@@ -112,6 +115,7 @@ com o sistema parado.
   | O que a empresa tem a receber | **Contas a receber** | fluxo de caixa, agenda, painel, ficha do cliente |
   | O que a empresa deve | **Contas a pagar / Compras / Fretes / RH** | fluxo de caixa, agenda |
   | Estoque próprio | **Estoque** e suas movimentações | produção, venda, compra |
+  | Proposta comercial de cabeçote | **Orçamento de venda** até aprovar; depois o **pedido** | produção, estoque, contas a receber |
   | Que peças entram em cada cabeçote | **Produtos e custos** (composição) | separação da produção, baixa de estoque, custo do produto |
 
   Toda alteração automática fica registrada no histórico e na auditoria, dizendo
@@ -152,6 +156,13 @@ com o sistema parado.
   venda por venda o que está errado hoje, separa o que religa com segurança do que
   precisa de revisão manual e **religa sem criar recebimento e sem tocar no Fluxo de
   caixa** (vencimento e observações digitados são preservados; cópia do banco antes).
+- **Orçar não é vender**: o orçamento de venda é uma proposta e só isso —
+  enquanto não é aprovado, o estoque, a produção e o financeiro nem sabem que
+  ele existe. A venda oficial nasce da aprovação, pelo mesmo caminho de um
+  pedido digitado à mão, então não há dois jeitos de criar venda que possam
+  divergir. Cada orçamento gera no máximo um pedido: clicar duas vezes em
+  aprovar é recusado dizendo qual pedido já existe. Cancelar o pedido fica
+  registrado no histórico do orçamento, que pode então ser reaberto.
 - **Uma composição só, para tudo**: as peças de cada configuração são cadastradas
   uma vez em *Produtos e custos* e dali saem a **separação do checklist** da
   produção, a **baixa do estoque** quando a ordem fica pronta e o **custo** do

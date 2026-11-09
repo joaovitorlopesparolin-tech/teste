@@ -4,22 +4,61 @@
 /* ================= VENDAS ================= */
 App.registerView('sales', async (view, args) => {
   if (args[0] === 'nova') return saleEditor(view, args[1] ? Number(args[1]) : null);
+  if (args[0] === 'orcamento') return saleEditor(view, args[1] ? Number(args[1]) : null, 'orcamento');
 
-  App.setTitle('Vendas / Pedidos', 'Cabeçotes vendidos — pipeline até a entrega');
-  const [sales, clients] = await Promise.all([App.get('/sales'), App.get('/clients')]);
+  App.setTitle('Vendas / Pedidos',
+    'Orçamento → enviar ao cliente → aprovar → pedido oficial. O orçamento é só proposta: não movimenta estoque, produção nem financeiro');
+  const [sales, quotes, clients] = await Promise.all([
+    App.get('/sales'), App.get('/saleQuotes'), App.get('/clients')]);
   sales.sort((a, b) => b.id - a.id);
+  quotes.sort((a, b) => b.id - a.id);
   const fin = App.can('finance_sensitive');
   const verValores = App.can('cashflow') || App.can('receivables') || App.can('payables') || fin;
   const ST = ['nao_produzido', 'preparacao', 'usinagem', 'montagem', 'pronto', 'enviado', 'entregue', 'cancelado'];
 
+  /* O orçamento tem vocabulário próprio: "Enviado" aqui é "enviado ao
+     cliente", não o pedido despachado. Por isso o rótulo sai desta tabela e
+     não do mapa geral de status, onde essas palavras já têm outro sentido. */
+  const ORC_ROTULOS = {
+    elaboracao: ['Em elaboração', ''], enviado: ['Enviado ao cliente', 'info'],
+    aguardando: ['Aguardando retorno', 'warn'], aprovado: ['Aprovado', 'ok'],
+    recusado: ['Recusado', 'danger'], cancelado: ['Cancelado', 'danger'],
+    expirado: ['Expirado', 'danger']
+  };
+  const badgeOrc = (sit) => {
+    const [l, c] = ORC_ROTULOS[sit] || [sit, ''];
+    return `<span class="badge ${c}">${App.esc(l)}</span>`;
+  };
+
+  /* Uma lista só, com orçamento e pedido lado a lado e etiqueta clara de
+     qual é qual: é assim que se acompanha a negociação de ponta a ponta. */
+  const FILTROS = [
+    ['', 'Todos'],
+    ['orc_abertos', 'Orçamentos em aberto'],
+    ['orc_aguardando', 'Aguardando retorno'],
+    ['orc_aprovados', 'Orçamentos aprovados'],
+    ['vendas', 'Vendas efetivadas'],
+    ['orc_perdidos', 'Recusados / cancelados / expirados']
+  ];
+  const ui = App.telaEstado('sales', { filtro: '', busca: '', status: '' });
+
   view.innerHTML = `
     <div class="toolbar">
-      <button class="btn primary" onclick="location.hash='#/sales/nova'">+ Nova venda</button>
-      <select id="sf" style="max-width:200px"><option value="">Todos os status</option>
-        ${ST.map(s => `<option value="${s}">${(App.STATUS[s] || [s])[0]}</option>`).join('')}</select>
+      <button class="btn primary" onclick="location.hash='#/sales/orcamento'">+ Criar orçamento</button>
+      <button class="btn" onclick="location.hash='#/sales/nova'">+ Nova venda</button>
+      <select id="sf-tipo" style="max-width:240px">
+        ${FILTROS.map(([v, l]) => `<option value="${v}"${v === ui.filtro ? ' selected' : ''}>${l}</option>`).join('')}
+      </select>
+      <select id="sf" style="max-width:190px"><option value="">Todos os status do pedido</option>
+        ${ST.map(x => `<option value="${x}"${x === ui.status ? ' selected' : ''}>${(App.STATUS[x] || [x])[0]}</option>`).join('')}</select>
+      <input id="sf-busca" style="flex:1;min-width:200px" value="${App.esc(ui.busca)}"
+             placeholder="🔎 Cliente, nº do orçamento, nº do pedido, produto…">
+      <button class="btn ghost" id="sf-limpar" title="Limpar filtros">✕</button>
       <div class="spacer"></div>
+      <button class="btn" onclick="Sales.relatorio()">📊 Conversão</button>
       <button class="btn" onclick="Sales.print()">🖨️ Imprimir</button>
     </div>
+    <div id="s-kpis"></div>
     <div id="s-table"></div>`;
 
   /* Nome curto da configuração, do jeito que a equipe fala: "Unilateral
@@ -124,30 +163,431 @@ App.registerView('sales', async (view, args) => {
       : '<span class="muted">—</span>';
   };
 
+  /* Busca na linha toda: cliente, nº do orçamento, nº do pedido e produto.
+     Sem acento e em qualquer ordem de palavras, igual às outras telas. */
+  const textoDa = (r) => {
+    const cliente = App.clientName(r.clienteId, clients) || '';
+    const produtos = (r.itens || []).map(i => `${i.produto || ''} ${i.comando || ''} ${configLabel(i)}`).join(' ');
+    return r._tipo === 'orcamento'
+      ? `orcamento ${r.numero} ${r.pedidoNumero ? 'pedido ' + r.pedidoNumero : ''} ${cliente} ${produtos} ${r.observacoes || ''}`
+      : `pedido ${r.numero} ${r.orcamentoNumero ? 'orcamento ' + r.orcamentoNumero : ''} ${cliente} ${produtos} ${r.observacoes || ''}`;
+  };
+
+  const linhas = () => {
+    const orcs = quotes.map(o => Object.assign({}, o, { _tipo: 'orcamento', _data: o.dataOrcamento }));
+    const vds = sales.map(v => Object.assign({}, v, { _tipo: 'venda', _data: v.dataPedido }));
+    let list;
+    switch (ui.filtro) {
+      case 'orc_abertos': list = orcs.filter(o => o.situacao === 'elaboracao' || o.situacao === 'enviado'); break;
+      case 'orc_aguardando': list = orcs.filter(o => o.situacao === 'aguardando'); break;
+      case 'orc_aprovados': list = orcs.filter(o => o.situacao === 'aprovado'); break;
+      case 'vendas': list = vds; break;
+      case 'orc_perdidos': list = orcs.filter(o =>
+        ['recusado', 'cancelado', 'expirado'].includes(o.situacao)); break;
+      default: list = orcs.concat(vds);
+    }
+    if (ui.status) list = list.filter(r => r._tipo === 'venda' && r.status === ui.status);
+    list = App.filtraPor(list, ui.busca, [textoDa]);
+    return list.sort((a, b) => String(b._data || '').localeCompare(String(a._data || '')) || b.id - a.id);
+  };
+
+  const acoesOrc = (o) => {
+    const virouVenda = !!o.saleId;
+    return `
+      <button class="btn sm" onclick="Orc.detalhes(${o.id})" title="Ver itens, valores e histórico">Detalhes</button>
+      ${!virouVenda && o.situacao !== 'cancelado'
+        ? `<button class="btn sm primary" onclick="Orc.aprovar(${o.id})" title="Aprovar e gerar o pedido oficial">✓ Aprovar e gerar venda</button>` : ''}
+      ${virouVenda
+        ? `<button class="btn sm ghost" onclick="Orc.irAoPedido(${o.id})" title="Abrir o pedido gerado">🧾 Pedido nº ${o.pedidoNumero}</button>` : ''}
+      ${!virouVenda ? `<button class="btn sm ghost" onclick="Orc.situacao(${o.id})" title="Enviado ao cliente, aguardando retorno, recusado…">Situação</button>` : ''}
+      ${!virouVenda ? `<button class="btn sm ghost" onclick="location.hash='#/sales/orcamento/${o.id}'" title="Editar o orçamento">✏️</button>` : ''}
+      ${['recusado', 'cancelado'].includes(o.status) && !virouVenda
+        ? `<button class="btn sm ghost" onclick="Orc.reabrir(${o.id})" title="Voltar para a negociação">↩️</button>` : ''}
+      <button class="btn sm ghost wa" onclick="Orc.wa(${o.id})" title="Enviar a proposta no WhatsApp">✆</button>
+      <button class="btn sm ghost" onclick="Orc.imprimir(${o.id})" title="Imprimir a proposta para o cliente">🖨️</button>
+      <button class="btn sm ghost" onclick="Orc.duplicar(${o.id})" title="Nova proposta a partir desta">📋</button>
+      ${!virouVenda ? `<button class="btn sm ghost" onclick="Orc.excluir(${o.id})" title="Excluir orçamento">🗑</button>` : ''}`;
+  };
+
+  const acoesVenda = (s) => `
+    <button class="btn sm" onclick="Sales.detalhes(${s.id})" title="Ver comando, tucho, pagamento e demais dados">Detalhes</button>
+    <button class="btn sm ghost" onclick="Sales.status(${s.id})">Status</button>
+    ${verValores ? `<button class="btn sm ghost" onclick="Sales.receber(${s.id})" title="Registrar recebimento (entrada / saldo)">💵</button>` : ''}
+    <button class="btn sm ghost wa" onclick="Sales.wa(${s.id})" title="Avisar o cliente no WhatsApp">✆</button>
+    <button class="btn sm ghost" onclick="Sales.etiqueta(${s.id})" title="Gerar etiqueta de envio">📦</button>
+    ${fin ? `<button class="btn sm ghost" onclick="Sales.result(${s.id})">Resultado</button>` : ''}
+    <button class="btn sm ghost" onclick="location.hash='#/sales/nova/${s.id}'" title="Editar venda">✏️</button>
+    <button class="btn sm ghost" onclick="Sales.duplicar(${s.id})" title="Duplicar venda">📋</button>
+    <button class="btn sm ghost" onclick="Sales.excluir(${s.id})" title="Excluir venda">🗑</button>`;
+
   const render = () => {
-    const f = document.getElementById('sf').value;
-    const list = sales.filter(s => !f || s.status === f);
+    const list = linhas();
+    const orcs = quotes.map(o => o);
+    const emNeg = orcs.filter(o => o.emNegociacao);
+    const aprov = orcs.filter(o => o.situacao === 'aprovado');
+    const perdidos = orcs.filter(o => ['recusado', 'cancelado', 'expirado'].includes(o.situacao));
+    const somaOrc = (l) => l.reduce((a, o) => a + (Number(o.valorTotal) || 0), 0);
+    document.getElementById('s-kpis').innerHTML = `
+      <div class="grid cols-4">
+        <div class="card kpi ${emNeg.length ? 'k-warn' : ''}"><div class="label">Orçamentos em negociação</div>
+          <div class="value">${emNeg.length}</div>
+          ${verValores ? `<div class="hint">R$ ${App.money(somaOrc(emNeg))} em proposta</div>` : ''}</div>
+        <div class="card kpi k-ok"><div class="label">Aprovados e convertidos</div>
+          <div class="value">${aprov.length}</div>
+          ${verValores ? `<div class="hint">R$ ${App.money(somaOrc(aprov))} fechados</div>` : ''}</div>
+        <div class="card kpi"><div class="label">Recusados / expirados</div>
+          <div class="value">${perdidos.length}</div>
+          <div class="hint">ficam no histórico, sem excluir</div></div>
+        <div class="card kpi"><div class="label">Pedidos oficiais</div>
+          <div class="value">${sales.filter(v => v.status !== 'cancelado').length}</div>
+          <div class="hint">${orcs.length ? `taxa de conversão ${(aprov.length / orcs.length * 100).toFixed(0)}%` : 'vendas ativas'}</div></div>
+      </div>`;
+
     document.getElementById('s-table').innerHTML = App.table(list, [
-      { h: 'Pedido', cell: s => `<b>nº ${s.numero}</b><div class="small muted">${App.date(s.dataPedido)}</div>` },
-      { h: 'Cliente', cell: s => App.clientCell(s.clienteId, clients) },
-      { h: 'Qtd', class: 'num', cell: s => `<b>${qtdCabecotes(s)}</b>` },
-      { h: 'Configurações', cell: s => resumoConfigs(s) },
-      { h: 'Previsão', cell: s => App.date(s.previsaoEntrega) },
-      { h: 'Status', cell: s => App.badge(s.status) },
-      { h: '', class: 'num', cell: s => `
-        <button class="btn sm" onclick="Sales.detalhes(${s.id})" title="Ver comando, tucho, pagamento e demais dados">Detalhes</button>
-        <button class="btn sm ghost" onclick="Sales.status(${s.id})">Status</button>
-        ${verValores ? `<button class="btn sm ghost" onclick="Sales.receber(${s.id})" title="Registrar recebimento (entrada / saldo)">💵</button>` : ''}
-        <button class="btn sm ghost wa" onclick="Sales.wa(${s.id})" title="Avisar o cliente no WhatsApp">✆</button>
-        <button class="btn sm ghost" onclick="Sales.etiqueta(${s.id})" title="Gerar etiqueta de envio">📦</button>
-        ${fin ? `<button class="btn sm ghost" onclick="Sales.result(${s.id})">Resultado</button>` : ''}
-        <button class="btn sm ghost" onclick="location.hash='#/sales/nova/${s.id}'" title="Editar venda">✏️</button>
-        <button class="btn sm ghost" onclick="Sales.duplicar(${s.id})" title="Duplicar venda">📋</button>
-        <button class="btn sm ghost" onclick="Sales.excluir(${s.id})" title="Excluir venda">🗑</button>` }
-    ], { onRow: s => Sales.detalhes(s.id) });
+      { h: 'Registro', cell: r => r._tipo === 'orcamento'
+        ? `<span class="badge accent">ORÇAMENTO</span> <b>nº ${r.numero}</b>
+           <div class="small muted">${App.date(r.dataOrcamento)}${r.versao > 1 ? ` · versão ${r.versao}` : ''}</div>`
+        : `<span class="badge ok">PEDIDO</span> <b>nº ${r.numero}</b>
+           <div class="small muted">${App.date(r.dataPedido)}</div>` },
+      { h: 'Cliente', cell: r => App.clientCell(r.clienteId, clients) },
+      { h: 'Qtd', class: 'num', cell: r => `<b>${qtdCabecotes(r)}</b>` },
+      { h: 'Configurações', cell: r => resumoConfigs(r) },
+      ...(verValores ? [{ h: 'Valor', class: 'num', cell: r => `${App.moneyHtml(r.valorTotal)}${
+        r.descontoValor ? `<div class="small muted">desc. R$ ${App.money(r.descontoValor)}</div>` : ''}` }] : []),
+      { h: 'Situação', cell: r => r._tipo === 'orcamento'
+        ? `${badgeOrc(r.situacao)}${r.vencimento && r.emNegociacao
+            ? `<div class="small muted">vale até ${App.date(r.vencimento)}</div>` : ''}`
+        : App.badge(r.status) },
+      { h: 'Vínculo', cell: r => r._tipo === 'orcamento'
+        ? (r.pedidoNumero ? `<span class="small">virou o pedido <b>nº ${r.pedidoNumero}</b></span>`
+          : '<span class="small muted">proposta — nada movimentado</span>')
+        : (r.orcamentoNumero ? `<span class="small">do orçamento <b>nº ${r.orcamentoNumero}</b></span>`
+          : '<span class="small muted">pedido direto</span>') },
+      { h: '', class: 'num', cell: r => r._tipo === 'orcamento' ? acoesOrc(r) : acoesVenda(r) }
+    ], { emptyMsg: 'Nada encontrado com estes filtros',
+      onRow: r => r._tipo === 'orcamento' ? Orc.detalhes(r.id) : Sales.detalhes(r.id) });
   };
   render();
-  document.getElementById('sf').addEventListener('change', render);
+  document.getElementById('sf-tipo').addEventListener('change', e => { ui.filtro = e.target.value; render(); });
+  document.getElementById('sf').addEventListener('change', e => { ui.status = e.target.value; render(); });
+  document.getElementById('sf-busca').addEventListener('input', e => { ui.busca = e.target.value; render(); });
+  document.getElementById('sf-limpar').addEventListener('click', () => {
+    ui.filtro = ''; ui.status = ''; ui.busca = '';
+    document.getElementById('sf-tipo').value = '';
+    document.getElementById('sf').value = '';
+    document.getElementById('sf-busca').value = '';
+    render();
+  });
+
+  /* ================= ORÇAMENTO DE VENDA =================
+     Proposta comercial: tudo o que a venda tem, menos as consequências.
+     Só a aprovação gera pedido, produção, estoque e cobrança. */
+  window.Orc = {
+    detalhes(id) {
+      const o = quotes.find(x => x.id === id);
+      if (!o) return;
+      const pg = o.pagamento || {};
+      App.modal(`
+        <h2><span class="badge accent">ORÇAMENTO</span> nº ${o.numero} — ${App.esc(App.clientName(o.clienteId, clients))}</h2>
+        <p class="small muted">${App.esc(o.cidade || '—')}${o.estado ? '/' + App.esc(o.estado) : ''}
+          · ${App.date(o.dataOrcamento)}
+          ${o.vencimento ? `· vale até ${App.date(o.vencimento)}` : ''}
+          ${o.versao > 1 ? `· versão ${o.versao}` : ''}
+          · ${badgeOrc(o.situacao)}</p>
+        ${o.saleId ? `<p class="small pos">✓ Aprovado em ${App.date(o.dataAprovacao)}${
+          o.aprovadoPor ? ' por ' + App.esc(o.aprovadoPor) : ''} — virou o <b>pedido nº ${o.pedidoNumero}</b>.</p>` : ''}
+        ${o.motivo ? `<p class="small" style="color:var(--danger)">Motivo: ${App.esc(o.motivo)}</p>` : ''}
+
+        <h3 class="section-title">Itens</h3>
+        ${App.table(o.itens || [], [
+          { h: 'Qtd', class: 'num', cell: i => i.qtd },
+          { h: 'Produto', cell: i => `<b>${App.esc(i.produto)}</b>` },
+          { h: 'Configuração', cell: i => i.kind === 'peca'
+            ? '<span class="muted">peça do estoque</span>'
+            : `${App.esc(configLabel(i))}<div class="small muted">comando ${App.esc(i.comando || '—')} · tucho ${App.esc(String(i.tucho || '—'))} mm</div>` },
+          ...(verValores ? [
+            { h: 'Unitário', class: 'num', cell: i => App.moneyHtml(i.valorUnit) },
+            { h: 'Total', class: 'num', cell: i => App.moneyHtml(i.total) }] : [])
+        ], { emptyMsg: 'Sem itens' })}
+
+        ${verValores ? `
+          <h3 class="section-title">Valores e pagamento pretendido</h3>
+          <table style="font-size:13.5px">
+            <tr><td>Subtotal dos itens</td><td class="num">R$ ${App.money(o.valorBruto || o.valorTotal)}</td></tr>
+            ${o.descontoValor ? `<tr><td>Desconto${(o.desconto || {}).tipo === 'percentual'
+              ? ` (${(o.desconto || {}).valor}%)` : ''}</td>
+              <td class="num neg">− R$ ${App.money(o.descontoValor)}</td></tr>` : ''}
+            <tr><td><b>Valor do orçamento</b></td><td class="num"><b>R$ ${App.money(o.valorTotal)}</b></td></tr>
+            <tr><td>Pagamento pretendido</td><td class="num">${App.esc(pg.forma || '—')}${
+              pg.condicao === 'parcelado' && pg.parcelas > 1 ? ` · ${pg.parcelas}x` : ' · à vista'}</td></tr>
+            ${o.previsaoEntrega ? `<tr><td>Previsão de entrega</td><td class="num">${App.date(o.previsaoEntrega)}</td></tr>` : ''}
+          </table>
+          <p class="small muted" style="margin-top:6px">Nenhuma cobrança foi criada: as parcelas em Contas a
+          receber nascem quando o orçamento for aprovado.</p>` : ''}
+
+        ${o.observacoes ? `<h3 class="section-title">Observações</h3><p>${App.esc(o.observacoes)}</p>` : ''}
+
+        <h3 class="section-title">Histórico da negociação</h3>
+        ${App.table((o.historico || []).slice().reverse(), [
+          { h: 'Quando', cell: h => `<span class="small">${App.dateTime(h.at)}</span>` },
+          { h: 'Quem', cell: h => App.esc(h.por || '') },
+          { h: 'O que aconteceu', cell: h => App.esc(h.evento || '') },
+          ...(verValores ? [{ h: 'Valor na hora', class: 'num',
+            cell: h => h.valorTotal != null ? 'R$ ' + App.money(h.valorTotal) : '—' }] : [])
+        ], { emptyMsg: 'Sem histórico' })}
+
+        <div class="actions">
+          <button class="btn" onclick="App.closeModal()">Fechar</button>
+          <button class="btn ghost" onclick="Orc.imprimir(${o.id})">🖨️ Imprimir proposta</button>
+          ${o.saleId
+            ? `<button class="btn primary" onclick="Orc.irAoPedido(${o.id})">Abrir pedido nº ${o.pedidoNumero}</button>`
+            : `<button class="btn ghost" onclick="App.closeModal();location.hash='#/sales/orcamento/${o.id}'">✏️ Editar</button>
+               <button class="btn primary" onclick="Orc.aprovar(${o.id})">✓ Aprovar e gerar venda</button>`}
+        </div>`, { wide: true });
+    },
+
+    situacao(id) {
+      const o = quotes.find(x => x.id === id);
+      const opcoes = [
+        { value: 'elaboracao', label: 'Em elaboração — ainda montando a proposta' },
+        { value: 'enviado', label: 'Enviado ao cliente' },
+        { value: 'aguardando', label: 'Aguardando retorno do cliente' },
+        { value: 'recusado', label: 'Recusado — o cliente não fechou' },
+        { value: 'cancelado', label: 'Cancelado' }
+      ];
+      App.form(`Situação do orçamento nº ${o.numero}`, [
+        { name: 'status', label: 'Nova situação', type: 'select', value: o.status, full: true, options: opcoes },
+        { name: 'motivo', label: 'Motivo (para recusado ou cancelado)', full: true, value: o.motivo || '' }
+      ], async d => {
+        await App.post(`/saleQuotes/${id}/status`, d);
+        App.closeModal();
+        App.toast('Situação atualizada — o orçamento continua no histórico', 'ok');
+        App.route();
+      }, { submitLabel: 'Salvar situação' });
+      /* Aprovar não entra nesta lista de propósito: aprovar é gerar a venda
+         oficial, e isso tem botão próprio, com confirmação do que será criado. */
+    },
+
+    async aprovar(id) {
+      const o = quotes.find(x => x.id === id);
+      if (!o) return;
+      const cabecotes = (o.itens || []).filter(i => i.kind !== 'peca')
+        .reduce((a, i) => a + (Number(i.qtd) || 1), 0);
+      const pecas = (o.itens || []).filter(i => i.kind === 'peca')
+        .reduce((a, i) => a + (Number(i.qtd) || 1), 0);
+      const pg = o.pagamento || {};
+      const efeitos = [
+        'é gerado o <b>pedido oficial</b>, com número próprio, ligado a este orçamento',
+        cabecotes ? `<b>${cabecotes}</b> ordem(ns) de produção entram na fila da oficina` : '',
+        pecas ? `<b>${pecas}</b> peça(s) de revenda saem do estoque` : '',
+        verValores ? `o valor de <b>R$ ${App.money(o.valorTotal)}</b> vira cobrança em Contas a receber${
+          pg.condicao === 'parcelado' && pg.parcelas > 1 ? ` (${pg.parcelas} parcelas)` : ''}` : '',
+        '<b>nada</b> entra no Fluxo de caixa: o dinheiro só entra quando você registrar o recebimento'
+      ].filter(Boolean);
+
+      if (!await App.confirm(
+        `Aprovar o orçamento <b>nº ${o.numero}</b> e gerar a venda?<br><br>` +
+        efeitos.map(e => '• ' + e).join('<br>') +
+        '<br><br><span class="small">O orçamento continua gravado com o número, a data, os valores ' +
+        'apresentados, o desconto e todo o histórico — e passa a apontar para o pedido gerado.</span>',
+        { html: true })) return;
+
+      const enviar = async (extra) => {
+        const out = await App.post(`/saleQuotes/${id}/aprovar`, extra || {});
+        App.closeModal();
+        App.toast(`Orçamento nº ${o.numero} aprovado — pedido nº ${out.venda.numero} gerado`, 'ok');
+        App.route();
+      };
+      try { await enviar(); }
+      catch (e) {
+        const d = e.dados || {};
+        if (d.expirado) {
+          if (!await App.confirm(`${App.esc(e.message)}<br><br>Aprovar mesmo assim?`, { html: true })) return;
+          try { await enviar({ confirmarExpirado: true }); } catch (e2) { App.toast(e2.message, 'err'); }
+          return;
+        }
+        if (d.jaAprovado) {
+          if (!await App.confirm(
+            `${App.esc(e.message)}<br><br><b>Gerar um segundo pedido</b> com os mesmos itens?<br>` +
+            '<span class="small">Isto cria outra venda, outra produção e outra cobrança. ' +
+            'Só faça se o cliente realmente comprou duas vezes.</span>', { html: true })) return;
+          try { await enviar({ gerarOutraVenda: true, confirmarExpirado: true }); }
+          catch (e2) { App.toast(e2.message, 'err'); }
+          return;
+        }
+        App.toast(e.message, 'err');
+      }
+    },
+
+    async reabrir(id) {
+      const o = quotes.find(x => x.id === id);
+      if (!await App.confirm(`Reabrir a negociação do orçamento nº ${o.numero}?`)) return;
+      try {
+        await App.post(`/saleQuotes/${id}/reabrir`, {});
+        App.toast('Orçamento de volta em "Aguardando retorno"', 'ok');
+        App.route();
+      } catch (e) { App.toast(e.message, 'err'); }
+    },
+
+    irAoPedido(id) {
+      const o = quotes.find(x => x.id === id);
+      App.closeModal();
+      if (!o || !o.saleId) return App.toast('Este orçamento ainda não gerou pedido', 'err');
+      ui.filtro = 'vendas'; ui.busca = String(o.pedidoNumero || '');
+      location.hash = '#/sales';
+      App.route();
+      App.toast(`Mostrando o pedido nº ${o.pedidoNumero}`, 'ok');
+    },
+
+    wa(id) {
+      const o = quotes.find(x => x.id === id);
+      const c = clients.find(x => x.id === o.clienteId);
+      App.waShare(`Orçamento nº ${o.numero} — ${(c && c.nome) || 'cliente'}`,
+        App.waPhoneOf(c), App.waMsg.saleQuote(o, c));
+    },
+
+    async duplicar(id) {
+      const o = quotes.find(x => x.id === id);
+      if (!await App.confirm(`Criar um novo orçamento com os itens do nº ${o.numero}?`)) return;
+      try {
+        const novo = await App.post(`/saleQuotes/${id}/duplicate`, {});
+        App.toast(`Orçamento nº ${novo.numero} criado a partir do nº ${o.numero}`, 'ok');
+        location.hash = `#/sales/orcamento/${novo.id}`;
+      } catch (e) { App.toast(e.message, 'err'); }
+    },
+
+    async excluir(id) {
+      const o = quotes.find(x => x.id === id);
+      try {
+        await App.del(`/saleQuotes/${id}`);
+        App.toast('Orçamento excluído', 'ok');
+        App.route();
+      } catch (e) {
+        if (!(e.dados && e.dados.precisaConfirmar)) return App.toast(e.message, 'err');
+        if (!await App.confirm(
+          `${App.esc(e.message)}<br><br><span class="small">Marcar como <b>Recusado</b> mantém o registro ` +
+          'para o relatório de conversão. Excluir apaga de vez.</span>', { html: true })) return;
+        try {
+          await App.del(`/saleQuotes/${id}`, { 'X-Confirmar': 'sim' });
+          App.toast(`Orçamento nº ${o.numero} excluído`, 'ok');
+          App.route();
+        } catch (e2) { App.toast(e2.message, 'err'); }
+      }
+    },
+
+    /* O corpo do relatório é o mesmo na tela e no papel. */
+    relatorioCorpo(r) {
+      const t = r.totais;
+      return `
+        <div class="grid cols-4">
+          <div class="card kpi"><div class="label">Orçamentos criados</div><div class="value">${t.criados}</div>
+            <div class="hint">${t.enviados} enviado(s) ao cliente</div></div>
+          <div class="card kpi k-ok"><div class="label">Aprovados</div><div class="value">${t.aprovados}</div>
+            <div class="hint">taxa de conversão ${t.taxaConversao}%</div></div>
+          <div class="card kpi k-warn"><div class="label">Em negociação</div><div class="value">${t.emNegociacao}</div>
+            <div class="hint">ainda sem resposta</div></div>
+          <div class="card kpi k-danger"><div class="label">Recusados / cancelados / expirados</div>
+            <div class="value">${t.recusados + t.cancelados + t.expirados}</div>
+            <div class="hint">${t.recusados} recusado(s) · ${t.expirados} expirado(s)</div></div>
+        </div>
+        ${verValores ? `
+        <table style="font-size:13.5px;margin-top:12px">
+          <tr><td>Valor total orçado no período</td><td class="num"><b>R$ ${App.money(t.valorOrcado)}</b></td></tr>
+          <tr><td>Valor ainda em negociação</td><td class="num">R$ ${App.money(t.valorEmNegociacao)}</td></tr>
+          <tr><td>Valor dos orçamentos aprovados</td><td class="num pos">R$ ${App.money(t.valorAprovado)}</td></tr>
+          <tr><td><b>Valor convertido em pedidos</b></td>
+              <td class="num"><b class="pos">R$ ${App.money(t.valorConvertido)}</b></td></tr>
+          <tr><td>Valor recusado</td><td class="num neg">R$ ${App.money(t.valorRecusado)}</td></tr>
+        </table>
+        <p class="small muted">O valor convertido é o do <b>pedido</b> gerado — se o valor foi ajustado
+        depois da aprovação, é o do pedido que vale. Pedido cancelado não conta.</p>` : ''}
+        ${r.meses.length ? `
+        <h3 class="section-title">Mês a mês</h3>
+        ${App.table(r.meses, [
+          { h: 'Mês', cell: m => `<b>${App.esc(App.mesRotulo(m.mes))}</b>` },
+          { h: 'Orçamentos', class: 'num', cell: m => m.qtd },
+          { h: 'Aprovados', class: 'num', cell: m => m.aprovados },
+          { h: 'Recusados', class: 'num', cell: m => m.recusados },
+          { h: 'Conversão', class: 'num', cell: m => m.qtd ? (m.aprovados / m.qtd * 100).toFixed(0) + '%' : '—' },
+          ...(verValores ? [
+            { h: 'Valor orçado', class: 'num', cell: m => 'R$ ' + App.money(m.valor) },
+            { h: 'Valor aprovado', class: 'num', cell: m => 'R$ ' + App.money(m.valorAprovado) }] : [])
+        ])}` : ''}
+        <h3 class="section-title">Orçamentos do período</h3>
+        ${App.table(r.orcamentos, [
+          { h: 'Nº', cell: o => `<b>${o.numero}</b>` },
+          { h: 'Data', cell: o => App.date(o.data) },
+          { h: 'Cliente', cell: o => App.esc(o.cliente) },
+          ...(verValores ? [{ h: 'Valor', class: 'num', cell: o => 'R$ ' + App.money(o.valorTotal) }] : []),
+          { h: 'Situação', cell: o => badgeOrc(o.situacao) },
+          { h: 'Pedido', cell: o => o.pedidoNumero
+            ? `<span class="small">nº ${o.pedidoNumero}<br><span class="muted">${App.date(o.dataAprovacao)}${
+              o.aprovadoPor ? ' · ' + App.esc(o.aprovadoPor) : ''}</span></span>`
+            : '<span class="muted">—</span>' }
+        ], { emptyMsg: 'Nenhum orçamento neste período' })}`;
+    },
+
+    imprimirRelatorio(r) {
+      const t = r.totais;
+      App.print('Conversão de orçamentos',
+        `<p><b>Período:</b> ${App.date(r.periodo.de) || 'início'} a ${App.date(r.periodo.ate) || 'hoje'}</p>
+        <table>
+          <tr><th>Indicador</th><th class="num">Valor</th></tr>
+          <tr><td>Orçamentos criados</td><td class="num">${t.criados}</td></tr>
+          <tr><td>Enviados ao cliente</td><td class="num">${t.enviados}</td></tr>
+          <tr><td>Aprovados</td><td class="num">${t.aprovados}</td></tr>
+          <tr><td>Recusados</td><td class="num">${t.recusados}</td></tr>
+          <tr><td>Cancelados</td><td class="num">${t.cancelados}</td></tr>
+          <tr><td>Expirados</td><td class="num">${t.expirados}</td></tr>
+          <tr><td>Ainda em negociação</td><td class="num">${t.emNegociacao}</td></tr>
+          <tr><td>Taxa de conversão</td><td class="num">${t.taxaConversao}%</td></tr>
+          ${verValores ? `
+          <tr><td>Valor total orçado</td><td class="num">R$ ${App.money(t.valorOrcado)}</td></tr>
+          <tr><td>Valor convertido em pedidos</td><td class="num">R$ ${App.money(t.valorConvertido)}</td></tr>` : ''}
+        </table>
+        <table>
+          <tr><th>Nº</th><th>Data</th><th>Cliente</th>${verValores ? '<th class="num">Valor</th>' : ''}<th>Situação</th><th>Pedido</th></tr>
+          ${r.orcamentos.map(o => `<tr><td>${o.numero}</td><td>${App.date(o.data)}</td>
+            <td>${App.esc(o.cliente)}</td>
+            ${verValores ? `<td class="num">R$ ${App.money(o.valorTotal)}</td>` : ''}
+            <td>${(({ elaboracao: 'Em elaboração', enviado: 'Enviado', aguardando: 'Aguardando retorno',
+              aprovado: 'Aprovado', recusado: 'Recusado', cancelado: 'Cancelado', expirado: 'Expirado' })[o.situacao] || o.situacao)}</td>
+            <td>${o.pedidoNumero ? 'nº ' + o.pedidoNumero : '—'}</td></tr>`).join('')}
+        </table>`,
+        `${t.criados} orçamento(s) · ${t.aprovados} aprovado(s)`);
+    },
+
+    imprimir(id) {
+      const o = quotes.find(x => x.id === id);
+      const c = clients.find(x => x.id === o.clienteId) || {};
+      const pg = o.pagamento || {};
+      App.print(`Orçamento nº ${o.numero}`,
+        `<p><b>Cliente:</b> ${App.esc(c.nome || '—')}${c.cidade ? ' — ' + App.esc(c.cidade) : ''}${
+          c.estado ? '/' + App.esc(c.estado) : ''}</p>
+        <p><b>Data:</b> ${App.date(o.dataOrcamento)}${o.vencimento ? ` &nbsp;·&nbsp; <b>Validade:</b> até ${App.date(o.vencimento)}` : ''}</p>
+        <table>
+          <tr><th class="num">Qtd</th><th>Produto</th><th>Configuração</th>${verValores
+            ? '<th class="num">Valor unitário</th><th class="num">Total</th>' : ''}</tr>
+          ${(o.itens || []).map(i => `<tr>
+            <td class="num">${i.qtd}</td>
+            <td>${App.esc(i.produto)}</td>
+            <td>${i.kind === 'peca' ? 'peça' : `${App.esc(configLabel(i))} · comando ${App.esc(i.comando || '—')} · tucho ${App.esc(String(i.tucho || '—'))} mm`}</td>
+            ${verValores ? `<td class="num">R$ ${App.money(i.valorUnit)}</td><td class="num">R$ ${App.money(i.total)}</td>` : ''}
+          </tr>`).join('')}
+          ${verValores && o.descontoValor ? `<tr><td colspan="4"><b>Desconto</b></td>
+            <td class="num">− R$ ${App.money(o.descontoValor)}</td></tr>` : ''}
+          ${verValores ? `<tr><td colspan="4"><b>TOTAL</b></td>
+            <td class="num"><b>R$ ${App.money(o.valorTotal)}</b></td></tr>` : ''}
+        </table>
+        ${verValores && pg.forma ? `<p><b>Pagamento:</b> ${App.esc(pg.forma)}${
+          pg.condicao === 'parcelado' && pg.parcelas > 1 ? ` em ${pg.parcelas}x` : ' à vista'}</p>` : ''}
+        ${o.previsaoEntrega ? `<p><b>Previsão de entrega:</b> ${App.date(o.previsaoEntrega)}</p>` : ''}
+        ${o.observacoes ? `<p><b>Observações:</b> ${App.esc(o.observacoes)}</p>` : ''}
+        <p class="meta">Este documento é uma proposta comercial e não constitui pedido.
+        A produção e a entrega começam a contar da aprovação.</p>`,
+        `${(o.itens || []).length} item(ns)`);
+    }
+  };
 
   window.Sales = {
     /* Tudo que saiu da listagem para ela caber na tela: comando, tucho,
@@ -165,7 +605,12 @@ App.registerView('sales', async (view, args) => {
       const rec = fin.recebido, saldo = fin.saldo;
       const pg = s.pagamento || {};
       App.modal(`
-        <h2>Pedido nº ${s.numero} — ${App.esc(App.clientName(s.clienteId, clients))}</h2>
+        <h2><span class="badge ok">PEDIDO</span> nº ${s.numero} — ${App.esc(App.clientName(s.clienteId, clients))}</h2>
+        ${s.orcamentoNumero ? `<p class="small">Nasceu do <b>orçamento nº ${s.orcamentoNumero}</b>${
+          s.dataOrcamento ? ` (de ${App.date(s.dataOrcamento)})` : ''}${
+          s.valorOrcado != null && verValores && Math.abs(s.valorOrcado - s.valorTotal) > 0.005
+            ? ` — orçado em R$ ${App.money(s.valorOrcado)}` : ''}
+          ${s.orcamentoId ? `<button class="btn sm ghost" onclick="App.closeModal();Orc.detalhes(${s.orcamentoId})">ver o orçamento</button>` : ''}</p>` : ''}
         <p class="small muted">${App.esc(s.cidade || '—')}${s.estado ? '/' + App.esc(s.estado) : ''}
           · pedido em ${App.date(s.dataPedido)}
           · previsão ${App.date(s.previsaoEntrega)}
@@ -187,6 +632,9 @@ App.registerView('sales', async (view, args) => {
         ${verValores ? `
           <h3 class="section-title">Valores e pagamento</h3>
           <table style="font-size:13.5px">
+            ${s.descontoValor ? `<tr><td>Subtotal dos itens</td><td class="num">R$ ${App.money(s.valorBruto || s.valorTotal)}</td></tr>
+            <tr><td>Desconto${(s.desconto || {}).tipo === 'percentual' ? ` (${(s.desconto || {}).valor}%)` : ''}</td>
+                <td class="num neg">− R$ ${App.money(s.descontoValor)}</td></tr>` : ''}
             <tr><td>Valor total</td><td class="num"><b>R$ ${App.money(s.valorTotal)}</b></td></tr>
             ${(s.custosAdicionais || []).map(c => `<tr><td class="muted">Custo adicional — ${App.esc(c.desc || '')}</td>
               <td class="num muted">R$ ${App.money(c.valor)}</td></tr>`).join('')}
@@ -412,32 +860,87 @@ App.registerView('sales', async (view, args) => {
         </table>
         <div class="actions"><button class="btn" onclick="App.closeModal()">Fechar</button></div>`);
     },
+    /* O papel sai igual à tela: mesmos filtros, mesma ordem, e dizendo em
+       cada linha se é orçamento ou pedido. */
     print() {
-      const f = document.getElementById('sf').value;
-      const list = sales.filter(s => !f || s.status === f);
-      App.print('Pedidos' + (f ? ' — ' + (App.STATUS[f] || [f])[0] : ''),
-        `<table><tr><th>Nº</th><th>Data</th><th>Cliente</th><th>Itens</th>${verValores ? '<th class="num">Total</th>' : ''}<th>Previsão</th><th>Status</th></tr>
-        ${list.map(s => `<tr><td>${s.numero}</td><td>${App.date(s.dataPedido)}</td>
-        <td>${App.esc(App.clientName(s.clienteId, clients))}</td>
-        <td>${s.itens.map(i => i.kind === 'peca'
-          ? `${i.qtd}× ${App.esc(i.produto)}`
-          : `${i.qtd}× ${App.esc(i.produto)} (${App.esc(i.comando || '—')}, tucho ${App.esc(String(i.tucho || '—'))} mm)`).join('; ')}</td>
-        ${verValores ? `<td class="num">R$ ${App.money(s.valorTotal)}</td>` : ''}<td>${App.date(s.previsaoEntrega)}</td>
-        <td>${(App.STATUS[s.status] || [s.status])[0]}</td></tr>`).join('')}</table>`,
-        list.length + ' pedido(s)');
+      const list = linhas();
+      const rotulo = (FILTROS.find(f => f[0] === ui.filtro) || ['', 'Todos'])[1];
+      App.print('Vendas e orçamentos — ' + rotulo,
+        `<table><tr><th>Tipo</th><th>Nº</th><th>Data</th><th>Cliente</th><th>Itens</th>${
+          verValores ? '<th class="num">Total</th>' : ''}<th>Situação</th><th>Vínculo</th></tr>
+        ${list.map(r => `<tr>
+          <td>${r._tipo === 'orcamento' ? 'Orçamento' : 'Pedido'}</td>
+          <td>${r.numero}</td><td>${App.date(r._data)}</td>
+          <td>${App.esc(App.clientName(r.clienteId, clients))}</td>
+          <td>${(r.itens || []).map(i => i.kind === 'peca'
+            ? `${i.qtd}× ${App.esc(i.produto)}`
+            : `${i.qtd}× ${App.esc(i.produto)} (${App.esc(i.comando || '—')}, tucho ${App.esc(String(i.tucho || '—'))} mm)`).join('; ')}</td>
+          ${verValores ? `<td class="num">R$ ${App.money(r.valorTotal)}</td>` : ''}
+          <td>${r._tipo === 'orcamento'
+            ? (ORC_ROTULOS[r.situacao] || [r.situacao])[0]
+            : (App.STATUS[r.status] || [r.status])[0]}</td>
+          <td>${r._tipo === 'orcamento'
+            ? (r.pedidoNumero ? 'pedido nº ' + r.pedidoNumero : '—')
+            : (r.orcamentoNumero ? 'orçamento nº ' + r.orcamentoNumero : '—')}</td>
+        </tr>`).join('')}</table>`,
+        `${list.filter(r => r._tipo === 'orcamento').length} orçamento(s) · ${
+          list.filter(r => r._tipo === 'venda').length} pedido(s)`);
+    },
+
+    /* Quantos orçamentos viram negócio de verdade. */
+    async relatorio() {
+      const hoje = App.today();
+      const de = hoje.slice(0, 4) + '-01-01';
+      const carrega = async (d1, d2) => App.get(`/relatorios/orcamentos-venda?de=${d1}&ate=${d2}`);
+      let r;
+      try { r = await carrega(de, hoje); }
+      catch (e) { return App.toast(e.message, 'err'); }
+      const t = r.totais;
+      App.modal(`
+        <h2>Conversão de orçamentos</h2>
+        <div class="formgrid">
+          <label class="field"><span>De</span><input type="date" id="rc-de" value="${de}"></label>
+          <label class="field"><span>Até</span><input type="date" id="rc-ate" value="${hoje}"></label>
+          <label class="field"><span>&nbsp;</span><button class="btn" id="rc-ok">Atualizar</button></label>
+        </div>
+        <div id="rc-corpo">${Orc.relatorioCorpo(r)}</div>
+        <div class="actions">
+          <button class="btn" onclick="App.closeModal()">Fechar</button>
+          <button class="btn ghost" id="rc-print">🖨️ Imprimir</button>
+        </div>`, { wide: true });
+      const recarrega = async () => {
+        const d1 = document.getElementById('rc-de').value, d2 = document.getElementById('rc-ate').value;
+        try {
+          const novo = await carrega(d1, d2);
+          window.Orc._rel = novo;
+          document.getElementById('rc-corpo').innerHTML = Orc.relatorioCorpo(novo);
+        } catch (e) { App.toast(e.message, 'err'); }
+      };
+      window.Orc._rel = r;
+      document.getElementById('rc-ok').onclick = recarrega;
+      document.getElementById('rc-print').onclick = () => Orc.imprimirRelatorio(window.Orc._rel);
     }
   };
 });
 
 /* ---- Editor de nova venda ---- */
-async function saleEditor(view, editId) {
+/* O MESMO editor serve para o orçamento e para a venda oficial: os campos
+   são os mesmos, o que muda é onde salva e o que acontece ao salvar.
+   modo 'orcamento' grava uma proposta, que não movimenta nada;
+   modo 'venda' grava o pedido oficial, com estoque, produção e financeiro. */
+async function saleEditor(view, editId, modo) {
+  const orcamento = modo === 'orcamento';
   const [clients, products, estoque] = await Promise.all([
     App.get('/clients'), App.get('/products'), App.get('/stockItems')]);
   estoque.sort((a, b) => (a.nome || '').localeCompare(b.nome || '', 'pt-BR'));
-  const venda = editId ? await App.get('/sales/' + editId) : null;
-  App.setTitle(venda ? `Editar pedido nº ${venda.numero}` : 'Nova venda',
-    venda ? 'Alterar itens ou pagamento refaz produção, estoque e financeiro — sem duplicar'
-          : 'O sistema valida comando e tucho conforme o Stage e cria as ordens de produção automaticamente');
+  const venda = editId ? await App.get((orcamento ? '/saleQuotes/' : '/sales/') + editId) : null;
+  App.setTitle(
+    venda ? `Editar ${orcamento ? 'orçamento' : 'pedido'} nº ${venda.numero}`
+      : (orcamento ? 'Novo orçamento de venda' : 'Nova venda'),
+    orcamento
+      ? 'Proposta comercial: nada sai do estoque, nada vai para a produção e nada entra no financeiro até ser aprovada'
+      : (venda ? 'Alterar itens ou pagamento refaz produção, estoque e financeiro — sem duplicar'
+        : 'O sistema valida comando e tucho conforme o Stage e cria as ordens de produção automaticamente'));
 
   // itens: cabeçote {productId, comando, tucho, qtd, valorUnit}
   //        peça     {kind:'peca', stockItemId, nome, qtd, valorUnit}
@@ -446,7 +949,17 @@ async function saleEditor(view, editId) {
     : { productId: i.productId, comando: i.comando, tucho: i.tucho, qtd: i.qtd, valorUnit: i.valorUnit }) : [];
   let adicionais = venda ? (venda.custosAdicionais || []).slice() : [];
 
-  const total = () => itens.reduce((s, i) => s + i.qtd * i.valorUnit, 0);
+  const bruto = () => itens.reduce((s, i) => s + i.qtd * i.valorUnit, 0);
+  /* Desconto comercial: em reais ou em percentual. A conta é a mesma do
+     servidor — a tela nunca mostra um total diferente do que será gravado. */
+  const descontoEm = () => {
+    const tipo = (document.getElementById('v-desc-tipo') || {}).value || 'valor';
+    const v = Math.max(0, Number((document.getElementById('v-desc-valor') || {}).value) || 0);
+    const b = bruto();
+    const em = tipo === 'percentual' ? b * Math.min(v, 100) / 100 : v;
+    return Math.min(Math.round(em * 100) / 100, b);
+  };
+  const total = () => Math.round((bruto() - descontoEm()) * 100) / 100;
 
   const renderItems = () => {
     document.getElementById('v-items').innerHTML = App.table(itens.map((i, idx) => {
@@ -464,6 +977,8 @@ async function saleEditor(view, editId) {
     ], { emptyMsg: 'Adicione os cabeçotes do pedido' }) +
     (adicionais.length ? `<div class="small muted" style="margin-top:8px">Custos adicionais: ${adicionais.map(a =>
       `${App.esc(a.desc)} (R$ ${App.money(a.valor)})`).join(' · ')}</div>` : '') +
+    (descontoEm() ? `<div style="text-align:right;padding:2px 4px" class="small muted">
+      Subtotal: R$ ${App.money(bruto())} · desconto: <b class="neg">− R$ ${App.money(descontoEm())}</b></div>` : '') +
     `<div style="text-align:right;padding:10px 4px;font-size:15px">TOTAL: <b style="color:var(--accent-strong)">R$ ${App.money(total())}</b></div>`;
     updatePayment();
   };
@@ -511,12 +1026,18 @@ async function saleEditor(view, editId) {
     <div class="toolbar"><a class="btn sm ghost" href="#/sales">← Voltar</a></div>
     <div class="grid cols-2">
       <div class="card">
-        <h3>PEDIDO</h3>
+        <h3>${orcamento ? 'ORÇAMENTO DE VENDA' : 'PEDIDO'}</h3>
+        ${orcamento ? `<p class="small muted" style="margin:-6px 0 10px">Enquanto o orçamento não for
+        <b>aprovado</b>, nada acontece: nenhuma peça sai do estoque, nenhuma ordem vai para a produção
+        e nenhum valor entra em Contas a receber ou no Fluxo de caixa.</p>` : ''}
         <div class="formgrid">
           <label class="field full"><span>Cliente *</span>
             <select id="v-cliente">${App.clientOptions(clients).map(o =>
               `<option value="${o.value}">${App.esc(o.label)}</option>`).join('')}</select></label>
-          <label class="field"><span>Data do pedido</span><input type="date" id="v-data" value="${App.today()}"></label>
+          <label class="field"><span>${orcamento ? 'Data do orçamento' : 'Data do pedido'}</span>
+            <input type="date" id="v-data" value="${App.today()}"></label>
+          ${orcamento ? `<label class="field"><span>Validade (dias)</span>
+            <input type="number" id="v-validade" min="0" value="${venda ? (venda.validadeDias || 15) : 15}"></label>` : ''}
           <label class="field"><span>Previsão de entrega</span><input type="date" id="v-previsao"></label>
           <label class="field full"><span>Observações</span><textarea id="v-obs"></textarea></label>
         </div>
@@ -530,12 +1051,13 @@ async function saleEditor(view, editId) {
           <label class="field"><span>Valor unitário (R$)</span><input type="number" step="0.01" id="v-valor"></label>
         </div>
         <div id="v-hint" class="small muted" style="margin-bottom:10px"></div>
-        <button class="btn primary" onclick="VE.add()">+ Adicionar ao pedido</button>
+        <button class="btn primary" onclick="VE.add()">+ Adicionar ${orcamento ? 'ao orçamento' : 'ao pedido'}</button>
         <button class="btn ghost" onclick="VE.addExtra()">+ Custo adicional (frete grátis, brinde…)</button>
 
         <h3 style="margin-top:16px">ADICIONAR PEÇA DO ESTOQUE</h3>
-        <p class="small muted" style="margin-bottom:8px">Peças saem do estoque no momento da venda
-        (cabeçotes consomem componentes quando a produção fica pronta).</p>
+        <p class="small muted" style="margin-bottom:8px">${orcamento
+          ? 'No orçamento a peça só é cotada — ela sai do estoque quando o orçamento for aprovado e virar pedido.'
+          : 'Peças saem do estoque no momento da venda (cabeçotes consomem componentes quando a produção fica pronta).'}</p>
         <div class="formgrid">
           <label class="field full"><span>Peça</span>
             <select id="v-peca">${App.ativos(estoque).map(it =>
@@ -547,10 +1069,17 @@ async function saleEditor(view, editId) {
         <button class="btn" onclick="VE.addPeca()">+ Adicionar peça</button>
       </div>
       <div class="card">
-        <h3>ITENS E PAGAMENTO</h3>
+        <h3>ITENS E PAGAMENTO${orcamento ? ' PRETENDIDO' : ''}</h3>
         <div id="v-items"></div>
         <hr class="sep">
         <div class="formgrid">
+          <label class="field"><span>Desconto</span>
+            <select id="v-desc-tipo">
+              <option value="valor">em R$</option>
+              <option value="percentual">em %</option>
+            </select></label>
+          <label class="field"><span>Valor do desconto</span>
+            <input type="number" step="0.01" min="0" id="v-desc-valor" value="0"></label>
           <label class="field"><span>Forma de pagamento</span>
             <select id="v-forma">
               ${['pix', 'dinheiro', 'cartao', 'link', 'boleto', 'cheque'].map(f => `<option value="${f}">${f}</option>`).join('')}
@@ -570,12 +1099,14 @@ async function saleEditor(view, editId) {
           </div>
         </div>
         <p style="margin:8px 0">Valor líquido estimado: <b id="v-liquido">R$ 0,00</b></p>
-        <p class="small muted" style="margin:-4px 0 8px">A venda registra o que o cliente <b>deve</b> pagar e vira cobrança em
-        Contas a receber. O dinheiro só entra no <b>Fluxo de caixa</b> quando você usar <b>💵 Registrar recebimento</b> no pedido —
-        total ou em parte.</p>
+        <p class="small muted" style="margin:-4px 0 8px">${orcamento
+          ? 'Aqui fica registrada a <b>intenção</b> de pagamento combinada com o cliente. Nenhuma cobrança é criada: as parcelas em Contas a receber nascem quando o orçamento for aprovado.'
+          : 'A venda registra o que o cliente <b>deve</b> pagar e vira cobrança em Contas a receber. O dinheiro só entra no <b>Fluxo de caixa</b> quando você usar <b>💵 Registrar recebimento</b> no pedido — total ou em parte.'}</p>
         <label class="field"><span>Observações de pagamento</span><input id="v-pgobs"></label>
         <div class="actions" style="border:none">
-          <button class="btn primary" id="v-save" onclick="VE.save()">Registrar venda</button>
+          <button class="btn primary" id="v-save" onclick="VE.save()">${venda
+            ? (orcamento ? 'Salvar orçamento' : 'Salvar pedido')
+            : (orcamento ? 'Salvar orçamento' : 'Registrar venda')}</button>
         </div>
       </div>
     </div>`;
@@ -624,11 +1155,16 @@ async function saleEditor(view, editId) {
   document.getElementById('v-peca-qtd').addEventListener('input', hintPeca);
   refreshCombos();
   hintPeca();
+  document.getElementById('v-desc-tipo').addEventListener('change', renderItems);
+  document.getElementById('v-desc-valor').addEventListener('input', renderItems);
 
   // Edição: traz os dados da venda para os campos.
   if (venda) {
     document.getElementById('v-cliente').value = venda.clienteId;
-    document.getElementById('v-data').value = venda.dataPedido || App.today();
+    document.getElementById('v-data').value = (orcamento ? venda.dataOrcamento : venda.dataPedido) || App.today();
+    const d = venda.desconto || {};
+    document.getElementById('v-desc-tipo').value = d.tipo === 'percentual' ? 'percentual' : 'valor';
+    document.getElementById('v-desc-valor').value = Number(d.valor) || 0;
     document.getElementById('v-previsao').value = venda.previsaoEntrega || '';
     document.getElementById('v-obs').value = venda.observacoes || '';
     const pg = venda.pagamento || {};
@@ -682,14 +1218,22 @@ async function saleEditor(view, editId) {
     async save() {
       const clienteId = Number(document.getElementById('v-cliente').value);
       if (!clienteId) return App.toast('Selecione o cliente', 'err');
-      if (!itens.length) return App.toast('Adicione ao menos um cabeçote ou peça', 'err');
+      if (!itens.length) return App.toast(orcamento
+        ? 'Adicione ao menos um cabeçote ou peça ao orçamento' : 'Adicione ao menos um cabeçote ou peça', 'err');
       const forma = document.getElementById('v-forma').value;
+      const data = document.getElementById('v-data').value;
       const body = {
         clienteId,
-        dataPedido: document.getElementById('v-data').value,
+        dataPedido: data,
+        dataOrcamento: data,
+        validadeDias: orcamento ? Number(document.getElementById('v-validade').value) || 0 : undefined,
         previsaoEntrega: document.getElementById('v-previsao').value,
         observacoes: document.getElementById('v-obs').value,
         itens,
+        desconto: {
+          tipo: document.getElementById('v-desc-tipo').value,
+          valor: Number(document.getElementById('v-desc-valor').value) || 0
+        },
         custosAdicionais: adicionais,
         pagamento: {
           forma,
@@ -703,7 +1247,15 @@ async function saleEditor(view, editId) {
         }
       };
       try {
-        if (editId) {
+        if (orcamento) {
+          const o = editId
+            ? await App.put('/saleQuotes/' + editId, body)
+            : await App.post('/saleQuotes', body);
+          App.toast(editId
+            ? `Orçamento nº ${o.numero} atualizado (versão ${o.versao}) — nada foi movimentado`
+            : `Orçamento nº ${o.numero} criado — proposta salva, sem movimentar estoque nem financeiro`, 'ok');
+          location.hash = '#/sales';
+        } else if (editId) {
           const sale = await App.put('/sales/' + editId, body);
           App.toast(`Pedido nº ${sale.numero} atualizado — produção, estoque e financeiro acompanharam`, 'ok');
           location.hash = '#/sales';
