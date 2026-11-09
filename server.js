@@ -122,6 +122,20 @@ function audit(user, action, entity, entityId, details) {
   if (a.length > 20000) a.splice(0, a.length - 20000);
 }
 
+/**
+ * Cópia de segurança do banco antes de qualquer ferramenta de correção.
+ * Devolve o caminho do arquivo; estoura se não conseguir gravar — correção
+ * nenhuma começa sem a cópia salva.
+ */
+function backupArquivo(prefixo) {
+  db.persistNow();
+  const dir = path.join(db.DATA_DIR, 'backups');
+  fs.mkdirSync(dir, { recursive: true });
+  const arq = path.join(dir, `${prefixo}-${new Date().toISOString().replace(/[:.]/g, '-')}.json`);
+  fs.copyFileSync(db.DB_FILE, arq);
+  return arq;
+}
+
 /** Remove campos financeiros sensíveis para usuários sem a permissão finance_sensitive. */
 function sanitize(user, collection, record) {
   if (!record) return record;
@@ -163,7 +177,7 @@ function sanitize(user, collection, record) {
 const REST = {
   clients: { perm: 'clients', label: 'Cliente' },
   serviceCatalog: { perm: 'quotes', writePerm: 'admin', label: 'Serviço do catálogo' },
-  products: { perm: 'sales', writePerm: 'finance_sensitive', label: 'Produto' },
+  products: { perm: 'sales', writePerm: ['products', 'finance_sensitive'], label: 'Produto' },
   stockItems: { perm: 'stock', label: 'Item de estoque' },
   stockMoves: { perm: ['stock_history', 'stock'], label: 'Movimentação de estoque',
                 editPerm: 'stock_history_edit' },
@@ -450,6 +464,192 @@ function moveStock(itemId, tipo, qtd, refType, refId, obs, user, extra) {
   return item;
 }
 
+/* =====================================================================
+   PRODUTOS, CONFIGURAÇÕES E COMPOSIÇÃO TÉCNICA
+
+   O que antes estava escrito no código — quais comandos cada Stage aceita,
+   que tucho usa, que peças entram na montagem — passa a morar no cadastro
+   do produto. Produtos e custos administra isso; venda, orçamento,
+   produção, estoque e custo leem a MESMA composição.
+   ===================================================================== */
+
+/* Papéis de seed: como encontrar, UMA vez, o item de estoque de cada peça
+   da sugestão inicial. Depois da migração cada linha já aponta para o item. */
+const PAPEL_BUSCA = {
+  casco: (cfg) => it => it.categoria === (cfg.tipo === 'crossflow' ? 'casco_crossflow' : 'casco_unilateral'),
+  valvula_adm: () => it => it.categoria === 'valvula' && /admiss/i.test(it.nome || ''),
+  valvula_esc: () => it => it.categoria === 'valvula' && /escape/i.test(it.nome || ''),
+  mola: () => it => it.categoria === 'mola',
+  prato: () => it => it.categoria === 'prato',
+  trava: () => it => it.categoria === 'trava'
+};
+
+/** Item de estoque do comando escolhido (ex.: "Comando 290x300"). */
+function itemDoComando(comando) {
+  const alvo = String(comando || '').trim().toLowerCase();
+  if (!alvo) return null;
+  return db.all('stockItems').find(it =>
+    it.categoria === 'comando' && String(it.nome || '').toLowerCase().includes(alvo)) || null;
+}
+
+/** Item de estoque do tucho escolhido (35 ou 37 mm). */
+function itemDoTucho(tucho) {
+  const cat = String(tucho) === '37' ? 'tucho37' : 'tucho35';
+  return db.all('stockItems').find(it => it.categoria === cat) || null;
+}
+
+/**
+ * Composição do produto já RESOLVIDA para uma configuração concreta:
+ * o comando e o tucho viram o item de estoque que será realmente baixado.
+ * Devolve uma linha por peça, com quantidade, custo e se está vinculada.
+ */
+function composicaoResolvida(prod, cfg) {
+  cfg = cfg || {};
+  const linhas = Array.isArray(prod && prod.composicao) ? prod.composicao : [];
+  const tipo = cfg.tipo || (prod && prod.tipo) || '';
+  return linhas.map((l, idx) => {
+    const qtd = Math.max(0, Number(l.qtd) || 0);
+    let item = null, motivo = '';
+    if (l.papel === 'comando') {
+      item = itemDoComando(cfg.comando);
+      if (!item) motivo = cfg.comando
+        ? `Não existe item de estoque para o comando ${cfg.comando}`
+        : 'Comando não informado';
+    } else if (l.papel === 'tucho') {
+      item = itemDoTucho(cfg.tucho);
+      if (!item) motivo = `Não existe item de estoque para o tucho ${cfg.tucho || '—'} mm`;
+    } else {
+      item = l.stockItemId ? db.get('stockItems', l.stockItemId) : null;
+      if (!item) motivo = 'Linha da composição sem item de estoque vinculado';
+    }
+    const custoUnit = item ? (Number(item.custoUnit) || 0) : 0;
+    return {
+      idx, papel: l.papel || 'fixo', obs: l.obs || '', qtd,
+      stockItemId: item ? item.id : null,
+      nome: item ? item.nome : (l.papel === 'comando' ? `Comando ${cfg.comando || '—'}`
+        : l.papel === 'tucho' ? `Tucho ${cfg.tucho || '—'} mm` : (l.nomeLivre || 'Peça não vinculada')),
+      categoria: item ? item.categoria : '',
+      emEstoque: item ? (Number(item.qtd) || 0) : null,
+      custoUnit, custoTotal: Math.round(custoUnit * qtd * 100) / 100,
+      vinculado: !!item, motivo, tipo
+    };
+  });
+}
+
+/** Custo da composição somado, com a lista por peça. */
+function custoDaComposicao(prod, cfg) {
+  const linhas = composicaoResolvida(prod, cfg);
+  const total = linhas.reduce((s, l) => s + l.custoTotal, 0);
+  return {
+    linhas, total: Math.round(total * 100) / 100,
+    semCusto: linhas.filter(l => l.vinculado && !l.custoUnit).length,
+    semVinculo: linhas.filter(l => !l.vinculado).length
+  };
+}
+
+/** Configuração de um produto no formato que as telas consomem. */
+function produtoComConfig(prod) {
+  if (!prod) return prod;
+  const { comandos, tuchos } = domain.opcoesDoProduto(prod);
+  return Object.assign({}, prod, {
+    comandos, tuchos,
+    rotuloStage: prod.rotuloStage || domain.rotuloStage(prod.stage, prod.variante)
+  });
+}
+
+/* ------------------------------------------------------------------
+   MIGRAÇÃO (uma vez, na primeira subida desta versão)
+
+   - cada configuração passa a guardar os seus comandos e tuchos;
+   - entra o comando 280x280 no Stage 1 das duas linhas;
+   - Stage 3 passa a ser a configuração de tucho 35 mm e nasce o
+     Stage 3 Plus, de 37 mm, com os mesmos comandos;
+   - cada configuração ganha uma composição sugerida, marcada como NÃO
+     CONFERIDA até a oficina revisar.
+   Nada é apagado e nenhum pedido antigo é tocado: venda, orçamento e
+   ordem de produção guardam a própria configuração desde que nasceram.
+   ------------------------------------------------------------------ */
+function garantirItemDeEstoque(nome, categoria) {
+  const achado = db.all('stockItems').find(it =>
+    String(it.nome || '').trim().toLowerCase() === String(nome).trim().toLowerCase());
+  if (achado) return achado;
+  return db.insert('stockItems', { nome, categoria, qtd: 0, custoUnit: 0, minimo: 0, ativo: true });
+}
+
+function composicaoSugerida(tipo) {
+  return domain.COMPOSICAO_SUGERIDA.map(linha => {
+    if (linha.papel === 'comando' || linha.papel === 'tucho') {
+      return { papel: linha.papel, stockItemId: null, qtd: linha.qtd, obs: linha.obs };
+    }
+    const busca = PAPEL_BUSCA[linha.papel];
+    const item = busca ? db.all('stockItems').find(busca({ tipo })) : null;
+    return { papel: 'fixo', stockItemId: item ? item.id : null, qtd: linha.qtd, obs: linha.obs };
+  });
+}
+
+function migrarProdutos() {
+  const feitos = { configurados: 0, comandoNovo: 0, criados: 0, composicoes: 0 };
+  const todos = db.all('products');
+  if (!todos.length) return feitos;
+
+  // O comando novo precisa existir no estoque para poder ser baixado.
+  garantirItemDeEstoque(`Comando ${domain.COMANDO_NOVO_STAGE1}`, 'comando');
+
+  for (const p of todos) {
+    const mudanca = {};
+    const stage = Number(p.stage);
+
+    if (!Array.isArray(p.comandos) || !p.comandos.length) {
+      mudanca.comandos = (domain.STAGE_COMANDOS[stage] || []).slice();
+      feitos.configurados++;
+    }
+    const comandos = mudanca.comandos || p.comandos;
+    if (stage === 1 && !comandos.includes(domain.COMANDO_NOVO_STAGE1)) {
+      mudanca.comandos = comandos.concat([domain.COMANDO_NOVO_STAGE1]);
+      feitos.comandoNovo++;
+    }
+    if (!Array.isArray(p.tuchos) || !p.tuchos.length) {
+      /* Stage 3 passa a ser o de 35 mm; o de 37 vira Stage 3 Plus, criado
+         logo abaixo. Stage 1 e 2 seguem com 35 mm. */
+      mudanca.tuchos = ['35'];
+    }
+    if (p.variante === undefined) mudanca.variante = '';
+    if (!p.rotuloStage) mudanca.rotuloStage = domain.rotuloStage(stage, p.variante || '');
+    if (p.ativo === undefined) mudanca.ativo = true;
+    if (!Array.isArray(p.composicao) || !p.composicao.length) {
+      mudanca.composicao = composicaoSugerida(p.tipo);
+      mudanca.composicaoConfirmada = false;
+      feitos.composicoes++;
+    }
+    if (p.custoBaseAuto === undefined) mudanca.custoBaseAuto = false;
+    if (Object.keys(mudanca).length) db.update('products', p.id, mudanca);
+  }
+
+  // Stage 3 Plus (tucho 37 mm) — uma configuração por linha.
+  for (const tipo of ['unilateral', 'crossflow']) {
+    const jaTem = db.all('products').some(p => p.tipo === tipo && Number(p.stage) === 3 && p.variante === 'plus');
+    if (jaTem) continue;
+    const base = db.all('products').find(p => p.tipo === tipo && Number(p.stage) === 3 && !p.variante);
+    if (!base) continue;
+    db.insert('products', {
+      nome: domain.nomeProduto(tipo, 3, 'plus'),
+      tipo, stage: 3, variante: 'plus', rotuloStage: domain.rotuloStage(3, 'plus'),
+      comandos: (base.comandos || []).slice(),
+      tuchos: ['37'],
+      preco: base.preco || 0,
+      custoBase: base.custoBase || 0,
+      custoBaseAuto: !!base.custoBaseAuto,
+      composicao: composicaoSugerida(tipo),
+      composicaoConfirmada: false,
+      composicaoObs: 'Mesma configuração do Stage 3, com tucho de 37 mm (alojamento aberto).',
+      ativo: true
+    });
+    feitos.criados++;
+  }
+  if (feitos.criados || feitos.comandoNovo || feitos.configurados || feitos.composicoes) db.persistNow();
+  return feitos;
+}
+
 /* ---------------------------------------------------------------------
    COMPRA → ESTOQUE PRÓPRIO.
 
@@ -705,6 +905,16 @@ route('GET', '/api/meta', 'dashboard', async (req, res, user) => {
   ok(res, {
     modules: MODULES,
     stageComandos: domain.STAGE_COMANDOS,
+    /* Configuração viva dos cabeçotes: comandos e tuchos saem do cadastro
+       do produto, não de uma tabela no código. */
+    produtosConfig: db.all('products').map(p => {
+      const o = domain.opcoesDoProduto(p);
+      return { id: p.id, nome: p.nome, tipo: p.tipo, stage: p.stage, variante: p.variante || '',
+        rotuloStage: p.rotuloStage || domain.rotuloStage(p.stage, p.variante),
+        comandos: o.comandos, tuchos: o.tuchos, ativo: p.ativo !== false };
+    }),
+    comandosCadastrados: [...new Set(db.all('products')
+      .flatMap(p => domain.opcoesDoProduto(p).comandos))].sort(),
     dreMap: domain.DRE_MAP,
     settings: { quoteValidityDays: db.settings.quoteValidityDays, companyName: db.settings.companyName,
       empresa: db.settings.empresa || {} },
@@ -714,6 +924,8 @@ route('GET', '/api/meta', 'dashboard', async (req, res, user) => {
 });
 
 route('GET', '/api/meta/tuchos', 'sales', async (req, res, user, params, query) => {
+  const prod = query.productId ? db.get('products', query.productId) : null;
+  if (prod) return ok(res, { options: domain.opcoesDoProduto(prod).tuchos });
   ok(res, { options: domain.tuchoOptions(query.stage, query.comando) });
 });
 
@@ -2557,13 +2769,14 @@ function montarItensVenda(lista) {
     }
     const prod = db.get('products', i.productId);
     if (!prod) return { erro: 'Produto inválido' };
-    const v = domain.validateConfig(prod.stage, i.comando, i.tucho);
+    const v = domain.validarProduto(prod, i.comando, i.tucho);
     if (!v.ok) return { erro: v.error };
     const unit = Number(i.valorUnit) || prod.preco || 0;
     const tot = qtd * unit;
     valorTotal += tot;
     custoBaseTotal += qtd * (prod.custoBase || 0);
     itens.push({ kind: 'cabecote', productId: prod.id, produto: prod.nome, tipo: prod.tipo, stage: prod.stage,
+                 variante: prod.variante || '', rotuloStage: prod.rotuloStage || domain.rotuloStage(prod.stage, prod.variante),
                  comando: i.comando, tucho: String(i.tucho), qtd, valorUnit: unit, total: tot });
   }
   return { itens, valorTotal, custoBaseTotal };
@@ -2626,28 +2839,290 @@ function concluirSePronto(po, user) {
   return andamentoDaOrdem(db.get('productionOrders', atual.id)) || atual;
 }
 
+/**
+ * Componentes que ESTA ordem deve consumir, pela composição cadastrada do
+ * produto e pela configuração vendida (comando e tucho do pedido).
+ * Ordem já baixada responde pelo que foi realmente consumido, para o
+ * histórico não mudar quando a composição do produto mudar depois.
+ */
+function componentesDaOrdem(po) {
+  if (!po) return [];
+  if (Array.isArray(po.consumo) && po.consumo.length) {
+    return po.consumo.map((c, idx) => {
+      const item = c.stockItemId ? db.get('stockItems', c.stockItemId) : null;
+      return Object.assign({ idx, vinculado: !!c.stockItemId, motivo: c.motivo || '', historico: true },
+        c, { emEstoque: item ? (Number(item.qtd) || 0) : null });
+    });
+  }
+  const prod = po.productId ? db.get('products', po.productId) : null;
+  if (!prod) return [];
+  const unidades = Math.max(1, Number(po.qtd) || 1);
+  return composicaoResolvida(prod, { tipo: po.tipo, comando: po.comando, tucho: po.tucho })
+    .map(l => Object.assign({}, l, { qtd: Math.round(l.qtd * unidades * 1000) / 1000 }));
+}
+
 function baixarComponentesSePronto(po, user) {
   const atual = andamentoDaOrdem(po);
   if (atual.status !== 'pronto' || atual.estoqueBaixado || atual.origem === 'servico') return atual;
-  const cascoCat = atual.tipo === 'crossflow' ? 'casco_crossflow' : 'casco_unilateral';
-  const wanted = [
-    it => it.categoria === cascoCat,
-    it => it.categoria === 'valvula' && /admiss/i.test(it.nome),
-    it => it.categoria === 'valvula' && /escape/i.test(it.nome),
-    it => it.categoria === 'mola',
-    it => it.categoria === 'prato',
-    it => it.categoria === 'trava',
-    it => it.categoria === (atual.tucho === '37' ? 'tucho37' : 'tucho35'),
-    it => it.categoria === 'comando' && String(it.nome).includes(atual.comando)
-  ];
-  for (const match of wanted) {
-    const item = db.all('stockItems').find(match);
-    if (item) moveStock(item.id, 'saida', 1, 'productionOrders', atual.id, `Produção pedido nº ${atual.pedidoNumero}`, user);
+  /* A baixa segue a COMPOSIÇÃO do produto — peça por peça, na quantidade
+     cadastrada. O que a ordem consumiu fica gravado nela: mudar a
+     composição depois não reescreve o que já saiu do estoque. */
+  const linhas = componentesDaOrdem(atual);
+  const consumo = [];
+  for (const l of linhas) {
+    if (!l.vinculado || !l.qtd) {
+      consumo.push({ papel: l.papel, stockItemId: null, nome: l.nome, qtd: l.qtd,
+        custoUnit: 0, motivo: l.motivo || 'Sem item de estoque vinculado', baixado: false });
+      continue;
+    }
+    moveStock(l.stockItemId, 'saida', l.qtd, 'productionOrders', atual.id,
+      `Produção pedido nº ${atual.pedidoNumero}`, user,
+      { papel: l.papel, productId: atual.productId || null, composicao: true });
+    consumo.push({ papel: l.papel, stockItemId: l.stockItemId, nome: l.nome, qtd: l.qtd,
+      custoUnit: l.custoUnit, baixado: true });
   }
-  db.update('productionOrders', atual.id, { estoqueBaixado: true });
+  const pendentes = consumo.filter(c => !c.baixado);
+  db.update('productionOrders', atual.id, {
+    estoqueBaixado: true, consumo,
+    custoComponentes: Math.round(consumo.reduce((s, c) => s + (c.custoUnit || 0) * (c.qtd || 0), 0) * 100) / 100,
+    componentesPendentes: pendentes.length
+  });
   audit(user, 'concluiu', 'productionOrders', atual.id,
-    `Ordem de produção #${atual.id} pronta — componentes baixados do estoque`);
+    `Ordem de produção #${atual.id} pronta — ${consumo.length - pendentes.length} componente(s) baixado(s) do estoque` +
+    (pendentes.length ? `; ${pendentes.length} sem item de estoque vinculado` : ''));
   return andamentoDaOrdem(db.get('productionOrders', atual.id));
+}
+
+/* =====================================================================
+   COMPOSIÇÃO E BAIXAS DE UMA VENDA — e a auditoria de todas elas
+
+   O cabeçote vendido consome componentes na PRODUÇÃO, quando a ordem fica
+   pronta — não no instante da venda. É isso que estas funções mostram:
+   o que cada pedido deve consumir, o que já saiu do estoque, e a diferença.
+   ===================================================================== */
+
+/** Soma, por item, o que uma ordem de produção já movimentou no estoque. */
+function movimentosDaOrdem(ordemId) {
+  const movs = db.all('stockMoves').filter(m =>
+    m.refType === 'productionOrders' && m.refId === ordemId && !m.estornada);
+  const porItem = {};
+  for (const m of movs) {
+    const q = Number(m.qtd) || 0;
+    const d = m.tipo === 'saida' ? q : -q;
+    porItem[m.itemId] = (porItem[m.itemId] || 0) + d;
+  }
+  return { movs, porItem };
+}
+
+const C3 = (v) => Math.round((Number(v) || 0) * 1000) / 1000;
+
+/** Situação de cada componente de uma ordem: esperado × movimentado. */
+function componentesComSituacao(po) {
+  const { movs, porItem } = movimentosDaOrdem(po.id);
+  const linhas = componentesDaOrdem(po);
+  const pronta = po.status === 'pronto' || po.estoqueBaixado;
+  const usados = new Set();
+  const out = linhas.map(l => {
+    const esperado = C3(l.qtd);
+    const movido = l.stockItemId ? C3(porItem[l.stockItemId] || 0) : 0;
+    if (l.stockItemId) usados.add(l.stockItemId);
+    let situacao;
+    if (!l.vinculado) situacao = 'sem_vinculo';
+    else if (!pronta) situacao = movido > 0 ? 'baixado' : 'aguardando';
+    else if (Math.abs(movido - esperado) < 0.001) situacao = 'baixado';
+    else if (movido <= 0) situacao = 'pendente';
+    else if (movido < esperado) situacao = 'parcial';
+    else situacao = 'duplicado';
+    return Object.assign({}, l, {
+      esperado, movido, diferenca: C3(esperado - movido), situacao,
+      movimentos: (l.stockItemId ? movs.filter(m => m.itemId === l.stockItemId) : []).map(m => ({
+        id: m.id, data: m.data, tipo: m.tipo, qtd: Number(m.qtd) || 0, obs: m.obs || ''
+      }))
+    });
+  });
+  /* Saídas registradas para esta ordem que a composição não prevê —
+     normalmente de uma composição antiga. Aparecem para conferência. */
+  for (const [itemId, q] of Object.entries(porItem)) {
+    const id = Number(itemId);
+    if (usados.has(id) || C3(q) === 0) continue;
+    const item = db.get('stockItems', id);
+    out.push({
+      papel: 'extra', stockItemId: id, nome: item ? item.nome : `Item #${id}`,
+      categoria: item ? item.categoria : '', qtd: 0, esperado: 0, movido: C3(q),
+      diferenca: C3(-q), situacao: 'fora_da_composicao', vinculado: true, motivo:
+        'Saiu do estoque por esta ordem, mas não está na composição atual do produto',
+      custoUnit: item ? (Number(item.custoUnit) || 0) : 0, custoTotal: 0,
+      movimentos: movs.filter(m => m.itemId === id).map(m => ({
+        id: m.id, data: m.data, tipo: m.tipo, qtd: Number(m.qtd) || 0, obs: m.obs || ''
+      }))
+    });
+  }
+  return out;
+}
+
+const SITUACOES_PROBLEMA = ['pendente', 'parcial', 'duplicado', 'sem_vinculo', 'fora_da_composicao'];
+
+/** Composição e baixas de uma venda inteira, cabeçote por cabeçote. */
+function composicaoDaVenda(sale, user) {
+  const sensivel = can(user, 'finance_sensitive');
+  const ordens = db.all('productionOrders')
+    .filter(p => p.saleId === sale.id).sort((a, b) => a.id - b.id);
+
+  const unidades = ordens.map(po => {
+    const componentes = componentesComSituacao(po);
+    const conta = (s) => componentes.filter(c => c.situacao === s).length;
+    return {
+      ordemId: po.id, produto: po.produto, tipo: po.tipo, stage: po.stage,
+      rotuloStage: po.rotuloStage || domain.rotuloStage(po.stage, po.variante),
+      comando: po.comando, tucho: po.tucho,
+      status: po.status, estoqueBaixado: !!po.estoqueBaixado,
+      /* Ordem concluída antes desta versão não guarda o que consumiu: ali
+         o sistema baixava 1 de cada peça, fosse qual fosse a montagem. */
+      baixaLegado: !!po.estoqueBaixado && !(po.consumo || []).length,
+      componentes: componentes.map(c => sensivel ? c
+        : Object.assign({}, c, { custoUnit: undefined, custoTotal: undefined })),
+      custoComponentes: sensivel
+        ? C3(componentes.reduce((s, c) => s + (c.custoUnit || 0) * (c.esperado || 0), 0)) : undefined,
+      resumo: { total: componentes.length, baixados: conta('baixado'), aguardando: conta('aguardando'),
+        pendentes: conta('pendente') + conta('parcial'), duplicados: conta('duplicado'),
+        semVinculo: conta('sem_vinculo'), foraDaComposicao: conta('fora_da_composicao') }
+    };
+  });
+
+  /* Peças revendidas: baixam na própria venda, não na produção. */
+  const pecas = (sale.itens || []).filter(i => i.kind === 'peca').map(i => {
+    const movs = db.all('stockMoves').filter(m =>
+      m.refType === 'sales' && m.refId === sale.id && m.itemId === i.stockItemId && !m.estornada);
+    const movido = C3(movs.reduce((s, m) => s + (m.tipo === 'saida' ? (Number(m.qtd) || 0) : -(Number(m.qtd) || 0)), 0));
+    const esperado = C3(i.qtd);
+    return {
+      stockItemId: i.stockItemId, nome: i.produto, esperado, movido,
+      situacao: Math.abs(movido - esperado) < 0.001 ? 'baixado'
+        : movido <= 0 ? 'pendente' : movido < esperado ? 'parcial' : 'duplicado',
+      movimentos: movs.map(m => ({ id: m.id, data: m.data, tipo: m.tipo, qtd: Number(m.qtd) || 0, obs: m.obs || '' }))
+    };
+  });
+
+  const problemas = unidades.reduce((s, u) =>
+    s + u.resumo.pendentes + u.resumo.duplicados + u.resumo.semVinculo + u.resumo.foraDaComposicao, 0)
+    + pecas.filter(p => p.situacao !== 'baixado').length;
+
+  return {
+    vendaId: sale.id, pedido: sale.numero, status: sale.status,
+    semOrdem: !ordens.length && (sale.itens || []).some(i => i.kind !== 'peca'),
+    unidades, pecas, problemas,
+    aguardandoProducao: unidades.filter(u => !u.estoqueBaixado).length
+  };
+}
+
+/* ------------------------------------------------------------------
+   AUDITORIA GERAL DAS BAIXAS
+
+   Separa o que é problema de verdade do que só ainda não chegou a hora:
+   ordem que não ficou pronta ainda NÃO deve ter baixado nada.
+   ------------------------------------------------------------------ */
+function auditarBaixasDeEstoque() {
+  const ordens = db.all('productionOrders').filter(p => p.origem !== 'servico' && p.status !== 'cancelado');
+  const casos = [], aguardando = [], legado = [];
+  let componentesAnalisados = 0, ordensBaixadas = 0;
+
+  for (const po of ordens) {
+    const sale = po.saleId ? db.get('sales', po.saleId) : null;
+    if (sale && (sale.status === 'cancelado' || sale.status === 'cancelada')) continue;
+    const componentes = componentesComSituacao(po);
+    componentesAnalisados += componentes.length;
+    const pronta = po.status === 'pronto' || po.estoqueBaixado;
+    if (pronta) ordensBaixadas++;
+    const base = {
+      ordemId: po.id, vendaId: po.saleId || null, pedido: po.pedidoNumero,
+      cliente: po.clienteNome || '', produto: po.produto,
+      tipo: po.tipo, stage: po.stage,
+      rotuloStage: po.rotuloStage || domain.rotuloStage(po.stage, po.variante),
+      comando: po.comando, tucho: po.tucho, status: po.status,
+      estoqueBaixado: !!po.estoqueBaixado,
+      baixaLegado: !!po.estoqueBaixado && !(po.consumo || []).length,
+      semComposicao: !componentes.length
+    };
+    if (!pronta) {
+      aguardando.push(Object.assign({}, base, { componentes: componentes.length }));
+      continue;
+    }
+    const ruins = componentes.filter(c => SITUACOES_PROBLEMA.includes(c.situacao));
+    if (!ruins.length && !base.semComposicao) continue;
+    const caso = Object.assign({}, base, {
+      componentes: ruins.map(c => ({
+        papel: c.papel, stockItemId: c.stockItemId, nome: c.nome, situacao: c.situacao,
+        esperado: c.esperado, movido: c.movido, diferenca: c.diferenca, motivo: c.motivo || '',
+        corrigivel: !!c.stockItemId && (c.situacao === 'pendente' || c.situacao === 'parcial' || c.situacao === 'duplicado')
+      }))
+    });
+    (base.baixaLegado ? legado : casos).push(caso);
+  }
+
+  const contaPorSituacao = (lista) => {
+    const m = {};
+    for (const c of lista) for (const x of c.componentes || []) m[x.situacao] = (m[x.situacao] || 0) + 1;
+    return m;
+  };
+  /* Vendas de cabeçote sem nenhuma ordem de produção: não há o que baixar. */
+  const semOrdem = db.all('sales')
+    .filter(s => s.status !== 'cancelado' && s.status !== 'cancelada'
+      && (s.itens || []).some(i => i.kind !== 'peca')
+      && !db.all('productionOrders').some(p => p.saleId === s.id))
+    .map(s => ({ vendaId: s.id, pedido: s.numero, cliente: (db.get('clients', s.clienteId) || {}).nome || '' }));
+
+  /* Produtos cuja composição ainda não foi conferida por gente. */
+  const produtosNaoConferidos = db.all('products')
+    .filter(p => p.ativo !== false && p.composicaoConfirmada !== true)
+    .map(p => ({ id: p.id, nome: p.nome, linhas: (p.composicao || []).length }));
+
+  return {
+    geradoEm: new Date().toISOString(),
+    ordensAnalisadas: ordens.length, ordensBaixadas, componentesAnalisados,
+    totais: {
+      casos: casos.length, legado: legado.length, aguardando: aguardando.length,
+      semOrdem: semOrdem.length, produtosNaoConferidos: produtosNaoConferidos.length,
+      porSituacao: contaPorSituacao(casos.concat(legado))
+    },
+    casos, legado, aguardando, semOrdem, produtosNaoConferidos
+  };
+}
+
+/**
+ * Corrige baixa por baixa, só o que foi marcado. Nunca em massa e nunca
+ * sozinho: cada linha é uma ordem + um componente, com a diferença exata.
+ */
+function corrigirBaixasDeEstoque(alvos, user) {
+  const copia = backupArquivo('antes-corrigir-baixas');
+  const feitas = [], ignoradas = [];
+  for (const a of alvos) {
+    const po = db.get('productionOrders', a.ordemId);
+    if (!po) { ignoradas.push({ ordemId: a.ordemId, motivo: 'ordem de produção não encontrada' }); continue; }
+    const componentes = componentesComSituacao(po);
+    const alvo = componentes.find(c => c.stockItemId === Number(a.stockItemId));
+    if (!alvo) { ignoradas.push({ ordemId: a.ordemId, stockItemId: a.stockItemId, motivo: 'componente não faz parte desta ordem' }); continue; }
+    const dif = C3(alvo.diferenca);
+    if (!dif) { ignoradas.push({ ordemId: po.id, nome: alvo.nome, motivo: 'já está certo — nada a fazer' }); continue; }
+    moveStock(alvo.stockItemId, dif > 0 ? 'saida' : 'entrada', Math.abs(dif),
+      'productionOrders', po.id,
+      dif > 0
+        ? `Baixa que faltava — pedido nº ${po.pedidoNumero} (conferência de composição)`
+        : `Estorno de baixa em dobro — pedido nº ${po.pedidoNumero} (conferência de composição)`,
+      user, { papel: alvo.papel, correcaoAuditoria: true, productId: po.productId || null });
+    feitas.push({ ordemId: po.id, pedido: po.pedidoNumero, stockItemId: alvo.stockItemId,
+      nome: alvo.nome, situacaoAnterior: alvo.situacao, ajuste: dif });
+    /* O consumo da ordem passa a refletir o que ela realmente consumiu. */
+    const consumo = componentesComSituacao(db.get('productionOrders', po.id))
+      .filter(c => c.papel !== 'extra')
+      .map(c => ({ papel: c.papel, stockItemId: c.stockItemId, nome: c.nome, qtd: c.esperado,
+        custoUnit: c.custoUnit || 0, baixado: c.situacao === 'baixado' }));
+    db.update('productionOrders', po.id, { consumo, estoqueBaixado: true });
+  }
+  if (feitas.length) {
+    audit(user, 'corrigiu', 'stockMoves', null,
+      `Conferência de baixas: ${feitas.length} ajuste(s) de estoque, um a um`);
+  }
+  return { feitas, ignoradas, copiaDeSeguranca: copia, auditoria: auditarBaixasDeEstoque() };
 }
 
 /**
@@ -2847,10 +3322,16 @@ function gerarProducaoDaVenda(sale, cliente, user) {
         origem: 'venda',
         saleId: sale.id, pedidoNumero: numero, clienteId: cliente.id, clienteNome: cliente.nome,
         productId: item.productId, produto: item.produto,
-        tipo: item.tipo, stage: item.stage, comando: item.comando, tucho: item.tucho,
+        tipo: item.tipo, stage: item.stage, variante: item.variante || '',
+        rotuloStage: item.rotuloStage || domain.rotuloStage(item.stage, item.variante),
+        comando: item.comando, tucho: item.tucho,
         qtd: 1, qtdPedido: item.qtd,
         observacoes: sale.observacoes || '',
-        checklist: domain.productionChecklist(item.tipo, item.stage, item.comando, item.tucho),
+        /* A separação do checklist sai da composição cadastrada: a bancada
+           vê peça e quantidade iguais ao que o estoque vai baixar. */
+        checklist: domain.productionChecklist(item.tipo, item.stage, item.comando, item.tucho,
+          composicaoResolvida(db.get('products', item.productId),
+            { tipo: item.tipo, comando: item.comando, tucho: item.tucho }), item.variante),
         status: 'nao_produzido', responsavelId: suggestAssignee('production'),
         previsaoEntrega: sale.previsaoEntrega
       });
@@ -3439,6 +3920,230 @@ route('POST', '/api/sales/:id/unreceive', 'receivables', async (req, res, user, 
 });
 
 /** Resumo financeiro da venda para a tela — a mesma conta que o servidor usa. */
+/** Dados comuns de uma configuração vindos da tela, já validados. */
+function lerConfiguracao(b, atual) {
+  const tipo = b.tipo !== undefined ? String(b.tipo) : (atual ? atual.tipo : '');
+  if (!['unilateral', 'crossflow'].includes(tipo)) {
+    return { erro: 'A linha do cabeçote precisa ser Unilateral ou Fluxo Cruzado.' };
+  }
+  const stage = b.stage !== undefined ? Number(b.stage) : Number(atual && atual.stage);
+  if (!stage || stage < 1) return { erro: 'Informe o Stage da configuração.' };
+  const variante = (b.variante !== undefined ? String(b.variante || '') : (atual ? atual.variante || '' : '')).trim();
+  if (variante && variante !== 'plus') return { erro: 'Variante inválida — use vazio ou "plus" (Stage X Plus).' };
+
+  const limpa = (lista) => [...new Set((Array.isArray(lista) ? lista : [])
+    .map(x => String(x || '').trim()).filter(Boolean))];
+  const comandos = b.comandos !== undefined ? limpa(b.comandos) : domain.opcoesDoProduto(atual).comandos;
+  if (!comandos.length) return { erro: 'Cadastre ao menos um comando para esta configuração.' };
+  const tuchos = b.tuchos !== undefined ? limpa(b.tuchos) : domain.opcoesDoProduto(atual).tuchos;
+  if (!tuchos.length) return { erro: 'Cadastre ao menos uma medida de tucho para esta configuração.' };
+
+  const dados = {
+    tipo, stage, variante, comandos, tuchos,
+    rotuloStage: (b.rotuloStage && String(b.rotuloStage).trim()) || domain.rotuloStage(stage, variante),
+    nome: (b.nome && String(b.nome).trim()) || domain.nomeProduto(tipo, stage, variante)
+  };
+  if (b.preco !== undefined) dados.preco = Number(b.preco) || 0;
+  if (b.custoBaseAuto !== undefined) dados.custoBaseAuto = !!b.custoBaseAuto;
+  if (b.custoBase !== undefined) dados.custoBase = Number(b.custoBase) || 0;
+  if (b.composicaoObs !== undefined) dados.composicaoObs = String(b.composicaoObs || '');
+  if (b.ativo !== undefined) dados.ativo = b.ativo !== false;
+  return { dados };
+}
+
+/** Custo-base recalculado pela composição, quando o produto está nesse modo. */
+function recalcularCustoBase(id) {
+  const p = db.get('products', id);
+  if (!p || !p.custoBaseAuto) return p;
+  const cfg = produtoComConfig(p);
+  const custo = custoDaComposicao(p, { tipo: p.tipo, comando: cfg.comandos[0], tucho: cfg.tuchos[0] });
+  db.update('products', id, { custoBase: custo.total });
+  return db.get('products', id);
+}
+
+route('POST', '/api/products/configuracao', ['products', 'finance_sensitive'], async (req, res, user) => {
+  const b = await readBody(req);
+  const { dados, erro } = lerConfiguracao(b, null);
+  if (erro) return bad(res, erro);
+  const igual = db.all('products').find(p => p.tipo === dados.tipo
+    && Number(p.stage) === dados.stage && (p.variante || '') === dados.variante);
+  if (igual) {
+    return bad(res, `Já existe a configuração ${igual.nome}. Edite essa em vez de criar outra.`);
+  }
+  const novo = db.insert('products', Object.assign({
+    preco: 0, custoBase: 0, custoBaseAuto: false, ativo: true,
+    composicao: composicaoSugerida(dados.tipo), composicaoConfirmada: false,
+    composicaoObs: ''
+  }, dados));
+  recalcularCustoBase(novo.id);
+  audit(user, 'criou', 'products', novo.id, `Configuração "${novo.nome}" criada`);
+  ok(res, produtoComConfig(db.get('products', novo.id)));
+});
+
+route('PUT', '/api/products/:id/configuracao', ['products', 'finance_sensitive'], async (req, res, user, params) => {
+  const prod = db.get('products', params.id);
+  if (!prod) return notFound(res);
+  const b = await readBody(req);
+  const { dados, erro } = lerConfiguracao(b, prod);
+  if (erro) return bad(res, erro);
+  const igual = db.all('products').find(p => p.id !== prod.id && p.tipo === dados.tipo
+    && Number(p.stage) === dados.stage && (p.variante || '') === dados.variante);
+  if (igual) return bad(res, `Essa combinação já é a configuração ${igual.nome}.`);
+
+  /* Comando que sai da lista continua gravado nos pedidos antigos — o que
+     muda é só o que aparece para escolher de agora em diante. */
+  const antes = domain.opcoesDoProduto(prod);
+  const removidos = antes.comandos.filter(c => !dados.comandos.includes(c));
+  const emUso = removidos.filter(c => db.all('sales').some(s =>
+    (s.itens || []).some(i => i.productId === prod.id && i.comando === c)));
+
+  db.update('products', prod.id, dados);
+  recalcularCustoBase(prod.id);
+  const mudancas = [];
+  if (dados.nome !== prod.nome) mudancas.push(`nome: "${prod.nome}" → "${dados.nome}"`);
+  const novos = dados.comandos.filter(c => !antes.comandos.includes(c));
+  if (novos.length) mudancas.push('comandos adicionados: ' + novos.join(', '));
+  if (removidos.length) mudancas.push('comandos retirados da escolha: ' + removidos.join(', '));
+  if (String(antes.tuchos) !== String(dados.tuchos)) mudancas.push('tuchos: ' + dados.tuchos.join('/') + ' mm');
+  if (mudancas.length) audit(user, 'editou', 'products', prod.id, `Configuração "${dados.nome}" — ` + mudancas.join('; '));
+  ok(res, Object.assign(produtoComConfig(db.get('products', prod.id)), {
+    avisoHistorico: emUso.length
+      ? `Os comandos ${emUso.join(', ')} saíram da lista de escolha, mas continuam nos pedidos antigos — nada foi alterado no histórico.`
+      : ''
+  }));
+});
+
+/* ---- produtos: configuração, composição e custo ----
+   Administrar aqui é administrar em todo lugar: venda, orçamento,
+   produção, baixa de estoque e custo leem esta mesma composição. */
+
+route('GET', '/api/products/configuracoes', 'sales', async (req, res, user) => {
+  const lista = db.all('products').map(p => {
+    const cfg = produtoComConfig(p);
+    const custo = custoDaComposicao(p, { tipo: p.tipo, comando: cfg.comandos[0], tucho: cfg.tuchos[0] });
+    return Object.assign(sanitize(user, 'products', cfg), {
+      composicaoLinhas: p.composicao ? p.composicao.length : 0,
+      composicaoConfirmada: p.composicaoConfirmada === true,
+      semVinculo: custo.semVinculo,
+      custoComposicao: can(user, 'finance_sensitive') ? custo.total : undefined
+    });
+  }).sort((a, b) => (a.tipo || '').localeCompare(b.tipo || '')
+    || (Number(a.stage) - Number(b.stage))
+    || String(a.variante || '').localeCompare(String(b.variante || '')));
+  ok(res, { produtos: lista, papeis: domain.PAPEIS });
+});
+
+/** Composição de um produto, resolvida para uma configuração concreta. */
+route('GET', '/api/products/:id/composicao', 'sales', async (req, res, user, params, query) => {
+  const prod = db.get('products', params.id);
+  if (!prod) return notFound(res);
+  const cfg = produtoComConfig(prod);
+  const comando = query.comando || cfg.comandos[0] || '';
+  const tucho = query.tucho || cfg.tuchos[0] || '';
+  const custo = custoDaComposicao(prod, { tipo: prod.tipo, comando, tucho });
+  const sensivel = can(user, 'finance_sensitive');
+  ok(res, {
+    produto: sanitize(user, 'products', cfg),
+    comando, tucho,
+    confirmada: prod.composicaoConfirmada === true,
+    linhas: custo.linhas.map(l => sensivel ? l
+      : Object.assign({}, l, { custoUnit: undefined, custoTotal: undefined })),
+    custoTotal: sensivel ? custo.total : undefined,
+    semCusto: custo.semCusto, semVinculo: custo.semVinculo,
+    /* Onde cada peça da composição é usada — a consulta inversa. */
+    itensDeEstoque: db.all('stockItems').filter(i => i.ativo !== false)
+      .map(i => ({ id: i.id, nome: i.nome, categoria: i.categoria, qtd: i.qtd,
+        custoUnit: sensivel ? (Number(i.custoUnit) || 0) : undefined }))
+  });
+});
+
+/** Grava a composição e marca que foi conferida por gente. */
+route('PUT', '/api/products/:id/composicao', ['products', 'finance_sensitive'], async (req, res, user, params) => {
+  const prod = db.get('products', params.id);
+  if (!prod) return notFound(res);
+  const b = await readBody(req);
+  if (!Array.isArray(b.linhas)) return bad(res, 'Informe as linhas da composição.');
+  const linhas = [];
+  for (const l of b.linhas) {
+    const papel = domain.PAPEIS.includes(l.papel) ? l.papel : 'fixo';
+    const qtd = Math.round((Number(l.qtd) || 0) * 1000) / 1000;
+    if (qtd <= 0) return bad(res, 'Toda peça da composição precisa de uma quantidade maior que zero.');
+    if (papel === 'fixo') {
+      const item = db.get('stockItems', l.stockItemId);
+      if (!item) return bad(res, 'Escolha o item de estoque de cada peça da composição.');
+      linhas.push({ papel, stockItemId: item.id, qtd, obs: String(l.obs || '').slice(0, 200) });
+    } else {
+      linhas.push({ papel, stockItemId: null, qtd, obs: String(l.obs || '').slice(0, 200) });
+    }
+  }
+  const comandoDuplicado = linhas.filter(l => l.papel === 'comando').length > 1;
+  const tuchoDuplicado = linhas.filter(l => l.papel === 'tucho').length > 1;
+  if (comandoDuplicado || tuchoDuplicado) {
+    return bad(res, `A composição tem ${comandoDuplicado ? 'duas linhas de comando' : 'duas linhas de tucho'} — ` +
+      'o estoque baixaria a mesma peça duas vezes. Deixe uma só.');
+  }
+  const repetido = linhas.filter(l => l.papel === 'fixo')
+    .map(l => l.stockItemId).find((id, i, arr) => arr.indexOf(id) !== i);
+  if (repetido) {
+    const it = db.get('stockItems', repetido);
+    return bad(res, `"${it ? it.nome : 'Esta peça'}" aparece duas vezes na composição — ` +
+      'some as quantidades numa linha só para o estoque não baixar em dobro.');
+  }
+  db.update('products', prod.id, {
+    composicao: linhas,
+    composicaoConfirmada: b.confirmada !== false,
+    composicaoObs: b.composicaoObs !== undefined ? String(b.composicaoObs || '') : prod.composicaoObs
+  });
+  /* Custo-base calculado pela composição, quando o produto está nesse modo. */
+  recalcularCustoBase(prod.id);
+  audit(user, 'editou', 'products', prod.id,
+    `Composição de "${prod.nome}" atualizada — ${linhas.length} peça(s)`);
+  ok(res, Object.assign({ ok: true }, produtoComConfig(db.get('products', prod.id))));
+});
+
+/** Onde cada item de estoque é usado: a consulta inversa da composição. */
+route('GET', '/api/stockItems/:id/usos', 'stock', async (req, res, user, params) => {
+  const item = db.get('stockItems', params.id);
+  if (!item) return notFound(res);
+  const usos = [];
+  for (const p of db.all('products')) {
+    for (const l of p.composicao || []) {
+      const casa = l.papel === 'fixo' ? l.stockItemId === item.id
+        : l.papel === 'comando' ? item.categoria === 'comando'
+          : l.papel === 'tucho' ? (item.categoria === 'tucho35' || item.categoria === 'tucho37') : false;
+      if (!casa) continue;
+      usos.push({ productId: p.id, produto: p.nome, tipo: p.tipo, stage: p.stage,
+        rotuloStage: p.rotuloStage || domain.rotuloStage(p.stage, p.variante),
+        qtd: l.qtd, papel: l.papel, ativo: p.ativo !== false,
+        porConfiguracao: l.papel !== 'fixo' });
+    }
+  }
+  ok(res, { item: sanitize(user, 'stockItems', item), usos });
+});
+
+/** Composição e baixas de uma venda, cabeçote por cabeçote. */
+route('GET', '/api/sales/:id/composicao', ['sales', 'stock'], async (req, res, user, params) => {
+  const sale = db.get('sales', params.id);
+  if (!sale) return notFound(res);
+  ok(res, composicaoDaVenda(sale, user));
+});
+
+/* ---- auditoria das baixas automáticas de estoque ---- */
+route('GET', '/api/auditoria/baixas-estoque', ['stock', 'stock_history'], async (req, res, user) => {
+  ok(res, auditarBaixasDeEstoque());
+});
+
+route('POST', '/api/auditoria/baixas-estoque/corrigir', 'stock_history_edit', async (req, res, user) => {
+  const b = await readBody(req);
+  const alvos = Array.isArray(b.correcoes) ? b.correcoes : [];
+  if (!alvos.length) return bad(res, 'Marque o que deve ser corrigido.');
+  if (req.headers['x-confirmar'] !== 'sim') {
+    return send(res, 409, { error: 'Confirme a correção das baixas de estoque.', precisaConfirmar: true });
+  }
+  try { ok(res, corrigirBaixasDeEstoque(alvos, user)); }
+  catch (e) { bad(res, 'Não foi possível gravar a cópia de segurança: ' + e.message); }
+});
+
 route('GET', '/api/sales/:id/financeiro', 'receivables', async (req, res, user, params) => {
   const sale = db.get('sales', params.id);
   if (!sale) return notFound(res);
@@ -5901,7 +6606,7 @@ route('GET', '/api/analytics', 'dashboard', async (req, res, user, params, query
   const accC = {};
   for (const s of sales.filter(s => inWindow(s.dataPedido))) {
     for (const i of s.itens || []) {
-      const k = `${i.tipo === 'crossflow' ? 'Crossflow' : 'Unilateral'} Stage ${i.stage}`;
+      const k = `${i.tipo === 'crossflow' ? 'Crossflow' : 'Unilateral'} ${i.rotuloStage || domain.rotuloStage(i.stage, i.variante)}`;
       accC[k] = (accC[k] || 0) + (Number(i.qtd) || 1);
     }
   }
@@ -6849,6 +7554,11 @@ reconciliacaoInicial();
 
 process.on('SIGINT', () => { db.persistNow(); process.exit(0); });
 process.on('SIGTERM', () => { db.persistNow(); process.exit(0); });
+
+/* Configurações dos cabeçotes e composição saem do código e vão para o
+   cadastro — uma vez, na primeira subida desta versão. Roda aqui, depois de
+   todas as tabelas de apoio existirem. */
+const MIGRACAO_PRODUTOS = migrarProdutos();
 
 server.listen(PORT, () => {
   console.log(`Jaques Motorsport — Sistema de Gestão rodando em http://localhost:${PORT}`);

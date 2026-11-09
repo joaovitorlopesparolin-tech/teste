@@ -947,6 +947,31 @@ const App = {
     ]]
   ],
 
+  /* ------- Configuração dos cabeçotes -------
+     Comandos e tuchos de cada configuração moram no cadastro do produto
+     (Produtos e custos). Estas duas funções são a única porta de entrada:
+     quem precisa da lista pergunta aqui, e a tela nunca refaz a regra. */
+  comandosDo(prod) {
+    if (!prod) return [];
+    if (Array.isArray(prod.comandos) && prod.comandos.length) return prod.comandos;
+    const cfg = (this.meta.produtosConfig || []).find(c => c.id === prod.id);
+    if (cfg && cfg.comandos && cfg.comandos.length) return cfg.comandos;
+    return (this.meta.stageComandos || {})[prod.stage] || [];
+  },
+  tuchosDo(prod) {
+    if (!prod) return [];
+    if (Array.isArray(prod.tuchos) && prod.tuchos.length) return prod.tuchos.map(String);
+    const cfg = (this.meta.produtosConfig || []).find(c => c.id === prod.id);
+    if (cfg && cfg.tuchos && cfg.tuchos.length) return cfg.tuchos.map(String);
+    return Number(prod.stage) === 3 ? ['37'] : ['35'];
+  },
+  /* Rótulo da configuração — "Stage 3 Plus" quando for a variante de 37 mm. */
+  rotuloStage(x) {
+    if (!x) return '';
+    if (x.rotuloStage) return x.rotuloStage;
+    return `Stage ${x.stage || '—'}${x.variante === 'plus' ? ' Plus' : ''}`;
+  },
+
   /* Grupos abertos/recolhidos no menu lateral (preferência por navegador) */
   NAV_DEFAULT_OPEN: ['Dia a dia', 'Comercial'],
   navState() {

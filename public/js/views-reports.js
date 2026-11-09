@@ -119,7 +119,7 @@ App.registerView('reports', async (view) => {
           if (s.status === 'cancelado' || !byDate(f, s.dataPedido)) continue;
           for (const i of s.itens) {
             const k = i.produto;
-            acc[k] = acc[k] || { produto: i.produto, tipo: i.tipo === 'crossflow' ? 'Fluxo cruzado' : 'Unilateral', stage: 'Stage ' + i.stage, qtd: 0, valor: 0 };
+            acc[k] = acc[k] || { produto: i.produto, tipo: i.tipo === 'crossflow' ? 'Fluxo cruzado' : 'Unilateral', stage: App.rotuloStage(i), qtd: 0, valor: 0 };
             acc[k].qtd += i.qtd; acc[k].valor += i.total;
           }
         }

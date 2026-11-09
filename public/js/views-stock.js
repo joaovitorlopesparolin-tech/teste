@@ -42,6 +42,7 @@ App.registerView('stock', async (view) => {
       : `
       <button class="btn sm" onclick="Stock.move(${i.id}, 'entrada')">+ Entrada</button>
       <button class="btn sm" onclick="Stock.move(${i.id}, 'saida')">− Saída</button>
+      <button class="btn sm ghost" onclick="Stock.usos(${i.id})" title="Em quais cabeçotes esta peça é usada">🔧</button>
       <button class="btn sm ghost" onclick="Stock.edit(${i.id})" title="Editar cadastro">✏️</button>
       <button class="btn sm ghost" title="Excluir item" onclick="Stock.del(${i.id})">🗑️</button>` }
   ];
@@ -208,6 +209,30 @@ App.registerView('stock', async (view) => {
         else await App.post('/stockItems', Object.assign(d, { qtd: 0 }));
         App.closeModal(); App.toast('Item salvo', 'ok'); App.route();
       });
+    },
+    /* A consulta inversa da composição: esta peça entra em quais
+       configurações, e quantas por cabeçote. */
+    async usos(id) {
+      const i = items.find(x => x.id === id);
+      let d;
+      try { d = await App.get(`/stockItems/${id}/usos`); }
+      catch (e) { return App.toast(e.message, 'err'); }
+      App.modal(`
+        <h2>${App.esc(i.nome)} — onde esta peça é usada</h2>
+        <p class="small muted">Composição cadastrada em <b>Produtos e custos</b>. A quantidade é por
+        cabeçote; a baixa acontece quando a ordem de produção fica pronta.</p>
+        ${App.table(d.usos, [
+          { h: 'Configuração', cell: u => `<b>${App.esc(u.produto)}</b>${u.ativo ? '' : ' <span class="badge">desativada</span>'}` },
+          { h: 'Linha', cell: u => u.tipo === 'crossflow' ? 'Fluxo Cruzado' : 'Unilateral' },
+          { h: 'Stage', cell: u => App.esc(u.rotuloStage) },
+          { h: 'Qtd por cabeçote', class: 'num', cell: u => u.porConfiguracao
+            ? `<b>${u.qtd}</b><div class="small muted">quando for a peça escolhida no pedido</div>`
+            : `<b>${u.qtd}</b>` }
+        ], { emptyMsg: 'Esta peça não entra na composição de nenhuma configuração — é item de revenda, consumo ou serviço.' })}
+        <div class="actions">
+          <button class="btn" onclick="App.closeModal()">Fechar</button>
+          <button class="btn primary" onclick="App.closeModal();location.hash='#/products'">Abrir Produtos e custos</button>
+        </div>`, { wide: true });
     },
     del(id) {
       const i = items.find(x => x.id === id);

@@ -66,7 +66,7 @@ com o sistema parado.
 | **Orçamentos** | Catálogo de serviços com preços-base do modelo atual (editáveis), valor personalizado por orçamento sem alterar o catálogo, cálculo automático de totais, validade padrão de 30 dias (configurável) |
 | **Aprovação → OS** | Um clique converte o orçamento em OS aproveitando todos os dados, sem recadastro |
 | **Ordens de serviço** | Status (Em análise, Em andamento, Aguardando peça, Finalizado, Aguardando pagamento, Cancelado) + envio/entrega, responsável, pagamento (à vista ou parcelado com boletos automáticos), NF de retorno, histórico |
-| **Vendas** | 6 configurações (Unilateral/Crossflow × Stage 1–3); **valida comandos por Stage** (S1: 288 · S2: 290x300, 290x290 · S3: 300x308, 300x318, 316x320, 316x316, 308x320) e **tuchos** (S1/S2: 35 mm · S3: 37 mm, com exceção 300x308 = 35 ou 37); cartão/link com taxa da operadora, valor líquido e data prevista de recebimento; custos adicionais por venda; resultado e margem |
+| **Vendas** | 8 configurações (Unilateral/Fluxo Cruzado × Stage 1, 2, 3 e **3 Plus**); comandos e tuchos **saem do cadastro** em *Produtos e custos* e são validados na venda (S1: 288 e **280x280** · S2: 290x300, 290x290 · S3 e S3 Plus: 300x308, 300x318, 316x320, 316x316, 308x320 — **Stage 3 = tucho 35 mm, Stage 3 Plus = 37 mm**); cartão/link com taxa da operadora, valor líquido e data prevista de recebimento; custos adicionais por venda; resultado e margem. O detalhe do pedido mostra a **composição e as baixas de estoque** de cada cabeçote, com a situação de cada peça e o histórico da movimentação |
 | **Produção** | Ordem de produção por cabeçote vendido com checklist automático (separações, montagem, controle, embalagem, expedição) incluindo operações extras: retrabalho dos dutos de escape (Stage 3) e abertura do alojamento para tucho 37 mm; baixa automática de componentes ao concluir. Filtro **“Todos em aberto”** com tudo que ainda pede trabalho — derivado do checklist, não de uma lista fixa de status: item sem marcar significa ordem aberta, e um status novo que represente trabalho pendente entra sozinho. Imprime a lista de trabalho da equipe (cliente, cabeçote/peça, o que fazer, qtd, previsão, etapa/status), **sem nenhum valor** |
 | **Estoque próprio** | Cascos usinados (unilateral/crossflow), válvulas, molas, pratos, travas, tuchos 35/37, comandos; mínimos com alerta de compra; movimentações rastreadas. Lista única em **ordem alfabética**, com **busca** por nome, código ou categoria, filtros de categoria e de situação (ativos / abaixo do mínimo / inativos) e colunas ordenáveis (nome, quantidade, custo, valor em estoque) |
 | **Compras** | Com ou sem NF (NF, recibo, comprovante, sem documento); **leitura automática de NF-e (XML)** com conferência antes de confirmar; vínculo a cliente/OS/pedido/produção/uso interno; gera contas a pagar (parceladas) automaticamente. Cada item pode ser **vinculado a um produto do Estoque próprio** (com sugestão pelo nome) e aí a quantidade **entra sozinha no estoque**, com fornecedor, NF, data e custo no histórico; item sem vínculo (serviço, manutenção, material consumido) não mexe no estoque. Editar ajusta pela **diferença** e salvar de novo não duplica. **Busca** por fornecedor, item, categoria, data, valor, forma de pagamento ou nº da nota, filtro por período e colunas ordenáveis (data, fornecedor, itens, valor, categoria, documento, pagamento) |
@@ -89,6 +89,7 @@ com o sistema parado.
 | **Trabalho simultâneo** | Com um servidor único (rede local ou Tailscale), o servidor avisa as telas abertas e elas se **atualizam sozinhas em menos de 1 segundo** — sem recarregar e sem interromper quem está digitando (a atualização espera o formulário fechar) |
 | **Atualização em um clique** | **`ATUALIZAR.bat`** baixa a versão nova, troca só os arquivos do programa e reabre o sistema — a pasta `data` (dados da empresa) nunca é tocada |
 | **Acesso pelo celular** | Em *Administração → Configurações*, um **QR code** abre o sistema no celular (mesmo Wi-Fi) com os mesmos dados em tempo real — QR gerado localmente, sem internet; **LIBERAR NO CELULAR.bat** destrava o firewall do Windows com um clique |
+| **Produtos e custos** | Administração completa das configurações, **sem mexer no código**: criar e editar configurações, mudar nomenclatura, **acrescentar comandos** (nunca substituindo os existentes), definir os tuchos aceitos, ativar/desativar o que saiu de linha, e a **composição técnica** de cada montagem — peça por peça, com quantidade por cabeçote (casco, comando, tuchos, válvulas de admissão e de escape, molas, pratos, travas e o que mais a oficina usar). O comando e o tucho entram como “o escolhido na venda”, então a mesma composição serve a todos os comandos da configuração. Abas de **Comandos** (onde cada um vale), **Custos** (custo de cada peça e custo total estimado, com opção de usar a composição como custo-base) e **🔎 Conferência das baixas** |
 | **Modelos 3D** | Em *Produtos e custos*: upload do escaneamento/CAD exportado como **STL/OBJ/PLY** (até 200 MB), vínculo por produto e **visualizador 3D em tela cheia** (three.js embutido, offline) — peça em alumínio sobre fundo escuro, gira com o mouse ou com o dedo no celular; ideal para mostrar ao cliente |
 | **Importar planilha de gastos** | No *Fluxo de caixa*: lê o Excel semanal da oficina (uma aba por semana, gastos à esquerda e entradas à direita), com conferência antes de gravar, **categorias sugeridas automaticamente** (componentes, salários, impostos… → alimentam a DRE) e **trava anti-duplicação** — pode reimportar o mesmo arquivo todo mês que só entra o que é novo |
 
@@ -111,6 +112,7 @@ com o sistema parado.
   | O que a empresa tem a receber | **Contas a receber** | fluxo de caixa, agenda, painel, ficha do cliente |
   | O que a empresa deve | **Contas a pagar / Compras / Fretes / RH** | fluxo de caixa, agenda |
   | Estoque próprio | **Estoque** e suas movimentações | produção, venda, compra |
+  | Que peças entram em cada cabeçote | **Produtos e custos** (composição) | separação da produção, baixa de estoque, custo do produto |
 
   Toda alteração automática fica registrada no histórico e na auditoria, dizendo
   o que mudou e por quê (“ordem de produção concluída automaticamente porque a
@@ -150,6 +152,25 @@ com o sistema parado.
   venda por venda o que está errado hoje, separa o que religa com segurança do que
   precisa de revisão manual e **religa sem criar recebimento e sem tocar no Fluxo de
   caixa** (vencimento e observações digitados são preservados; cópia do banco antes).
+- **Uma composição só, para tudo**: as peças de cada configuração são cadastradas
+  uma vez em *Produtos e custos* e dali saem a **separação do checklist** da
+  produção, a **baixa do estoque** quando a ordem fica pronta e o **custo** do
+  produto. Mudar a composição vale para as próximas vendas; a ordem que já
+  consumiu guarda o que consumiu, com quantidade e custo, e não é reescrita.
+  Comando e tucho entram como “o escolhido na venda”, então a baixa é sempre do
+  comando que o cliente comprou.
+- **A baixa acontece na produção, não na venda**: cadastrar o pedido não tira
+  peça do estoque — quem tira é a ordem de produção ao ficar **pronta**, uma vez
+  só (reabrir e fechar de novo não baixa em dobro). Peça de revenda é diferente:
+  sai no ato da venda. O detalhe do pedido mostra, peça por peça, o que deveria
+  sair, o que saiu e a situação (*baixa realizada / pendente / aguardando a
+  produção / item não vinculado / necessita revisão*), com data, quantidade e o
+  pedido que originou cada movimentação.
+  *Produtos e custos → 🔎 Conferência das baixas* confere todos os pedidos de
+  uma vez e separa o que pode ser corrigido do que foi baixado pela regra
+  anterior (1 unidade de cada peça) — este último nada vem marcado, porque pode
+  já ter sido movimentado à mão. A correção é por pedido e por peça, movimenta
+  **só a diferença**, grava cópia do banco antes e deixa cada ajuste registrado.
 - **Rastreabilidade**: cada cabeçote tem linha do tempo completa
   (entrada → orçamento → aprovação → OS → produção → pagamento → NF → envio) e
   auditoria de alterações por usuário.
