@@ -233,6 +233,11 @@ App.registerView('admin', async (view) => {
         <label class="field"><span>Nome da empresa</span><input id="cfg-nome" value="${App.esc(s.companyName)}"></label>
         <label class="field"><span>Validade padrão dos orçamentos (dias)</span>
           <input id="cfg-validade" type="number" value="${s.quoteValidityDays}"></label>
+        <label class="field"><span>Limite de desconto sem autorização (%)</span>
+          <input id="cfg-desconto" type="number" min="0" max="100" step="0.5"
+                 value="${Number(s.limiteDescontoPercentual) || 0}">
+          <span class="small muted">Desconto acima deste percentual num pedido só pode ser aplicado por quem
+          tem a permissão <b>“Autorizar desconto acima do limite”</b>. <b>0 = sem limite.</b></span></label>
         <button class="btn primary" onclick="Adm.saveSettings()">Salvar configurações</button>
       </div>
 
@@ -387,10 +392,12 @@ App.registerView('admin', async (view) => {
     Adm.saveSettings = async () => {
       await App.put('/settings', {
         companyName: document.getElementById('cfg-nome').value,
-        quoteValidityDays: Number(document.getElementById('cfg-validade').value) || 30
+        quoteValidityDays: Number(document.getElementById('cfg-validade').value) || 30,
+        limiteDescontoPercentual: Number(document.getElementById('cfg-desconto').value) || 0
       });
       App.toast('Configurações salvas', 'ok');
       App.meta.settings.quoteValidityDays = Number(document.getElementById('cfg-validade').value) || 30;
+      App.meta.settings.limiteDescontoPercentual = Number(document.getElementById('cfg-desconto').value) || 0;
     };
     Adm.saveAI = async () => {
       const key = document.getElementById('cfg-ai-key').value.trim();
