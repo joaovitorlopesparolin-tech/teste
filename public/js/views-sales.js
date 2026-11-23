@@ -199,6 +199,8 @@ App.registerView('sales', async (view, args) => {
         ? `<button class="btn sm primary" onclick="Orc.aprovar(${o.id})" title="Aprovar e gerar o pedido oficial">✓ Aprovar e gerar venda</button>` : ''}
       ${virouVenda
         ? `<button class="btn sm ghost" onclick="Orc.irAoPedido(${o.id})" title="Abrir o pedido gerado">🧾 Pedido nº ${o.pedidoNumero}</button>` : ''}
+      ${verValores && o.situacao !== 'cancelado'
+        ? `<button class="btn sm ghost" onclick="Orc.condicoes(${o.id})" title="Desconto, forma e condição de pagamento — vale mesmo depois de aprovado">💱</button>` : ''}
       ${!virouVenda ? `<button class="btn sm ghost" onclick="Orc.situacao(${o.id})" title="Enviado ao cliente, aguardando retorno, recusado…">Situação</button>` : ''}
       ${!virouVenda ? `<button class="btn sm ghost" onclick="location.hash='#/sales/orcamento/${o.id}'" title="Editar o orçamento">✏️</button>` : ''}
       ${['recusado', 'cancelado'].includes(o.status) && !virouVenda
@@ -297,6 +299,9 @@ App.registerView('sales', async (view, args) => {
           · ${badgeOrc(o.situacao)}</p>
         ${o.saleId ? `<p class="small pos">✓ Aprovado em ${App.date(o.dataAprovacao)}${
           o.aprovadoPor ? ' por ' + App.esc(o.aprovadoPor) : ''} — virou o <b>pedido nº ${o.pedidoNumero}</b>.</p>` : ''}
+        ${(o.historicoComercial || []).length ? `<p class="small">
+          <span class="badge info">condições comerciais negociadas ${o.historicoComercial.length}× depois</span>
+          <button class="btn sm ghost" onclick="Orc.condicoes(${o.id})">ver e editar</button></p>` : ''}
         ${o.motivo ? `<p class="small" style="color:var(--danger)">Motivo: ${App.esc(o.motivo)}</p>` : ''}
 
         <h3 class="section-title">Itens</h3>
@@ -340,11 +345,276 @@ App.registerView('sales', async (view, args) => {
         <div class="actions">
           <button class="btn" onclick="App.closeModal()">Fechar</button>
           <button class="btn ghost" onclick="Orc.imprimir(${o.id})">🖨️ Imprimir proposta</button>
+          ${verValores && o.situacao !== 'cancelado'
+            ? `<button class="btn" onclick="Orc.condicoes(${o.id})">💱 Editar condições comerciais</button>` : ''}
           ${o.saleId
             ? `<button class="btn primary" onclick="Orc.irAoPedido(${o.id})">Abrir pedido nº ${o.pedidoNumero}</button>`
             : `<button class="btn ghost" onclick="App.closeModal();location.hash='#/sales/orcamento/${o.id}'">✏️ Editar</button>
                <button class="btn primary" onclick="Orc.aprovar(${o.id})">✓ Aprovar e gerar venda</button>`}
         </div>`, { wide: true });
+    },
+
+    /* ---------- Condições comerciais do orçamento ----------
+       Vale também depois da aprovação: o cliente aprova e, na hora de
+       pagar, pede desconto, troca o Pix pelo cartão ou quer dividir com
+       entrada. O orçamento continua o mesmo — mesmo número, mesmo cliente,
+       mesma aprovação — e, quando já virou pedido, a alteração desce para
+       o pedido, sem criar outra venda nem outra cobrança. */
+    async condicoes(id) {
+      let d;
+      try { d = await App.get(`/saleQuotes/${id}/condicoes`); }
+      catch (e) { return App.toast(e.message, 'err'); }
+      Orc._cond = d;
+      const pg = d.pagamento || {};
+      const FORMAS = d.formas || [['pix', 'Pix']];
+      const nomeForma = (f) => (FORMAS.find(x => x[0] === f) || ['', f || '—'])[1];
+      const ap = d.condicoesAprovadas, orig = d.condicoesOriginais;
+
+      App.modal(`
+        <h2>Condições comerciais — orçamento nº ${d.numero}</h2>
+        <p class="small muted">${d.aprovado
+          ? `Este orçamento está <b>aprovado</b>${d.pedidoNumero ? ` e virou o <b>pedido nº ${d.pedidoNumero}</b>` : ''}.
+             Dá para negociar desconto, forma e condição de pagamento <b>sem cancelar e sem refazer nada</b>:
+             o orçamento mantém número, cliente e histórico de aprovação, e ${d.pedidoNumero
+               ? 'o pedido é atualizado junto — sem segunda venda, segundo pedido ou cobrança duplicada'
+               : 'o financeiro acompanha'}.`
+          : 'Este orçamento ainda é uma proposta: ajustar aqui não movimenta nada no financeiro.'}</p>
+        <p class="small muted">Produto, serviço e quantidade <b>não</b> mudam por aqui — mexer neles é
+        alteração de escopo, que passa pelo pedido e pela produção.
+        ${d.pedidoNumero ? ' Nada entra ou sai do <b>Fluxo de caixa</b>: mudar a condição de pagamento não é recebimento.' : ''}</p>
+
+        <div class="grid cols-4" style="margin-top:10px">
+          <div class="card kpi"><div class="label">Valor dos itens</div>
+            <div class="value">R$ ${App.money(d.valorBruto)}</div></div>
+          <div class="card kpi ${d.descontoValor ? 'k-warn' : ''}"><div class="label">Desconto atual</div>
+            <div class="value">R$ ${App.money(d.descontoValor)}</div>
+            <div class="hint">${(d.desconto || {}).tipo === 'percentual' ? (d.desconto.valor || 0) + '% do valor' : 'valor fixo'}</div></div>
+          <div class="card kpi k-ok"><div class="label">Valor final hoje</div>
+            <div class="value">R$ ${App.money(d.valorTotal)}</div></div>
+          <div class="card kpi"><div class="label">Já recebido · falta</div>
+            <div class="value">R$ ${App.money(d.resumo.recebido)}</div>
+            <div class="hint">falta R$ ${App.money(d.resumo.saldo)}</div></div>
+        </div>
+
+        ${d.resumo.recebido > 0.005 ? `<p class="small" style="margin-top:8px">Já há
+          <b>R$ ${App.money(d.resumo.recebido)}</b> recebidos. Eles ficam como estão: o sistema recalcula
+          <b>só o saldo</b>. Se o desconto deixar o pedido valendo menos do que já foi pago, a diferença vira
+          <b>crédito do cliente</b> — nenhum recebimento é apagado e nada sai do caixa sozinho.</p>` : ''}
+        ${d.limiteDesconto ? `<p class="small muted">Limite de desconto configurado: <b>${d.limiteDesconto}%</b>${
+          d.podeAutorizar ? ' — você tem autorização para passar dele.' : ' — acima disso é preciso autorização da Direção.'}</p>` : ''}
+
+        <hr class="sep">
+        <div class="formgrid">
+          <label class="field"><span>Desconto</span>
+            <select id="oc-tipo">
+              <option value="valor"${(d.desconto || {}).tipo !== 'percentual' ? ' selected' : ''}>em R$</option>
+              <option value="percentual"${(d.desconto || {}).tipo === 'percentual' ? ' selected' : ''}>em %</option>
+            </select></label>
+          <label class="field"><span>Valor do desconto</span>
+            <input type="number" step="0.01" min="0" id="oc-desc" value="${(d.desconto || {}).valor || 0}"></label>
+          <label class="field"><span>…ou o valor final combinado (R$)</span>
+            <input type="number" step="0.01" min="0" id="oc-total" placeholder="ex.: 9500"></label>
+          <label class="field"><span>Forma de pagamento</span>
+            <select id="oc-forma">${FORMAS.map(([v, l]) =>
+              `<option value="${v}"${v === pg.forma ? ' selected' : ''}>${App.esc(l)}</option>`).join('')}</select></label>
+          <label class="field"><span>Condição</span>
+            <select id="oc-cond">
+              <option value="avista"${pg.condicao !== 'parcelado' ? ' selected' : ''}>À vista</option>
+              <option value="parcelado"${pg.condicao === 'parcelado' ? ' selected' : ''}>Parcelado</option>
+            </select></label>
+          <label class="field"><span>Nº de parcelas</span>
+            <input type="number" min="1" id="oc-parcelas" value="${pg.parcelas || 1}"></label>
+          <label class="field"><span>Entrada (R$)</span>
+            <input type="number" step="0.01" min="0" id="oc-entrada" value="${pg.entrada || 0}">
+            <span class="small muted">O que o cliente paga agora. O resto vira parcela.</span></label>
+          <label class="field"><span>Intervalo entre parcelas (dias)</span>
+            <input type="number" id="oc-intervalo" value="${pg.intervaloDias || 30}"></label>
+          <label class="field"><span>Vencimento da 1ª parcela do saldo</span>
+            <input type="date" id="oc-venc1" value="${pg.primeiroVencimento || ''}"></label>
+          <label class="field" id="oc-taxa-campo"><span>Taxa da operadora (R$)</span>
+            <input type="number" step="0.01" id="oc-taxa" value="${pg.taxa || 0}"></label>
+          <label class="field full"><span>Observações comerciais do pagamento</span>
+            <input id="oc-obs" value="${App.esc(pg.obs || '')}"></label>
+          <label class="field full"><span>Motivo da alteração *</span>
+            <input id="oc-motivo" placeholder="ex.: cliente pediu 5% na hora de pagar e trocou para Pix"></label>
+        </div>
+        <div id="oc-previa" class="small" style="margin:4px 0 10px"></div>
+
+        ${d.cobrancas.length ? `
+        <h3 class="section-title">Cobranças do pedido nº ${d.pedidoNumero}</h3>
+        <p class="small muted">A cobrança em aberto é refeita pelo novo valor. A que já recebeu dinheiro
+        não é tocada. Vencimento em aberto pode ser ajustado aqui.</p>
+        <div class="tablewrap"><table>
+          <tr><th>Cobrança</th><th>Forma</th><th class="num">Valor</th><th class="num">Recebido</th>
+              <th>Vencimento</th><th>Situação</th></tr>
+          ${d.cobrancas.map(c => `<tr>
+            <td>${App.esc(c.descricao)}${c.entrada ? ' <span class="badge accent">entrada</span>' : ''}${
+              c.espelho ? '<div class="small muted">linha do pedido</div>' : ''}</td>
+            <td>${App.esc(nomeForma(c.forma))}</td>
+            <td class="num">R$ ${App.money(c.valor)}</td>
+            <td class="num ${c.recebido ? 'pos' : 'muted'}">R$ ${App.money(c.recebido)}</td>
+            <td>${c.travada
+              ? `${App.date(c.vencimento)} <span class="badge ok">recebida — não se mexe</span>`
+              : `<input type="date" class="oc-venc" data-id="${c.id}" value="${c.vencimento || ''}" style="width:150px">`}</td>
+            <td>${App.badge(c.status)}</td></tr>`).join('')}
+        </table></div>` : ''}
+
+        ${d.creditos.length ? `
+        <h3 class="section-title">Créditos gerados</h3>
+        ${App.table(d.creditos, [
+          { h: 'Data', cell: c => App.date(c.data) },
+          { h: 'Motivo', cell: c => App.esc(c.descricao) },
+          { h: 'Valor', class: 'num', cell: c => 'R$ ' + App.money(c.valor) },
+          { h: 'Situação', cell: c => App.badge(c.status) }
+        ])}
+        <p class="small muted">Crédito do cliente — abate numa próxima compra. Nenhum valor saiu do caixa.</p>` : ''}
+
+        ${(orig || ap) ? `
+        <h3 class="section-title">O que foi apresentado e o que foi aprovado</h3>
+        <div class="tablewrap"><table>
+          <tr><th>Momento</th><th class="num">Valor</th><th class="num">Desconto</th><th>Pagamento</th></tr>
+          ${orig ? `<tr><td>Orçamento original (${App.date(orig.em)})</td>
+            <td class="num">R$ ${App.money(orig.valorTotal)}</td>
+            <td class="num">R$ ${App.money(orig.descontoValor || 0)}</td>
+            <td>${App.esc(nomeForma((orig.pagamento || {}).forma))}${
+              (orig.pagamento || {}).condicao === 'parcelado' ? ` · ${(orig.pagamento || {}).parcelas || 1}x` : ' · à vista'}</td></tr>` : ''}
+          ${ap ? `<tr><td>Aprovado pelo cliente (${App.date(ap.em)}${ap.por ? ' · ' + App.esc(ap.por) : ''})</td>
+            <td class="num">R$ ${App.money(ap.valorTotal)}</td>
+            <td class="num">R$ ${App.money(ap.descontoValor || 0)}</td>
+            <td>${App.esc(nomeForma((ap.pagamento || {}).forma))}${
+              (ap.pagamento || {}).condicao === 'parcelado' ? ` · ${(ap.pagamento || {}).parcelas || 1}x` : ' · à vista'}</td></tr>` : ''}
+          <tr><td><b>Negociado hoje</b></td>
+            <td class="num"><b>R$ ${App.money(d.valorTotal)}</b></td>
+            <td class="num"><b>R$ ${App.money(d.descontoValor)}</b></td>
+            <td><b>${App.esc(nomeForma(pg.forma))}${pg.condicao === 'parcelado' ? ` · ${pg.parcelas || 1}x` : ' · à vista'}${
+              pg.entrada ? ` · entrada R$ ${App.money(pg.entrada)}` : ''}</b></td></tr>
+        </table></div>` : ''}
+
+        ${(d.historicoComercial || []).length ? `
+        <h3 class="section-title">Histórico das alterações comerciais</h3>
+        ${App.table(d.historicoComercial.slice().reverse(), [
+          { h: 'Quando', cell: h => `<span class="small">${App.dateTime(h.at)}</span>` },
+          { h: 'Quem', cell: h => App.esc(h.por || '') },
+          { h: 'De', class: 'num', cell: h => `R$ ${App.money(h.antes.valorTotal)}<div class="small muted">${
+            App.esc(nomeForma(h.antes.pagamento.forma))}${
+            h.antes.pagamento.condicao === 'parcelado' ? ` ${h.antes.pagamento.parcelas}x` : ''}</div>` },
+          { h: 'Para', class: 'num', cell: h => `<b>R$ ${App.money(h.depois.valorTotal)}</b><div class="small muted">${
+            App.esc(nomeForma(h.depois.pagamento.forma))}${
+            h.depois.pagamento.condicao === 'parcelado' ? ` ${h.depois.pagamento.parcelas}x` : ''}${
+            h.depois.pagamento.entrada ? ` · entrada R$ ${App.money(h.depois.pagamento.entrada)}` : ''}</div>` },
+          { h: 'Desconto', class: 'num', cell: h => `R$ ${App.money(h.antes.descontoValor)} → <b>R$ ${App.money(h.depois.descontoValor)}</b>` },
+          { h: 'Motivo', cell: h => `<span class="small">${App.esc(h.motivo || '—')}</span>` },
+          { h: 'O que mudou', cell: h => `<span class="small">${App.esc(h.resumo || '')}</span>${
+            (h.efeitos || []).length ? `<div class="small muted">${h.efeitos.map(App.esc).join('<br>')}</div>` : ''}` }
+        ])}` : ''}
+
+        <div class="actions">
+          <button class="btn" onclick="App.closeModal()">Fechar</button>
+          ${d.podeEditar
+            ? '<button class="btn primary" id="oc-salvar">Salvar condições comerciais</button>'
+            : '<span class="small muted">Você não tem a permissão de alterar condições comerciais</span>'}
+        </div>`, { wide: true });
+
+      const el = (x) => document.getElementById(x);
+      const previa = () => {
+        el('oc-taxa-campo').style.display = ['cartao', 'link'].includes(el('oc-forma').value) ? '' : 'none';
+        const bruto = d.valorBruto;
+        const alvo = el('oc-total').value;
+        let total, descVal;
+        if (alvo !== '') {
+          total = Math.min(Math.max(0, Number(alvo) || 0), bruto);
+          descVal = Math.round((bruto - total) * 100) / 100;
+        } else {
+          const tipo = el('oc-tipo').value;
+          const v = Math.max(0, Number(el('oc-desc').value) || 0);
+          descVal = Math.round(Math.min(tipo === 'percentual' ? bruto * Math.min(v, 100) / 100 : v, bruto) * 100) / 100;
+          total = Math.round((bruto - descVal) * 100) / 100;
+        }
+        const pct = bruto ? (descVal / bruto * 100) : 0;
+        const entrada = Math.min(Math.max(0, Number(el('oc-entrada').value) || 0), total);
+        const saldoPedido = Math.round((total - d.resumo.recebido) * 100) / 100;
+        const acima = d.limiteDesconto && pct > d.limiteDesconto + 0.0001;
+        const n = el('oc-cond').value === 'parcelado' ? Math.max(1, Number(el('oc-parcelas').value) || 1) : 1;
+        const aParcelar = Math.round(Math.max(0, saldoPedido - entrada) * 100) / 100;
+        el('oc-previa').innerHTML =
+          `Itens <b>R$ ${App.money(bruto)}</b> − desconto <b>R$ ${App.money(descVal)}</b> (${pct.toFixed(2)}%)` +
+          ` = <b style="color:var(--accent-strong)">R$ ${App.money(total)}</b>` +
+          (d.resumo.recebido > 0.005 ? ` · já recebido R$ ${App.money(d.resumo.recebido)}` : '') +
+          (saldoPedido >= -0.005
+            ? ` · falta <b>R$ ${App.money(Math.max(0, saldoPedido))}</b>`
+            : ` · <b class="neg">R$ ${App.money(-saldoPedido)} a mais do que vale — vira crédito do cliente</b>`) +
+          (entrada > 0 && saldoPedido > 0.005
+            ? `<div>Entrada <b>R$ ${App.money(entrada)}</b> + ${n}× de <b>R$ ${App.money(Math.round(aParcelar / n * 100) / 100)}</b></div>`
+            : (n > 1 && saldoPedido > 0.005
+              ? `<div>${n}× de <b>R$ ${App.money(Math.round(saldoPedido / n * 100) / 100)}</b></div>` : '')) +
+          (acima ? `<div style="color:var(--warn)">⚠ Acima do limite de ${d.limiteDesconto}%${
+            d.podeAutorizar ? ' — você pode autorizar.' : ' — precisa de autorização da Direção.'}</div>` : '');
+      };
+      ['oc-tipo', 'oc-desc', 'oc-total', 'oc-forma', 'oc-cond', 'oc-parcelas', 'oc-entrada'].forEach(x => {
+        const n = el(x);
+        if (n) { n.addEventListener('input', previa); n.addEventListener('change', previa); }
+      });
+      previa();
+
+      const botao = el('oc-salvar');
+      if (!botao) return;
+      botao.onclick = async () => {
+        const motivo = el('oc-motivo').value.trim();
+        if (!motivo) return App.toast('Escreva o motivo da alteração — é ele que explica o desconto depois', 'err');
+        const corpo = {
+          motivo,
+          pagamento: {
+            forma: el('oc-forma').value,
+            condicao: el('oc-cond').value,
+            parcelas: Number(el('oc-parcelas').value) || 1,
+            entrada: Number(el('oc-entrada').value) || 0,
+            intervaloDias: Number(el('oc-intervalo').value) || 30,
+            primeiroVencimento: el('oc-venc1').value,
+            taxa: Number(el('oc-taxa').value) || 0,
+            obs: el('oc-obs').value
+          },
+          vencimentos: [...document.querySelectorAll('.oc-venc')]
+            .map(i => ({ receivableId: Number(i.dataset.id), vencimento: i.value }))
+            .filter(v => v.vencimento)
+        };
+        if (el('oc-total').value !== '') corpo.valorTotal = Number(el('oc-total').value) || 0;
+        else corpo.desconto = { tipo: el('oc-tipo').value, valor: Number(el('oc-desc').value) || 0 };
+
+        const enviar = async (extra) => {
+          const out = await App.post(`/saleQuotes/${id}/condicoes`, Object.assign({}, corpo, extra || {}));
+          App.closeModal();
+          App.toast(`Orçamento nº ${out.orcamento.numero}: ${out.mudancas.join('; ') || 'condições salvas'}`, 'ok');
+          App.modal(`
+            <h2>Condições atualizadas — orçamento nº ${out.orcamento.numero}</h2>
+            <p class="small muted">O que o sistema acertou sozinho:</p>
+            <ul style="margin:8px 0 0 20px;line-height:1.8">
+              ${(out.efeitos || []).map(e => `<li>${App.esc(e)}</li>`).join('')}
+            </ul>
+            <table style="font-size:13.5px;margin-top:12px">
+              <tr><td>Valor do orçamento</td><td class="num"><b>R$ ${App.money(out.orcamento.valorTotal)}</b></td></tr>
+              ${out.venda ? `<tr><td>Pedido nº ${out.venda.numero}</td>
+                <td class="num"><b>R$ ${App.money(out.venda.valorTotal)}</b></td></tr>` : ''}
+              <tr><td>Já recebido</td><td class="num pos">R$ ${App.money(out.resumo.recebido)}</td></tr>
+              <tr><td><b>Falta receber</b></td><td class="num"><b>R$ ${App.money(out.resumo.saldo)}</b></td></tr>
+            </table>
+            <p class="small muted">Mesmo orçamento, mesmo número, mesma aprovação${out.venda
+              ? ' e o mesmo pedido' : ''}. Produto, produção, estoque e OS não foram tocados, e nada entrou
+              ou saiu do Fluxo de caixa.</p>
+            <div class="actions"><button class="btn primary" onclick="App.closeModal()">Entendi</button></div>`);
+          App.route();
+        };
+
+        try { await enviar(); }
+        catch (e) {
+          const dd = e.dados || {};
+          if (dd.precisaConfirmar) {
+            if (!await App.confirm(`${App.esc(e.message)}`, { html: true })) return;
+            try { await enviar({ confirmarCredito: true }); } catch (e2) { App.toast(e2.message, 'err'); }
+            return;
+          }
+          App.toast(e.message, 'err');
+        }
+      };
     },
 
     situacao(id) {
@@ -737,6 +1007,9 @@ App.registerView('sales', async (view, args) => {
             </select></label>
           <label class="field"><span>Nº de parcelas</span>
             <input type="number" min="1" id="cd-parcelas" value="${pg.parcelas || 1}"></label>
+          <label class="field"><span>Entrada (R$)</span>
+            <input type="number" step="0.01" min="0" id="cd-entrada" value="${pg.entrada || 0}">
+            <span class="small muted">O que o cliente paga agora. O resto vira parcela.</span></label>
           <label class="field"><span>Intervalo entre parcelas (dias)</span>
             <input type="number" id="cd-intervalo" value="${pg.intervaloDias || 30}"></label>
           <label class="field"><span>Vencimento da 1ª parcela do saldo</span>
@@ -824,7 +1097,9 @@ App.registerView('sales', async (view, args) => {
         const pct = bruto ? (descVal / bruto * 100) : 0;
         const saldo = Math.round((total - d.resumo.recebido) * 100) / 100;
         const acima = d.limiteDesconto && pct > d.limiteDesconto + 0.0001;
+        const entrada = Math.min(Math.max(0, Number((el('cd-entrada') || {}).value) || 0), total);
         el('cd-previa').innerHTML =
+          (entrada > 0 ? `Entrada <b>R$ ${App.money(entrada)}</b> + saldo <b>R$ ${App.money(Math.round((total - entrada) * 100) / 100)}</b><br>` : '') +
           `Valor dos itens <b>R$ ${App.money(bruto)}</b> − desconto <b>R$ ${App.money(descVal)}</b>` +
           ` (${pct.toFixed(2)}%) = <b style="color:var(--accent-strong)">R$ ${App.money(total)}</b>` +
           ` · já recebido R$ ${App.money(d.resumo.recebido)} · ` +
@@ -834,7 +1109,7 @@ App.registerView('sales', async (view, args) => {
           (acima ? `<div style="color:var(--warn)">⚠ Acima do limite de ${d.limiteDesconto}%${
             d.podeAutorizar ? ' — você pode autorizar.' : ' — precisa de autorização da Direção.'}</div>` : '');
       };
-      ['cd-tipo', 'cd-desc', 'cd-total', 'cd-forma', 'cd-cond', 'cd-parcelas'].forEach(x => {
+      ['cd-tipo', 'cd-desc', 'cd-total', 'cd-forma', 'cd-cond', 'cd-parcelas', 'cd-entrada'].forEach(x => {
         const n = el(x);
         if (n) { n.addEventListener('input', previa); n.addEventListener('change', previa); }
       });
@@ -851,6 +1126,7 @@ App.registerView('sales', async (view, args) => {
             forma: el('cd-forma').value,
             condicao: el('cd-cond').value,
             parcelas: Number(el('cd-parcelas').value) || 1,
+            entrada: Number(el('cd-entrada').value) || 0,
             intervaloDias: Number(el('cd-intervalo').value) || 30,
             primeiroVencimento: el('cd-venc1').value,
             taxa: Number(el('cd-taxa').value) || 0,
@@ -1330,6 +1606,8 @@ async function saleEditor(view, editId, modo) {
             <select id="v-cond"><option value="avista">À vista</option><option value="parcelado">Parcelado</option></select>
             <span class="small muted">Condição de pagamento — não lança dinheiro no caixa.</span></label>
           <label class="field"><span>Nº de parcelas</span><input type="number" id="v-parcelas" value="1" min="1"></label>
+          <label class="field"><span>Entrada (R$)</span><input type="number" step="0.01" min="0" id="v-entrada" value="0">
+            <span class="small muted">O que o cliente paga agora; o resto vira parcela.</span></label>
           <label class="field"><span>Intervalo entre parcelas (dias)</span><input type="number" id="v-intervalo" value="30"></label>
           <label class="field" id="v-venc1-campo"><span>Vencimento da 1ª parcela</span><input type="date" id="v-venc1"></label>
         </div>
@@ -1413,6 +1691,7 @@ async function saleEditor(view, editId, modo) {
     document.getElementById('v-forma').value = pg.forma || 'pix';
     document.getElementById('v-cond').value = pg.condicao || 'avista';
     document.getElementById('v-parcelas').value = pg.parcelas || 1;
+    document.getElementById('v-entrada').value = pg.entrada || 0;
     document.getElementById('v-intervalo').value = pg.intervaloDias || 30;
     document.getElementById('v-venc1').value = pg.primeiroVencimento || '';
     document.getElementById('v-taxa').value = pg.taxa || 0;
@@ -1481,6 +1760,7 @@ async function saleEditor(view, editId, modo) {
           forma,
           condicao: document.getElementById('v-cond').value,
           parcelas: Number(document.getElementById('v-parcelas').value) || 1,
+          entrada: Number(document.getElementById('v-entrada').value) || 0,
           intervaloDias: Number(document.getElementById('v-intervalo').value) || 30,
           primeiroVencimento: document.getElementById('v-venc1').value,
           taxa: Number(document.getElementById('v-taxa').value) || 0,

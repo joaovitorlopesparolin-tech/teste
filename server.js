@@ -3429,15 +3429,24 @@ function gerarProducaoDaOS(os, user) {
  */
 function gerarFinanceiroDaVenda(sale, cliente, user) {
   const { valorTotal, numero, pagamento } = sale;
-  if (pagamento.condicao === 'parcelado' && (pagamento.forma === 'boleto' || pagamento.forma === 'cheque')) {
-    const parcels = domain.generateInstallments(sale.dataPedido, valorTotal,
-      pagamento.parcelas, pagamento.intervaloDias, pagamento.primeiroVencimento);
-    for (const p of parcels) {
+  const temEntrada = (Number(pagamento.entrada) || 0) > 0.005;
+  if (pagamentoComPlano(pagamento) || temEntrada) {
+    /* Entrada e parcelas vêm do mesmo plano, para a soma delas nunca ficar
+       diferente do valor do pedido. */
+    const plano = planoDeCobranca(valorTotal, pagamento, sale.dataPedido);
+    const nParcelas = plano.filter(x => x.tipo === 'parcela').length;
+    for (const x of plano) {
+      const ehEntrada = x.tipo === 'entrada';
       db.insert('receivables', {
         clienteId: cliente.id, origem: 'venda', refType: 'sales', refId: sale.id,
-        descricao: `Pedido nº ${numero} — parcela ${p.parcela}/${p.parcelas}`,
-        forma: pagamento.forma, valor: p.valor, vencimento: p.vencimento,
-        status: 'aberto', parcela: p.parcela, parcelas: p.parcelas
+        descricao: ehEntrada
+          ? `Pedido nº ${numero} — entrada`
+          : `Pedido nº ${numero} — parcela ${x.parcela}/${nParcelas}`,
+        cobrancaPropria: true,
+        forma: pagamento.forma, valor: x.valor, vencimento: x.vencimento,
+        status: 'aberto',
+        parcela: ehEntrada ? 0 : x.parcela, parcelas: ehEntrada ? 0 : nParcelas,
+        entrada: ehEntrada || undefined
       });
     }
   } else if (pagamento.forma === 'cartao' || pagamento.forma === 'link') {
@@ -3792,16 +3801,51 @@ route('POST', '/api/saleQuotes', 'sales', async (req, res, user) => {
 route('PUT', '/api/saleQuotes/:id', 'sales', async (req, res, user, params) => {
   const antes = db.get('saleQuotes', params.id);
   if (!antes) return notFound(res);
-  if (antes.saleId) {
-    const v = db.get('sales', antes.saleId);
-    return bad(res, `Este orçamento já virou o pedido nº ${antes.pedidoNumero}. ` +
-      `Alterações agora são no pedido${v ? '' : ' (que não foi encontrado)'} — ` +
-      'o orçamento fica como foi aprovado, para o histórico não mudar depois do fato.');
-  }
   if (antes.status === 'cancelado') return bad(res, 'Este orçamento está cancelado. Reabra antes de editar.');
   const b = await readBody(req);
+
+  /* Orçamento aprovado continua editável no COMERCIAL: desconto, forma,
+     condição, parcelas, entrada e observações de pagamento. O que não muda
+     por aqui é o escopo — produto, serviço e quantidade —, porque isso já
+     virou pedido, produção e, quando houver, OS. */
+  let mexeItens = false;
+  if (b.itens !== undefined) {
+    const m = montarItensVenda(b.itens);
+    if (m.erro) return bad(res, m.erro);
+    mexeItens = JSON.stringify(m.itens) !== JSON.stringify(antes.itens || []);
+  }
+  if (antes.saleId && mexeItens) {
+    return bad(res, `Este orçamento já virou o pedido nº ${antes.pedidoNumero}, então produto, serviço e ` +
+      'quantidade não mudam por aqui — mexer neles é alteração de escopo, que precisa passar pelo pedido ' +
+      '(e pela produção/OS que ele gerou). Desconto, forma e condição de pagamento você muda aqui mesmo, ' +
+      'em "Editar condições comerciais".');
+  }
+  const soComercialOrc = antes.saleId && !mexeItens
+    && (b.pagamento !== undefined || b.desconto !== undefined || b.valorTotal !== undefined);
+  if (soComercialOrc) {
+    const out = ajustarCondicoesDoOrcamento(antes, b, user);
+    if (out.precisaConfirmar) {
+      return send(res, 409, { error: out.erro, precisaConfirmar: true,
+        excedente: out.excedente, recebido: out.recebido, novoTotal: out.novoTotal });
+    }
+    if (out.erro) {
+      if (out.limiteExcedido) {
+        return send(res, 403, { error: out.erro, limiteExcedido: true,
+          percentual: out.percentual, limite: out.limite });
+      }
+      return bad(res, out.erro);
+    }
+    return ok(res, out.orcamento);
+  }
+
   const { dados, erro } = montarOrcamentoVenda(b, antes);
   if (erro) return bad(res, erro);
+  /* Orçamento aprovado segue ligado ao pedido: trocar o cliente aqui
+     deixaria os dois apontando para pessoas diferentes. */
+  if (antes.saleId && dados.clienteId !== antes.clienteId) {
+    return bad(res, `Este orçamento virou o pedido nº ${antes.pedidoNumero} — o cliente é o mesmo dos dois. ` +
+      'Para trocar de cliente, cancele o pedido e faça um orçamento novo.');
+  }
 
   /* Cada edição é uma versão: o histórico guarda o valor de cada rodada da
      negociação, sem criar outro orçamento e sem perder o número. */
@@ -3833,6 +3877,268 @@ route('PUT', '/api/saleQuotes/:id', 'sales', async (req, res, user, params) => {
     `Orçamento de venda nº ${o.numero} editado${mudou.length ? ' — ' + mudou.join('; ') : ''}`);
   ok(res, comSituacaoOrcamento(db.get('saleQuotes', o.id)));
 });
+
+/* =====================================================================
+   CONDIÇÕES COMERCIAIS DE UM ORÇAMENTO JÁ APROVADO
+
+   O cliente aprova o orçamento e, na hora de pagar, negocia: pede 5%,
+   troca o cartão pelo Pix, pede para dividir em três com uma entrada.
+   Antes era preciso cancelar ou refazer o orçamento — e o pedido gerado
+   ficava com um valor e o orçamento com outro.
+
+   Aqui o orçamento continua o mesmo: mesmo número, mesmo cliente, mesma
+   aprovação e todo o histórico. O que muda é só o comercial, e, quando o
+   orçamento já virou pedido, a MESMA alteração desce para o pedido pela
+   mesma função que ajusta um pedido em andamento — então Contas a receber,
+   Fluxo de caixa e crédito do cliente se comportam exatamente igual, sem
+   segunda venda, segundo pedido ou cobrança duplicada.
+
+   Produto, serviço, quantidade, estoque, produção e OS ficam de fora:
+   mexer neles é alteração de escopo, com as regras próprias dela.
+   ===================================================================== */
+
+/** As condições comerciais de um orçamento, no formato que a tela usa. */
+function condicoesDoOrcamento(o, user) {
+  const venda = o.saleId ? db.get('sales', o.saleId) : null;
+  const cobrancas = venda
+    ? withOverdue(db.all('receivables').filter(r => r.refType === 'sales' && r.refId === venda.id))
+      .sort((a, b) => String(a.vencimento || '').localeCompare(String(b.vencimento || '')))
+    : [];
+  const resumo = venda ? resumoFinanceiroVenda(venda)
+    : { total: Math.round((Number(o.valorTotal) || 0) * 100) / 100, recebido: 0, saldo: Math.round((Number(o.valorTotal) || 0) * 100) / 100 };
+  return {
+    numero: o.numero,
+    situacao: comSituacaoOrcamento(o).situacao,
+    aprovado: !!o.saleId || o.status === 'aprovado',
+    saleId: o.saleId || null, pedidoNumero: o.pedidoNumero || null,
+    valorBruto: o.valorBruto != null ? o.valorBruto : o.valorTotal,
+    desconto: o.desconto || { tipo: '', valor: 0 },
+    descontoValor: o.descontoValor || 0,
+    valorTotal: o.valorTotal,
+    pagamento: o.pagamento || {},
+    /* O que foi apresentado quando nasceu, e o que estava valendo quando o
+       cliente aprovou: as duas fotos que explicam a negociação. */
+    condicoesOriginais: o.condicoesOriginais || null,
+    condicoesAprovadas: o.condicoesAprovadas || null,
+    dataAprovacao: o.dataAprovacao || null, aprovadoPor: o.aprovadoPor || '',
+    historicoComercial: o.historicoComercial || [],
+    historico: o.historico || [],
+    resumo,
+    cobrancas: cobrancas.map(r => ({
+      id: r.id, descricao: r.descricao, forma: r.forma, valor: r.valor,
+      recebido: recebidoDaParcela(r), vencimento: r.vencimento, status: r.status,
+      entrada: !!r.entrada, espelho: ehEspelhoDaVenda(r),
+      travada: recebidoDaParcela(r) > 0.005 || r.status === 'paga'
+    })),
+    creditos: db.all('clientCredits')
+      .filter(c => c.refType === 'sales' && venda && c.refId === venda.id)
+      .map(c => ({ id: c.id, valor: c.valor, data: c.data, descricao: c.descricao, status: c.status })),
+    formas: FORMAS_VENDA,
+    limiteDesconto: limiteDescontoPercentual(),
+    podeAutorizar: can(user, 'sales_discount_approve'),
+    podeEditar: can(user, ['sales_commercial', 'finance_sensitive'])
+  };
+}
+
+/**
+ * Aplica condições comerciais novas no MESMO orçamento — aprovado ou não —
+ * e, se ele já virou pedido, desce a alteração para o pedido.
+ * Devolve { erro } | { precisaConfirmar, ... } | { orcamento, venda, efeitos, credito }.
+ */
+function ajustarCondicoesDoOrcamento(o, b, user) {
+  const venda = o.saleId ? db.get('sales', o.saleId) : null;
+  if (venda && venda.status === 'cancelado') {
+    return { erro: `O pedido nº ${o.pedidoNumero} deste orçamento está cancelado. ` +
+      'Reabra a negociação do orçamento para renegociar, ou ajuste um pedido ativo.' };
+  }
+  if (o.status === 'cancelado') {
+    return { erro: 'Este orçamento está cancelado. Reabra a negociação antes de mexer nas condições.' };
+  }
+
+  const valorBruto = Math.round((Number(o.valorBruto != null ? o.valorBruto : o.valorTotal) || 0) * 100) / 100;
+
+  /* Desconto ou valor final combinado: a mesma conversa que o pedido aceita. */
+  let desc;
+  if (b.valorTotal !== undefined && b.valorTotal !== null && b.valorTotal !== '') {
+    const alvo = Math.round((Number(b.valorTotal) || 0) * 100) / 100;
+    if (alvo < 0) return { erro: 'O valor do orçamento não pode ser negativo.' };
+    if (alvo > valorBruto + 0.005) {
+      return { erro: `O valor informado (${brl(alvo)}) é maior que o valor dos itens (${brl(valorBruto)}). ` +
+        'Para aumentar, acrescente item ou quantidade na edição do orçamento.' };
+    }
+    desc = calcularDesconto(valorBruto, { tipo: 'valor', valor: Math.round((valorBruto - alvo) * 100) / 100 });
+  } else {
+    desc = calcularDesconto(valorBruto, b.desconto !== undefined ? b.desconto : o.desconto);
+  }
+
+  const pct = percentualDoDesconto(valorBruto, desc.descontoValor);
+  const limite = limiteDescontoPercentual();
+  const pctAntes = percentualDoDesconto(valorBruto, o.descontoValor || 0);
+  if (limite && pct > limite + 0.0001 && pct > pctAntes + 0.0001 && !can(user, 'sales_discount_approve')) {
+    return { erro: `Desconto de ${pct.toFixed(2)}% passa do limite de ${limite}% configurado. ` +
+      'Quem tem a permissão "Autorizar desconto acima do limite" precisa aplicar este desconto.',
+      limiteExcedido: true, percentual: pct, limite };
+  }
+
+  /* Quando já existe pedido, é ELE que manda no financeiro: a função do
+     pedido valida o recebimento, trata o crédito do cliente e devolve o que
+     mexeu. O orçamento acompanha o resultado — nunca o contrário. */
+  let resultadoVenda = null;
+  if (venda) {
+    resultadoVenda = ajustarCondicoesComerciais(venda, Object.assign({}, b, {
+      valorTotal: desc.valorTotal,
+      desconto: undefined,
+      motivo: b.motivo || 'ajuste comercial no orçamento aprovado'
+    }), user);
+    if (resultadoVenda.precisaConfirmar || resultadoVenda.erro) return resultadoVenda;
+  }
+
+  const pgAntes = Object.assign({}, o.pagamento || {});
+  const snapAntes = {
+    valorTotal: Math.round((Number(o.valorTotal) || 0) * 100) / 100,
+    descontoValor: Math.round((Number(o.descontoValor) || 0) * 100) / 100,
+    desconto: Object.assign({ tipo: '', valor: 0 }, o.desconto || {}),
+    temOriginais: !!o.condicoesOriginais
+  };
+  /* O pagamento do orçamento passa a ser o do pedido, quando existe pedido:
+     um só lugar define a condição, e os dois nunca divergem. */
+  const pgNovo = resultadoVenda ? Object.assign({}, resultadoVenda.sale.pagamento)
+    : (() => {
+      const p = Object.assign({}, pgAntes, b.pagamento || {});
+      p.condicao = p.condicao === 'parcelado' ? 'parcelado' : 'avista';
+      p.parcelas = p.condicao === 'parcelado' ? Math.max(1, Number(p.parcelas) || 1) : 1;
+      p.intervaloDias = Number(p.intervaloDias) || 30;
+      p.taxa = (p.forma === 'cartao' || p.forma === 'link') ? Math.round((Number(p.taxa) || 0) * 100) / 100 : 0;
+      p.entrada = Math.min(Math.max(0, Math.round((Number(p.entrada) || 0) * 100) / 100), desc.valorTotal);
+      p.valorLiquido = Math.round((desc.valorTotal - p.taxa) * 100) / 100;
+      return p;
+    })();
+  if (!FORMAS_VENDA.some(f => f[0] === pgNovo.forma)) {
+    return { erro: 'Forma de pagamento inválida. Use: ' + FORMAS_VENDA.map(f => f[1]).join(', ') + '.' };
+  }
+
+  const patch = {
+    valorBruto,
+    desconto: { tipo: desc.tipo, valor: desc.valor },
+    descontoValor: desc.descontoValor,
+    valorTotal: desc.valorTotal,
+    pagamento: pgNovo
+  };
+  if (!snapAntes.temOriginais) {
+    patch.condicoesOriginais = {
+      em: o.dataOrcamento, valorBruto,
+      valorTotal: snapAntes.valorTotal,
+      desconto: snapAntes.desconto, descontoValor: snapAntes.descontoValor,
+      pagamento: Object.assign({}, pgAntes)
+    };
+  }
+  db.update('saleQuotes', o.id, patch);
+
+  const mudancas = [];
+  if (Math.abs(snapAntes.valorTotal - desc.valorTotal) > 0.005) {
+    mudancas.push(`valor ${brl(snapAntes.valorTotal)} → ${brl(desc.valorTotal)}`);
+  }
+  if (Math.abs(snapAntes.descontoValor - desc.descontoValor) > 0.005) {
+    mudancas.push(`desconto ${brl(snapAntes.descontoValor)} → ${brl(desc.descontoValor)}` +
+      (desc.tipo === 'percentual' ? ` (${desc.valor}%)` : ''));
+  }
+  if (pgAntes.forma !== pgNovo.forma) {
+    mudancas.push(`forma ${formaVendaNome(pgAntes.forma)} → ${formaVendaNome(pgNovo.forma)}`);
+  }
+  if (pgAntes.condicao !== pgNovo.condicao || (Number(pgAntes.parcelas) || 1) !== (Number(pgNovo.parcelas) || 1)) {
+    mudancas.push(`condição ${pgAntes.condicao === 'parcelado' ? (Number(pgAntes.parcelas) || 1) + 'x' : 'à vista'}` +
+      ` → ${pgNovo.condicao === 'parcelado' ? (Number(pgNovo.parcelas) || 1) + 'x' : 'à vista'}`);
+  }
+  if (Math.abs((Number(pgAntes.entrada) || 0) - (Number(pgNovo.entrada) || 0)) > 0.005) {
+    mudancas.push(`entrada ${brl(Number(pgAntes.entrada) || 0)} → ${brl(Number(pgNovo.entrada) || 0)}`);
+  }
+
+  const resumoPg = (p) => ({
+    forma: p.forma || '', condicao: p.condicao || '',
+    parcelas: Number(p.parcelas) || 1, intervaloDias: Number(p.intervaloDias) || 30,
+    primeiroVencimento: p.primeiroVencimento || '', taxa: Number(p.taxa) || 0,
+    entrada: Number(p.entrada) || 0, obs: p.obs || ''
+  });
+  const efeitos = (resultadoVenda ? resultadoVenda.efeitos : []).slice();
+  if (!resultadoVenda) {
+    efeitos.push('orçamento ainda não aprovado: nada foi movimentado no financeiro');
+  } else {
+    efeitos.unshift(`pedido nº ${resultadoVenda.sale.numero} atualizado junto, sem criar outro`);
+  }
+
+  const historicoComercial = (o.historicoComercial || []).concat([{
+    at: new Date().toISOString(), por: user.name, porId: user.id,
+    motivo: String(b.motivo || '').slice(0, 300),
+    antes: {
+      valorBruto, valorTotal: snapAntes.valorTotal, descontoValor: snapAntes.descontoValor,
+      desconto: snapAntes.desconto, pagamento: resumoPg(pgAntes)
+    },
+    depois: {
+      valorBruto, valorTotal: desc.valorTotal, descontoValor: desc.descontoValor,
+      desconto: { tipo: desc.tipo, valor: desc.valor }, pagamento: resumoPg(pgNovo)
+    },
+    recebidoNaHora: resultadoVenda ? resultadoVenda.resumo.recebido : 0,
+    pedidoNumero: o.pedidoNumero || null,
+    resumo: mudancas.join('; ') || 'ajuste sem mudança de valor ou condição',
+    efeitos,
+    creditoId: resultadoVenda && resultadoVenda.credito ? resultadoVenda.credito.id : null
+  }]).slice(-100);
+
+  db.update('saleQuotes', o.id, {
+    historicoComercial,
+    historico: historicoOrcamento(Object.assign({}, o, { valorTotal: desc.valorTotal }), user,
+      `Condições comerciais: ${mudancas.join('; ') || 'ajuste'}` + (b.motivo ? ` — ${b.motivo}` : ''))
+  });
+  audit(user, 'alterou', 'saleQuotes', o.id,
+    `Condições comerciais do orçamento nº ${o.numero}: ${mudancas.join('; ') || 'ajuste'}` +
+    (o.pedidoNumero ? ` (pedido nº ${o.pedidoNumero} acompanhou)` : '') +
+    (b.motivo ? ` — ${b.motivo}` : ''));
+  db.insert('audit', {
+    at: new Date().toISOString(), userId: user.id, userName: user.name, action: 'timeline',
+    entity: 'saleQuotes', entityId: o.id, clientId: o.clienteId,
+    details: `Orçamento nº ${o.numero} — condições comerciais ajustadas: ${mudancas.join('; ') || 'ajuste'}` +
+      (o.pedidoNumero ? `; pedido nº ${o.pedidoNumero} atualizado junto` : '')
+  });
+
+  const atual = db.get('saleQuotes', o.id);
+  return {
+    orcamento: comSituacaoOrcamento(atual),
+    venda: resultadoVenda ? resultadoVenda.sale : null,
+    efeitos, mudancas,
+    credito: resultadoVenda ? resultadoVenda.credito : null,
+    resumo: resultadoVenda ? resultadoVenda.resumo
+      : { total: desc.valorTotal, recebido: 0, saldo: desc.valorTotal }
+  };
+}
+
+route('GET', '/api/saleQuotes/:id/condicoes', 'sales', async (req, res, user, params) => {
+  const o = db.get('saleQuotes', params.id);
+  if (!o) return notFound(res);
+  if (!can(user, 'finance_sensitive') && !can(user, 'receivables') && !can(user, 'cashflow')) {
+    return forbidden(res, 'Sem permissão para ver valores do orçamento');
+  }
+  ok(res, condicoesDoOrcamento(o, user));
+});
+
+route('POST', '/api/saleQuotes/:id/condicoes', ['sales_commercial', 'finance_sensitive'],
+  async (req, res, user, params) => {
+    const o = db.get('saleQuotes', params.id);
+    if (!o) return notFound(res);
+    const b = await readBody(req);
+    const out = ajustarCondicoesDoOrcamento(o, b, user);
+    if (out.precisaConfirmar) {
+      return send(res, 409, { error: out.erro, precisaConfirmar: true,
+        excedente: out.excedente, recebido: out.recebido, novoTotal: out.novoTotal });
+    }
+    if (out.erro) {
+      if (out.limiteExcedido) {
+        return send(res, 403, { error: out.erro, limiteExcedido: true,
+          percentual: out.percentual, limite: out.limite });
+      }
+      return bad(res, out.erro);
+    }
+    ok(res, out);
+  });
 
 /* ---- andamento da negociação ---- */
 route('POST', '/api/saleQuotes/:id/status', 'sales', async (req, res, user, params) => {
@@ -3925,6 +4231,16 @@ route('POST', '/api/saleQuotes/:id/aprovar', 'sales', async (req, res, user, par
   if (o.saleId) anteriores.push({ saleId: o.saleId, pedidoNumero: o.pedidoNumero });
   db.update('saleQuotes', o.id, {
     status: 'aprovado',
+    /* Foto do que o cliente aprovou: é com ela que se compara o que foi
+       negociado depois. */
+    condicoesAprovadas: o.condicoesAprovadas || {
+      em: domain.today(), por: user.name,
+      valorBruto: o.valorBruto != null ? o.valorBruto : o.valorTotal,
+      valorTotal: Math.round((Number(o.valorTotal) || 0) * 100) / 100,
+      desconto: Object.assign({ tipo: '', valor: 0 }, o.desconto || {}),
+      descontoValor: Math.round((Number(o.descontoValor) || 0) * 100) / 100,
+      pagamento: Object.assign({}, o.pagamento || {})
+    },
     saleId: sale.id, pedidoNumero: sale.numero,
     vendasGeradas: anteriores,
     dataAprovacao: domain.today(),
@@ -4251,6 +4567,51 @@ const FORMAS_VENDA = [
 ];
 const formaVendaNome = (f) => (FORMAS_VENDA.find(x => x[0] === f) || [f, f])[1];
 
+/**
+ * O plano de cobrança de um valor: entrada (quando houver) e parcelas.
+ *
+ * É o único lugar que decide "este valor, nesta condição, vira quais
+ * cobranças" — usado quando a venda nasce e quando as condições comerciais
+ * mudam depois. Com dois lugares fazendo essa conta, entrada e parcelas
+ * acabariam somando diferente do valor do pedido.
+ *
+ * Devolve [{ tipo:'entrada'|'parcela', valor, vencimento, parcela, parcelas }].
+ */
+function planoDeCobranca(valor, pg, dataBase, vencimentoPadrao) {
+  const total = Math.round((Number(valor) || 0) * 100) / 100;
+  if (total <= 0.005) return [];
+  const entrada = Math.min(Math.round((Number(pg.entrada) || 0) * 100) / 100, total);
+  const resto = Math.round((total - entrada) * 100) / 100;
+  const base = dataBase || domain.today();
+  const primeiro = pg.primeiroVencimento || vencimentoPadrao || '';
+  const out = [];
+
+  if (entrada > 0.005) {
+    out.push({
+      tipo: 'entrada', valor: entrada,
+      /* A entrada vence na data do pedido: é o que o cliente paga agora. */
+      vencimento: pg.vencimentoEntrada || base,
+      parcela: 0, parcelas: 0
+    });
+  }
+  if (resto <= 0.005) return out;
+
+  const n = pg.condicao === 'parcelado' ? Math.max(1, Number(pg.parcelas) || 1) : 1;
+  if (n <= 1) {
+    out.push({
+      tipo: 'parcela', valor: resto,
+      vencimento: primeiro || (entrada > 0.005 ? domain.addDays(base, Number(pg.intervaloDias) || 30) : base),
+      parcela: 1, parcelas: 1
+    });
+    return out;
+  }
+  const parcels = domain.generateInstallments(base, resto, n, pg.intervaloDias, primeiro);
+  for (const x of parcels) {
+    out.push({ tipo: 'parcela', valor: x.valor, vencimento: x.vencimento, parcela: x.parcela, parcelas: n });
+  }
+  return out;
+}
+
 /** Plano de parcelas de verdade: boleto ou cheque, parcelado, 2 ou mais. */
 function pagamentoComPlano(pg) {
   return pg && pg.condicao === 'parcelado'
@@ -4349,19 +4710,18 @@ function reorganizarCobrancaDaVenda(sale, user, { motivo } = {}) {
   const cliente = db.get('clients', atual.clienteId);
   const descricaoBase = `Pedido nº ${atual.numero}`;
 
-  if (pagamentoComPlano(pg)) {
-    /* Plano novo: as parcelas cobrem só o que falta, e a numeração continua
-       de onde as recebidas pararam — a 1/3 paga não vira 1/2 de novo. */
+  const temEntrada = (Number(pg.entrada) || 0) > 0.005;
+  if (pagamentoComPlano(pg) || temEntrada) {
+    /* Entrada e parcelas cobrem só o que FALTA, e a numeração continua de
+       onde as recebidas pararam — a 1/3 paga não vira 1/2 de novo. */
     for (const e of espelhos) db.remove('receivables', e.id);
-    const n = Math.max(2, Number(pg.parcelas) || 2);
-    const parcels = domain.generateInstallments(
-      atual.dataPedido, restante, n, pg.intervaloDias,
-      pg.primeiroVencimento || vencimentoAntigo);
+    const plano = planoDeCobranca(restante, pg, atual.dataPedido, vencimentoAntigo);
     const antigas = comMovimento
       .filter(r => (Number(r.parcelas) || 1) > 1)
       .sort((a, b) => (Number(a.parcela) || 0) - (Number(b.parcela) || 0));
     const jaPagas = antigas.length;
-    const totalParcelas = n + jaPagas;
+    const nNovas = plano.filter(x => x.tipo === 'parcela').length;
+    const totalParcelas = nNovas + jaPagas;
     /* A parcela recebida continua intocada no que importa — valor, recebido,
        data e situação. Só o rótulo acompanha o plano novo, para a cobrança
        não ficar com "1/4" ao lado de "2/3". */
@@ -4369,16 +4729,28 @@ function reorganizarCobrancaDaVenda(sale, user, { motivo } = {}) {
       descricao: `${descricaoBase} — parcela ${i + 1}/${totalParcelas}`,
       parcela: i + 1, parcelas: totalParcelas
     }));
-    for (const p of parcels) {
+    for (const x of plano) {
+      const ehEntrada = x.tipo === 'entrada';
       db.insert('receivables', {
         clienteId: atual.clienteId, origem: 'venda', refType: 'sales', refId: atual.id,
-        descricao: `${descricaoBase} — parcela ${p.parcela + jaPagas}/${totalParcelas}`,
-        forma: pg.forma, valor: p.valor, vencimento: p.vencimento,
-        status: 'aberto', parcela: p.parcela + jaPagas, parcelas: totalParcelas,
+        descricao: ehEntrada
+          ? `${descricaoBase} — entrada`
+          : `${descricaoBase} — parcela ${x.parcela + jaPagas}/${totalParcelas}`,
+        /* Entrada e parcela guardam o próprio recebimento: cada uma recebe
+           a sua baixa em Contas a receber. */
+        cobrancaPropria: true,
+        forma: pg.forma, valor: x.valor, vencimento: x.vencimento,
+        status: 'aberto',
+        parcela: ehEntrada ? 0 : x.parcela + jaPagas,
+        parcelas: ehEntrada ? 0 : totalParcelas,
+        entrada: ehEntrada || undefined,
         observacoes: obsAntiga
       });
     }
-    efeitos.push(`${n} parcela(s) de ${pg.forma} criada(s) para o saldo de ${brl(restante)}`);
+    const entradaDo = plano.find(x => x.tipo === 'entrada');
+    efeitos.push(
+      (entradaDo ? `entrada de ${brl(entradaDo.valor)} e ` : '') +
+      `${nNovas} parcela(s) de ${formaVendaNome(pg.forma)} criada(s) para o saldo de ${brl(restante)}`);
     return efeitos;
   }
 
@@ -4483,6 +4855,10 @@ function ajustarCondicoesComerciais(sale, b, user) {
   pgNovo.intervaloDias = Number(pgNovo.intervaloDias) || 30;
   pgNovo.taxa = (pgNovo.forma === 'cartao' || pgNovo.forma === 'link')
     ? Math.round((Number(pgNovo.taxa) || 0) * 100) / 100 : 0;
+  /* Entrada: o que o cliente paga agora. Nunca maior que o próprio pedido,
+     e nunca maior do que ainda falta receber. */
+  pgNovo.entrada = Math.max(0, Math.round((Number(pgNovo.entrada) || 0) * 100) / 100);
+  if (pgNovo.entrada > desc.valorTotal) pgNovo.entrada = desc.valorTotal;
   pgNovo.valorLiquido = Math.round((desc.valorTotal - pgNovo.taxa) * 100) / 100;
   if (b.pagamento && b.pagamento.obs !== undefined) pgNovo.obs = String(b.pagamento.obs || '').slice(0, 500);
 
@@ -4562,7 +4938,7 @@ function ajustarCondicoesComerciais(sale, b, user) {
     forma: p.forma || '', condicao: p.condicao || '',
     parcelas: Number(p.parcelas) || 1, intervaloDias: Number(p.intervaloDias) || 30,
     primeiroVencimento: p.primeiroVencimento || '', taxa: Number(p.taxa) || 0,
-    obs: p.obs || ''
+    entrada: Number(p.entrada) || 0, obs: p.obs || ''
   });
   const mudancas = [];
   if (Math.abs(snapAntes.valorTotal - desc.valorTotal) > 0.005) {
@@ -4581,6 +4957,9 @@ function ajustarCondicoesComerciais(sale, b, user) {
   }
   if ((Number(pgAntes.taxa) || 0) !== pgNovo.taxa) {
     mudancas.push(`taxa ${brl(Number(pgAntes.taxa) || 0)} → ${brl(pgNovo.taxa)}`);
+  }
+  if (Math.abs((Number(pgAntes.entrada) || 0) - pgNovo.entrada) > 0.005) {
+    mudancas.push(`entrada ${brl(Number(pgAntes.entrada) || 0)} → ${brl(pgNovo.entrada)}`);
   }
 
   const historico = (antes.historicoComercial || []).concat([{
